@@ -16,7 +16,7 @@ from typing import Any, Callable, Optional
 # 防线在装配期集中断言，而非依赖各角色配方自觉剔除。
 BG_TASK_TOOL_NAMES = frozenset({
     "start_async_task", "check_async_task", "cancel_async_task",
-    "list_async_tasks", "update_async_task",
+    "list_async_tasks", "send_message",
 })
 
 

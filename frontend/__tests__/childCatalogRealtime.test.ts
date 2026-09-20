@@ -5,7 +5,7 @@ import { flushPromises, mount } from '@vue/test-utils'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import BackgroundSubagentCollapse from '@/components/BackgroundSubagentCollapse/index.vue'
 import SubagentConversationDrawer from '@/components/SubagentConversationDrawer/index.vue'
-import { clearQueuedFollowups, setQueuedFollowups } from '@/components/SubagentConversationView/queuedFollowups'
+import { clearQueuedMessages, setQueuedMessages } from '@/components/SubagentConversationView/queuedMessages'
 import { activateChildCatalogSession, createChildCatalogEventSource } from '@/views/chat/childCatalogStream'
 
 const api = vi.hoisted(() => ({
@@ -13,7 +13,7 @@ const api = vi.hoisted(() => ({
   getSessionMessages: vi.fn(),
   getAgentRun: vi.fn(),
   resumeAgentRunHitl: vi.fn(),
-  sendSubagentFollowup: vi.fn(),
+  sendSubagentMessage: vi.fn(),
   stopAgentRun: vi.fn(),
   subscribeAgentRun: vi.fn(),
 }))
@@ -26,7 +26,7 @@ vi.mock('@/api/chat', () => ({
   getSessionMessages: api.getSessionMessages,
   getAgentRun: api.getAgentRun,
   resumeAgentRunHitl: api.resumeAgentRunHitl,
-  sendSubagentFollowup: api.sendSubagentFollowup,
+  sendSubagentMessage: api.sendSubagentMessage,
   stopAgentRun: api.stopAgentRun,
   subscribeAgentRun: api.subscribeAgentRun,
 }))
@@ -164,19 +164,19 @@ describe('子 Agent 标准会话展示', () => {
   beforeEach(() => {
     api.getSessionMessages.mockReset()
     api.subscribeAgentRun.mockReset()
-    api.sendSubagentFollowup.mockReset()
+    api.sendSubagentMessage.mockReset()
     api.getAgentRun.mockReset()
     api.subscribeAgentRun.mockResolvedValue({ body: null })
-    api.sendSubagentFollowup.mockResolvedValue(runningTask)
+    api.sendSubagentMessage.mockResolvedValue(runningTask)
     api.getAgentRun.mockResolvedValue(agentRunSnapshot())
-    clearQueuedFollowups('child-session-1')
+    clearQueuedMessages('child-session-1')
   })
 
   afterEach(() => {
     while (mountedWrappers.length > 0) {
       mountedWrappers.pop()!.unmount()
     }
-    clearQueuedFollowups('child-session-1')
+    clearQueuedMessages('child-session-1')
   })
 
   it('首次物化后立即接收父会话的子 Agent 状态事件', () => {
@@ -249,7 +249,7 @@ describe('子 Agent 标准会话展示', () => {
     await wrapper.setProps({ show: false })
   })
 
-  it('补充要求走标准 child session followup API', async () => {
+  it('补充要求走标准 child session 追加消息 API', async () => {
     api.getSessionMessages.mockResolvedValue({ messages: [], total: 0 })
     const wrapper = mountDrawer(true)
     await flushPromises()
@@ -258,7 +258,7 @@ describe('子 Agent 标准会话展示', () => {
     await textarea.trigger('keydown.enter')
     await flushPromises()
 
-    expect(api.sendSubagentFollowup).toHaveBeenCalledWith('child-session-1', '请补充来源', undefined, undefined)
+    expect(api.sendSubagentMessage).toHaveBeenCalledWith('child-session-1', '请补充来源', undefined, undefined)
   })
 
   it('父 Agent 中每次子 Agent 调用仍是独立卡片，并指向标准 run', async () => {
@@ -325,8 +325,8 @@ describe('子 Agent 标准会话展示', () => {
     await wrapper.find('textarea').setValue('排队消息 A')
     await wrapper.find('textarea').trigger('keydown.enter')
     await flushPromises()
-    expect(api.sendSubagentFollowup).not.toHaveBeenCalled()
-    expect(wrapper.find('[data-testid="followup-queue-item"]').text()).toContain('排队消息 A')
+    expect(api.sendSubagentMessage).not.toHaveBeenCalled()
+    expect(wrapper.find('[data-testid="message-queue-item"]').text()).toContain('排队消息 A')
 
     // run 终态：自动提交队首并清空队列
     sse.push(`event: run.finished\ndata: ${JSON.stringify({
@@ -335,8 +335,8 @@ describe('子 Agent 标准会话展示', () => {
       finished_at: 1,
     })}\n\n`)
     await flushPromises()
-    expect(api.sendSubagentFollowup).toHaveBeenCalledWith('child-session-1', '排队消息 A', undefined, undefined)
-    expect(wrapper.find('[data-testid="followup-queue-item"]').exists()).toBe(false)
+    expect(api.sendSubagentMessage).toHaveBeenCalledWith('child-session-1', '排队消息 A', undefined, undefined)
+    expect(wrapper.find('[data-testid="message-queue-item"]').exists()).toBe(false)
   })
 
   it('composer 单按钮：运行中输入为空呈停止态，输入内容后呈发送态', async () => {
@@ -367,7 +367,7 @@ describe('子 Agent 标准会话展示', () => {
   })
 
   it('排队消息支持删除、编辑回填与立即提交', async () => {
-    setQueuedFollowups('child-session-1', ['先问 A', '再问 B'])
+    setQueuedMessages('child-session-1', ['先问 A', '再问 B'])
     api.getSessionMessages.mockResolvedValue({ messages: [], total: 0 })
     // 队列 CRUD 场景要求 run 仍活跃：终态 run + 队列会触发队首自动提交
     // （watcher 契约，见「run 终态后自动提交队首」用例）。流端点故障
@@ -379,27 +379,27 @@ describe('子 Agent 标准会话展示', () => {
     const queueButton = (item: ReturnType<typeof wrapper.find>, title: string) =>
       item.findAll('button').find((button) => button.attributes('title') === title)
 
-    let items = wrapper.findAll('[data-testid="followup-queue-item"]')
+    let items = wrapper.findAll('[data-testid="message-queue-item"]')
     expect(items).toHaveLength(2)
 
     // 删除第二条
     await queueButton(items[1], '删除')!.trigger('click')
-    items = wrapper.findAll('[data-testid="followup-queue-item"]')
+    items = wrapper.findAll('[data-testid="message-queue-item"]')
     expect(items).toHaveLength(1)
     expect(items[0].text()).toContain('先问 A')
 
     // 编辑：文本回填输入框并出队
     await queueButton(items[0], '编辑后重新排队')!.trigger('click')
     expect((wrapper.find('textarea').element as HTMLTextAreaElement).value).toBe('先问 A')
-    expect(wrapper.find('[data-testid="followup-queue-item"]').exists()).toBe(false)
+    expect(wrapper.find('[data-testid="message-queue-item"]').exists()).toBe(false)
 
-    // 立即提交：直接调 followup API 并出队
-    setQueuedFollowups('child-session-1', ['立即这条'])
+    // 立即提交：直接调 追加消息 API 并出队
+    setQueuedMessages('child-session-1', ['立即这条'])
     await flushPromises()
-    const item = wrapper.find('[data-testid="followup-queue-item"]')
+    const item = wrapper.find('[data-testid="message-queue-item"]')
     await queueButton(item, '立即发送：空闲时立即开跑，运行中衔接为当前轮后的下一轮')!.trigger('click')
     await flushPromises()
-    expect(api.sendSubagentFollowup).toHaveBeenCalledWith('child-session-1', '立即这条', undefined, undefined)
-    expect(wrapper.find('[data-testid="followup-queue-item"]').exists()).toBe(false)
+    expect(api.sendSubagentMessage).toHaveBeenCalledWith('child-session-1', '立即这条', undefined, undefined)
+    expect(wrapper.find('[data-testid="message-queue-item"]').exists()).toBe(false)
   })
 })

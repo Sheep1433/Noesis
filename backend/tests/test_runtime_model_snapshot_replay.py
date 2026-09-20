@@ -53,7 +53,7 @@ def test_replay_in_fresh_thread_restores_visibility() -> None:
 
 
 def test_replay_skipped_when_target_model_differs() -> None:
-    """覆盖到别的模型（followup 按 turn 切换）时不重放旧快照——宁报错不用错。"""
+    """覆盖到别的模型（追加消息 按 turn 切换）时不重放旧快照——宁报错不用错。"""
     seen: dict = {}
 
     def worker() -> None:

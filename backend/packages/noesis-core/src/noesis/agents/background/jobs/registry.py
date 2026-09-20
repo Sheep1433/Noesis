@@ -7,6 +7,7 @@ from __future__ import annotations
 import asyncio
 import collections
 import threading
+import time
 from concurrent.futures import Future
 from dataclasses import dataclass, field
 from typing import TYPE_CHECKING, Any, Callable, Optional
@@ -17,9 +18,10 @@ from noesis.runtime.logging import logger
 from noesis.agents.background.jobs.events import _publish_run_event, _publish_task_event
 from noesis.agents.background.jobs.loop import _ensure_loop, _submit_isolated
 from noesis.agents.background.jobs.state import (
-    MAX_FOLLOWUPS,
     STOP_GRACE_SECONDS,
     STOP_RECONCILE_SECONDS,
+    TERMINAL_RECLAIM_MAX,
+    TERMINAL_RETENTION_SECONDS,
     _SLOT_STATUSES,
     BgTaskStatus,
     BackgroundTask,
@@ -34,6 +36,19 @@ if TYPE_CHECKING:
 # ---------------------------------------------------------------------------
 
 
+@dataclass(frozen=True)
+class _PendingMessage:
+    """一条待执行的追加消息（DB pending 行的执行镜像）。
+
+    message_id = child session 的 pending user message 行 id；params 为
+    逐 turn 覆盖（模型 / 推理档位；None = 沿用当前）。
+    """
+
+    message_id: Optional[str]
+    text: str
+    params: Optional[Any] = None
+
+
 @dataclass
 class _TaskEntry:
     task: BackgroundTask
@@ -45,30 +60,26 @@ class _TaskEntry:
     recursion_limit: int
     # > 0 时 watchdog 超时取消执行 future；0 = 不限时（shell 任务默认）
     timeout_seconds: float
-    followup_factory: Optional[Callable[[str, str, Optional[str]], Any]] = None
+    turn_factory: Optional[Callable[[str, str, Optional[str]], Any]] = None
     # 排队唤醒时按该值判断槽位（executor 实例不共享，cap 记在条目上）
     session_max_concurrent: int = 1
     # 提交序号：全局 FIFO 唤醒的排序键（跨会话公平）
     submit_seq: int = 0
     # 全局总闸快照（唤醒判定用；0 = 不限）
     max_global: int = 0
-    # followup-turn 队列：deliver_followup 入队，当前 turn 结束后链式开新 turn
-    followups: "collections.deque[str]" = field(
-        default_factory=lambda: collections.deque(maxlen=MAX_FOLLOWUPS),
-    )
-    followup_message_ids: "collections.deque[Optional[str]]" = field(
-        default_factory=lambda: collections.deque(maxlen=MAX_FOLLOWUPS),
-    )
-    # 与 followups 逐条对应的 turn 参数（模型 / 推理档位覆盖；None = 沿用当前）
-    followup_turn_params: "collections.deque[Optional[_TurnParams]]" = field(
-        default_factory=lambda: collections.deque(maxlen=MAX_FOLLOWUPS),
+    # 追加消息队列（执行镜像）：DB pending user message 行是队列事实，
+    # 本 deque 只是热集内的执行镜像（出队开 turn；条目回收后由冷恢复从
+    # DB 重载）。deliver_message 入队，当前 turn 结束后链式开新 turn
+    pending_messages: "collections.deque[_PendingMessage]" = field(
+        default_factory=collections.deque,
     )
     # 生效中的模型覆盖：非 None 时 _ensure_agent 以该模型重新编译 worker
     model_override: Optional[str] = None
     # 生效中的推理档位（turn 级；LLM 构造时经 ContextVar 固化为请求参数）。
     # 创建时在父 run 上下文捕获（后台 worker 隔离 loop 干净上下文拿不到父档位）
     turn_reasoning_effort: Optional[str] = None
-    followup_lock: threading.Lock = field(default_factory=threading.Lock, repr=False)
+    # 保护 pending_messages 的跨线程读写
+    pending_lock: threading.Lock = field(default_factory=threading.Lock, repr=False)
     # factory 首次调用后在隔离 loop 内缓存编译结果（同 executor 任务复用）
     compiled_agent: Any = None
     compiled_lock: threading.Lock = field(default_factory=threading.Lock, repr=False)
@@ -88,6 +99,14 @@ class _TaskEntry:
     # 终态副作用（run.finished / terminal 事件 / 通知 / drain）归属：
     # 首个置位者负责发布，settle_stop 与 settle_orphaned_task 竞争时只发一次
     terminal_published: bool = False
+    # 回收资格三件套：终态落库成功（耗尽置 exhausted）/ 通知已记录。
+    # 回收 = 终态事件已发布 + (落库成功或耗尽) + 通知已记录
+    terminal_persist_ok: bool = False
+    terminal_persist_exhausted: bool = False
+    terminal_notified: bool = False
+    # 冷恢复/复活前的终态快照：投递失败回退时恢复（result/error/completed_at/
+    # stop_reason/status），避免悬空的回收资格判定
+    prev_terminal_snapshot: Optional[dict] = None
     # 已完成 turn 的 usage 累计（数值字段相加）：实时统计发布时与当前
     # turn 的 bridge.message_usage 合并，保证跨轮口径与终态 DB 重建一致
     accumulated_usage: Optional[dict[str, Any]] = None
@@ -178,6 +197,18 @@ def _dequeue_locked(task: BackgroundTask) -> None:
     if not _PENDING_QUEUES[task.session_id]:
         _PENDING_QUEUES.pop(task.session_id, None)
 
+def _drain_all_sessions() -> None:
+    """对账重建后的全局唤醒：对存在排队候选的会话逐一触发 drain。
+
+    _drain_session_queue 每次调用都做跨会话全局排序（按提交序/created_at），
+    重复调用幂等；空队列调用无副作用。
+    """
+    with _TASKS_LOCK:
+        session_ids = list(_PENDING_QUEUES.keys())
+    for session_id in session_ids:
+        _drain_session_queue(session_id)
+
+
 def _drain_session_queue(session_id: str) -> None:
     """任务落终态后唤醒排队任务：两级准入（先全局后会话），全局按提交序。
 
@@ -233,3 +264,99 @@ def _drain_session_queue(session_id: str) -> None:
             "bg task dequeued task_id={} session_id={}",
             entry.task.task_id, entry.task.session_id,
         )
+
+
+# ---------------------------------------------------------------------------
+# 终态条目回收：retention + 上限，惰性（通知路径触发）+ 周期兜底。
+# 旋钮由 executor 装配时写入（最后构造的实例生效，与 _EXECUTOR 端口同模式）
+# ---------------------------------------------------------------------------
+
+_TERMINAL_RETENTION_SECONDS: float = TERMINAL_RETENTION_SECONDS
+_TERMINAL_RECLAIM_MAX: int = TERMINAL_RECLAIM_MAX
+_RECLAIM_TIMER: Optional[threading.Timer] = None
+_RECLAIM_TIMER_LOCK = threading.Lock()
+_RECLAIM_INTERVAL_SECONDS = 60.0
+
+
+def configure_terminal_reclaim(retention_seconds: float, reclaim_max: int) -> None:
+    """装配终态回收旋钮（executor __init__ 调用）。"""
+    global _TERMINAL_RETENTION_SECONDS, _TERMINAL_RECLAIM_MAX
+    _TERMINAL_RETENTION_SECONDS = max(1.0, float(retention_seconds))
+    _TERMINAL_RECLAIM_MAX = max(1, int(reclaim_max))
+
+
+def reclaim_terminal_entries() -> int:
+    """回收终态条目：retention 到期 + 上限超出，从最旧起。
+
+    回收资格 = 终态事件已发布（terminal_published）+ 终态落库成功或重试
+    耗尽 + 通知已记录。收尾在途的条目 SHALL NOT 被移除；上限超出的部分
+    只能通过回收合格条目消化（不合格条目留待收尾完成后由下次触发回收）。
+    返回本次回收条数。
+    """
+    now = time.time()
+    evicted = 0
+    with _TASKS_LOCK:
+        terminal = [
+            e for e in _TASKS.values()
+            if e.task.status.is_terminal and e.task.completed_at is not None
+        ]
+        eligible = [
+            e for e in terminal
+            if e.terminal_published
+            and (e.terminal_persist_ok or e.terminal_persist_exhausted)
+            and e.terminal_notified
+        ]
+        # retention 到期全收
+        evict_ids = {
+            id(e) for e in eligible
+            if now - e.task.completed_at >= _TERMINAL_RETENTION_SECONDS
+        }
+        # 上限超出：剩余合格条目按终态时间从最旧起补收
+        remaining_terminal = len(terminal) - len(evict_ids)
+        if remaining_terminal > _TERMINAL_RECLAIM_MAX:
+            by_oldest = sorted(
+                (e for e in eligible if id(e) not in evict_ids),
+                key=lambda e: e.task.completed_at or 0.0,
+            )
+            for e in by_oldest:
+                if remaining_terminal <= _TERMINAL_RECLAIM_MAX:
+                    break
+                evict_ids.add(id(e))
+                remaining_terminal -= 1
+        if evict_ids:
+            for task_id in [
+                tid for tid, e in _TASKS.items() if id(e) in evict_ids
+            ]:
+                _TASKS.pop(task_id, None)
+                evicted += 1
+    if evicted:
+        logger.info("bg task terminal entries reclaimed count={}", evicted)
+    return evicted
+
+
+def _reclaim_loop() -> None:
+    global _RECLAIM_TIMER
+    try:
+        reclaim_terminal_entries()
+    except Exception:  # noqa: BLE001
+        logger.opt(exception=True).error("bg task terminal reclaim sweep failed")
+    with _RECLAIM_TIMER_LOCK:
+        if _TASKS:
+            _RECLAIM_TIMER = threading.Timer(
+                _RECLAIM_INTERVAL_SECONDS, _reclaim_loop,
+            )
+            _RECLAIM_TIMER.daemon = True
+            _RECLAIM_TIMER.start()
+        else:
+            _RECLAIM_TIMER = None
+
+
+def ensure_reclaim_timer() -> None:
+    """惰性启动周期回收（首个任务入注册表时触发；注册表空转即自停）。"""
+    global _RECLAIM_TIMER
+    with _RECLAIM_TIMER_LOCK:
+        if _RECLAIM_TIMER is not None:
+            return
+        _RECLAIM_TIMER = threading.Timer(_RECLAIM_INTERVAL_SECONDS, _reclaim_loop)
+        _RECLAIM_TIMER.daemon = True
+        _RECLAIM_TIMER.start()

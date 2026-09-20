@@ -8,7 +8,7 @@ from __future__ import annotations
 
 from noesis.storage.postgres.models.auth import TUser, TUserSession
 from noesis.storage.postgres.models.agent_run_command import TAgentRunCommand
-from noesis.storage.postgres.models.bg_task import TBgTaskNotification
+from noesis.storage.postgres.models.bg_task import TBgShellJob, TBgTaskNotification
 from noesis.storage.postgres.models.chat import (
     TAgentDelivery,
     TAgentRun,
@@ -32,6 +32,7 @@ from noesis.storage.postgres.models.settings import (
 
 __all__ = [
     "TAgentRunCommand",
+    "TBgShellJob",
     "TBgTaskNotification",
     "TUser",
     "TUserLLMProvider",

@@ -722,7 +722,7 @@ export async function getSessionMessages(
 }
 
 /** 向已有 child session 追加下一轮对话；modelId/reasoningEffort 缺省沿用当前值。 */
-export async function sendSubagentFollowup(
+export async function sendSubagentMessage(
   sessionId: string,
   message: string,
   modelId?: string,
@@ -737,7 +737,7 @@ export async function sendSubagentFollowup(
   }
   const req = makeRequest(
     'POST',
-    `${location.origin}${BASE}/sessions/${encodeURIComponent(sessionId)}/subagent-followup`,
+    `${location.origin}${BASE}/sessions/${encodeURIComponent(sessionId)}/subagent-messages`,
     body,
   )
   return parseResponse<TaskCatalogEntry>(await authFetch(req))

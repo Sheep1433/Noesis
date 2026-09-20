@@ -30,7 +30,7 @@ from noesis.schemas.chat_vo import (
     ChildSessionCatalogResponse,
     MessageListResponse,
     SendMessageRequest,
-    SubagentFollowupRequest,
+    SubagentMessageRequest,
     SendMessageResponse,
     CreateRunRequest,
 )
@@ -650,11 +650,11 @@ async def send_message(
 
 
 @chat_router.post(
-    "/sessions/{session_id}/subagent-followup", summary="继续子 Agent 会话"
+    "/sessions/{session_id}/subagent-messages", summary="向子 Agent 会话追加消息"
 )
-async def send_subagent_followup(
+async def send_subagent_message(
     session_id: str,
-    request: SubagentFollowupRequest,
+    request: SubagentMessageRequest,
     http_request: Request,
     current_user: CurrentUser = Depends(get_current_user),
 ):
@@ -663,7 +663,7 @@ async def send_subagent_followup(
 
     await require_csrf(http_request)
     # 类型化异常直接上抛：NotFoundException→404、ConflictException→409
-    task = await SubagentSessionService.send_followup(
+    task = await SubagentSessionService.send_message(
         session_id=session_id,
         user_id=str(current_user.user_id),
         message=request.message,
@@ -1410,7 +1410,7 @@ async def stop_shell_job(
         return ResponseUtil.not_found(msg="会话不存在")
     from noesis.services.agent_catalog_service import ShellJobService
 
-    task = ShellJobService.get_task_status(session_id, task_id, str(current_user.user_id))
+    task = await ShellJobService.get_task_status(session_id, task_id, str(current_user.user_id))
     return ResponseUtil.success(
         msg="后台命令已停止" if command["command_status"] == "completed" else "停止请求已受理",
         data={

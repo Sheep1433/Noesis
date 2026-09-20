@@ -1,6 +1,6 @@
 """后台子 Agent 终态后的自动续跑（continuation run）。
 
-dsh ``parent.followup(message)`` 的 Noesis run 级等价物：父 Agent 不是常驻
+dsh ``parent.追加消息(message)`` 的 Noesis run 级等价物：父 Agent 不是常驻
 Actor，唤醒 = 用通知消息作为输入自动创建一个新的 run（同 thread_id，
 LangGraph checkpointer 保证同会话连续历史）。仅当该会话**无活跃 run** 时
 触发；run 活跃期间由 BgNotifyMiddleware 在模型调用边界即时注入。

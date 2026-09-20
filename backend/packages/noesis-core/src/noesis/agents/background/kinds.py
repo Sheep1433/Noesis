@@ -36,13 +36,13 @@ class TaskKindRuntime(Protocol):
     """一种 kind 的能力声明 + 行为注入点。"""
 
     kind: str
-    # 能否追问（False：followup 族锁内即拒绝，文案由 reject_followup_text 提供）
-    supports_followup: bool
+    # 能否追加消息（False：锁内即拒绝，文案由 reject_append_text 提供）
+    supports_message_append: bool
     # 通知负载是否携带 turn_count
     has_turns: bool
 
-    def reject_followup_text(self) -> str:
-        """followup 拒绝文案（含替代指引）。"""
+    def reject_append_text(self) -> str:
+        """追加消息拒绝文案（含替代指引）。"""
         ...
 
     def run(self, entry: "_TaskEntry") -> Any:

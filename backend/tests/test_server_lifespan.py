@@ -116,6 +116,19 @@ def _patch_lifespan_resources(monkeypatch: pytest.MonkeyPatch) -> dict[str, obje
     reconcile_subagents = AsyncMock(return_value=0)
     monkeypatch.setattr(SubagentSessionService, "reconcile_orphaned_runs", reconcile_subagents)
     patched["reconcile_subagents"] = reconcile_subagents
+    from noesis.services.bg_shell_job_service import BgShellJobService
+
+    reconcile_shell = AsyncMock(return_value=0)
+    monkeypatch.setattr(BgShellJobService, "reconcile_orphaned", reconcile_shell)
+    patched["reconcile_shell"] = reconcile_shell
+    list_queued = AsyncMock(return_value=[])
+    monkeypatch.setattr(SubagentSessionService, "list_queued_subagent_runs", list_queued)
+    patched["list_queued"] = list_queued
+    from noesis.repositories.agent_run_command_repository import AgentRunCommandRepository
+
+    reset_claimed = AsyncMock(return_value=0)
+    monkeypatch.setattr(AgentRunCommandRepository, "reset_all_claimed", reset_claimed)
+    patched["reset_claimed"] = reset_claimed
     from noesis.services.scheduled_task_service import ScheduledTaskService
 
     reconcile_scheduled = AsyncMock(return_value=0)

@@ -24,6 +24,103 @@ from langchain_core.tools import tool
 from langgraph.checkpoint.memory import MemorySaver
 from pydantic import PrivateAttr
 
+
+class _FakeSessionService:
+    """追加消息 write-ahead 的单测假体：pending 行为纯内存。
+
+    真实现落 t_chat_message（services/subagent_session_service），单测无
+    DB——用本假体注入端口，行为契约（计数/翻转/重载）与真实现一致。
+    """
+
+    def __init__(self) -> None:
+        self.pending: dict[str, list[dict]] = {}
+        self.dropped: list[str] = []
+        self.cold_tasks: dict[str, dict] = {}
+
+    async def count_pending_messages(self, session_id: str) -> int:
+        return len([r for r in self.pending.get(session_id, []) if not r.get("dropped")])
+
+    async def create_pending_message(self, *, session_id: str, user_id: str, message: str,
+                                     model_id=None, reasoning_effort=None) -> str:
+        mid = f"pm-{len(self.pending.get(session_id, [])) + 1}-{id(message) % 100000}"
+        self.pending.setdefault(session_id, []).append({
+            "message_id": mid, "text": message,
+            "model_id": model_id, "reasoning_effort": reasoning_effort,
+        })
+        return mid
+
+    async def flip_pending_message_dropped(self, message_id: str) -> int:
+        for rows in self.pending.values():
+            for row in rows:
+                if row["message_id"] == message_id and not row.get("dropped"):
+                    row["dropped"] = True
+                    self.dropped.append(message_id)
+                    return 1
+        return 0
+
+    async def flip_pending_messages_dropped(self, session_id: str) -> int:
+        rows = [r for r in self.pending.get(session_id, []) if not r.get("dropped")]
+        for row in rows:
+            row["dropped"] = True
+            self.dropped.append(row["message_id"])
+        return len(rows)
+
+    async def db_task_projection(self, task_ref: str):
+        return self.cold_tasks.get(task_ref)
+
+    async def list_db_task_projections(self, session_id: str):
+        return []
+
+    async def load_cold_task(self, task_ref: str):
+        return self.cold_tasks.get(task_ref)
+
+    async def list_queued_subagent_runs(self, db=None):
+        return []
+
+    async def mark_terminal_persist_exhausted(self, run_id: str) -> None:
+        return None
+
+
+_FAKE_SERVICE = _FakeSessionService()
+
+
+class _FakeShellJobServiceForTools:
+    """工具面单测假体：list_with_fallback 的 shell 兜底通道。"""
+
+    def __init__(self) -> None:
+        self.rows: dict[str, dict] = {}
+
+    async def persist_start(self, **kwargs) -> None:
+        return None
+
+    async def mark_started(self, task_id: str) -> None:
+        return None
+
+    async def mark_terminal(self, **kwargs) -> None:
+        return None
+
+    async def get_task(self, task_id: str):
+        return self.rows.get(task_id)
+
+    async def list_for_session(self, session_id: str):
+        return [r for r in self.rows.values() if r["session_id"] == session_id]
+
+    async def reconcile_orphaned(self, db=None) -> int:
+        return 0
+
+
+_FAKE_SHELL_SERVICE = _FakeShellJobServiceForTools()
+
+
+def _install_fake_session_port() -> None:
+    from noesis.agents.background.ports import (
+        configure_service_port,
+        configure_shell_job_port,
+    )
+
+    configure_service_port(_FAKE_SERVICE)
+    configure_shell_job_port(_FakeShellJobServiceForTools())
+
 from noesis.agents.background.executor import (
     BackgroundTaskExecutor,
     BgTaskStatus,
@@ -264,11 +361,11 @@ def test_list_scoped_by_session() -> None:
 
 
 # ---------------------------------------------------------------------------
-# followup / notifications / 子会话查看
+# 追加消息 / notifications / 子会话查看
 # ---------------------------------------------------------------------------
 
-def test_deliver_followup_rejects_terminal_task() -> None:
-    # failed 任务拒续（completed 现在可冷恢复续话，见 followup 用例）
+def test_deliver_message_rejects_terminal_task() -> None:
+    # failed 任务拒续（completed 现在可冷恢复续话，见 追加消息 用例）
     def _failing_factory():
         async def _f():
             raise RuntimeError("boom")
@@ -281,11 +378,29 @@ def test_deliver_followup_rejects_terminal_task() -> None:
     assert task["status"] == BgTaskStatus.FAILED.value
 
     with pytest.raises(ValueError, match="已结束"):
-        _followup(executor, task_id, "调整")
+        _deliver_appended(executor, task_id, "调整")
 
 
-def test_deliver_followup_queue_full_rejects_explicitly() -> None:
-    """补话队列满（10 条）必须显式拒绝：静默挤掉最早的用户指示不可接受。"""
+def test_deliver_message_requires_pending_message_id() -> None:
+    """消费路径只消费已受理（accept 落 pending 行）的消息：缺 message_id
+    即拒绝——行的写入与容量执法在受理端（任意实例，DB 计数），集成轮覆盖。"""
+    from noesis.agents.background.jobs.registry import _TASKS, _TASKS_LOCK
+
+    worker = _build_worker([AIMessage(content="ok")])
+    executor = BackgroundTaskExecutor(task_timeout_seconds=30)
+    task_id = executor.start(worker_factory=lambda: worker, description="x", session_id="s-wa2", user_id="u1")
+    time.sleep(0.2)
+    with pytest.raises(ValueError, match="message_id"):
+        import asyncio as _a
+        _install_fake_session_port()
+        _a.run(executor.deliver_message(task_id, "没有受理凭证的消息"))
+    with _TASKS_LOCK:
+        assert len(_TASKS[task_id].pending_messages) == 0
+
+
+def test_append_message_mirror_keeps_all_accepted() -> None:
+    """受理过的消息必须全部进入执行镜像并依次消费：镜像队列 SHALL NOT 因
+    上限静默淘汰（容量执法在受理端；竞态超限条目全保留）。"""
     from noesis.agents.background.jobs.registry import _TASKS, _TASKS_LOCK
 
     worker = _build_worker(
@@ -296,24 +411,17 @@ def test_deliver_followup_queue_full_rejects_explicitly() -> None:
     executor = BackgroundTaskExecutor(task_timeout_seconds=30)
     task_id = executor.start(worker_factory=lambda: worker, description="长任务", session_id="s-full", user_id="u1")
 
-    # 第一轮有多次慢工具调用（每次 0.6s），在运行窗口内灌满 10 条补话
-    for i in range(1, 11):
-        _followup(executor, task_id, f"补话-{i}")
+    # 受理端容量由 DB 计数执法（集成覆盖）；此处验证消费镜像无上限：
+    # 以受理语义写入 12 条（超出旧 maxlen=10），全部入队且不淘汰
+    for i in range(1, 13):
+        _deliver_appended(executor, task_id, f"追加消息-{i}")
     with _TASKS_LOCK:
         entry = _TASKS[task_id]
-        assert len(entry.followups) == 10
-        assert entry.followups[0] == "补话-1"
+        assert len(entry.pending_messages) == 12
+        assert entry.pending_messages[0].text == "追加消息-1"
+        assert entry.pending_messages[-1].text == "追加消息-12"
 
-    # 第 11 条：必须显式报错，且既有 10 条原封不动（不得静默挤掉最旧）
-    with pytest.raises(ValueError, match="队列已满"):
-        _followup(executor, task_id, "补话-11")
-    with _TASKS_LOCK:
-        entry = _TASKS[task_id]
-        assert len(entry.followups) == 10
-        assert entry.followups[0] == "补话-1"
-        assert entry.followups[-1] == "补话-10"
-
-    # 收尾：10 条补话被链式消费，任务正常结束
+    # 收尾：全部追加消息被链式消费，任务正常结束
     task = _wait_terminal(executor, task_id)
     assert task["status"] == BgTaskStatus.COMPLETED.value
 
@@ -351,7 +459,7 @@ def test_notify_agent_query_prefixes_block() -> None:
 
 
 
-def test_followup_chains_new_turn_when_running() -> None:
+def test_append_message_chains_new_turn_when_running() -> None:
     """运行中 send_message：当前 turn 结束后链式开新 turn（同 thread 追加）。"""
     worker = _build_worker([AIMessage(content="第一轮完成")])
     executor = BackgroundTaskExecutor(task_timeout_seconds=30)
@@ -363,7 +471,7 @@ def test_followup_chains_new_turn_when_running() -> None:
     task = _wait_terminal(executor, task_id)
     assert task["status"] == BgTaskStatus.COMPLETED.value
 
-    snapshot = _followup(executor, task_id, "请继续深入")
+    snapshot = _deliver_appended(executor, task_id, "请继续深入")
     assert snapshot["status"] == BgTaskStatus.RUNNING.value
     task = _wait_terminal(executor, task_id)
     assert task["status"] == BgTaskStatus.COMPLETED.value
@@ -371,9 +479,9 @@ def test_followup_chains_new_turn_when_running() -> None:
     assert task["result"]
 
 
-def test_followup_model_switch_recompiles_worker() -> None:
-    """followup 携带新模型：以覆盖值重编译 worker，task.model_id 跟随更新；
-    不带模型或同模型的 followup 不触发重编译。"""
+def test_append_message_model_switch_recompiles_worker() -> None:
+    """追加消息 携带新模型：以覆盖值重编译 worker，task.model_id 跟随更新；
+    不带模型或同模型的 追加消息 不触发重编译。"""
     factory_calls: list[Any] = []
 
     def worker_factory(model_id_override=None):  # noqa: ANN001, ANN001
@@ -392,22 +500,22 @@ def test_followup_model_switch_recompiles_worker() -> None:
     assert entry.task.model_id == "model-a"
 
     # 冷恢复 + 换模型：factory 收到覆盖值，编译产物替换，task.model_id 更新
-    _followup(executor, task_id, "换个模型继续", model_id="model-b")
+    _deliver_appended(executor, task_id, "换个模型继续", model_id="model-b")
     task = _wait_terminal(executor, task_id)
     assert task["status"] == BgTaskStatus.COMPLETED.value
     assert factory_calls == [None, "model-b"]
     assert entry.task.model_id == "model-b"
     assert entry.model_override == "model-b"
 
-    # 不带模型的 followup：沿用 model-b，不重编译
-    _followup(executor, task_id, "再问一句")
+    # 不带模型的 追加消息：沿用 model-b，不重编译
+    _deliver_appended(executor, task_id, "再问一句")
     task = _wait_terminal(executor, task_id)
     assert task["status"] == BgTaskStatus.COMPLETED.value
     assert factory_calls == [None, "model-b"]
     assert entry.task.model_id == "model-b"
 
     # 同模型显式传参：与当前一致，不重编译
-    _followup(executor, task_id, "同模型再问", model_id="model-b")
+    _deliver_appended(executor, task_id, "同模型再问", model_id="model-b")
     task = _wait_terminal(executor, task_id)
     assert task["status"] == BgTaskStatus.COMPLETED.value
     assert factory_calls == [None, "model-b"]
@@ -415,12 +523,24 @@ def test_followup_model_switch_recompiles_worker() -> None:
 # 前台等待（run_in_background=false）与超时转后台
 # ---------------------------------------------------------------------------
 
-def _followup(executor, task_id: str, message: str, **kwargs) -> dict:
-    """同步测试用的 followup 包装（deliver_followup 为单一异步入口）。"""
+def _deliver_appended(executor, task_id: str, message: str, **kwargs) -> dict:
+    """同步测试用的追加消息包装：模拟受理（fake pending 行）+ 消费路径。"""
     import asyncio as _a
-    return _a.run(executor.deliver_followup(task_id, message, **kwargs))
+    _install_fake_session_port()
 
+    async def _accept_and_consume():
+        task = executor.get(task_id) or {}
+        session_id = task.get("child_session_id") or task_id
+        user_id = str(task.get("user_id") or "u1")
+        mid = await _FAKE_SERVICE.create_pending_message(
+            session_id=session_id, user_id=user_id, message=message,
+            model_id=kwargs.get("model_id"), reasoning_effort=kwargs.get("reasoning_effort"),
+        )
+        return await executor.deliver_message(
+            task_id, message, user_message_id=mid, **kwargs,
+        )
 
+    return _a.run(_accept_and_consume())
 def _build_tools(executor: BackgroundTaskExecutor, worker_factory, create_child_session=None):
     """以角色注册表 + 中间件构造工具面（与生产装配同构，单 general 角色）。"""
     from noesis.agents.background.subagent.roles import SubagentRegistry, SubagentRole
@@ -1170,7 +1290,7 @@ def test_task_lookup_rejects_ambiguous_prefix() -> None:
 
 
 def test_apply_turn_params_switches_effort() -> None:
-    """followup turn 参数：推理档位变化即使 worker 失效重编译（模型不变也生效）。"""
+    """追加消息 turn 参数：推理档位变化即使 worker 失效重编译（模型不变也生效）。"""
     from noesis.agents.background.executor import BackgroundTask
     from noesis.agents.background.jobs.registry import _TaskEntry
     from noesis.agents.background.subagent.kernel import _TurnParams, _apply_turn_params
@@ -1425,13 +1545,13 @@ def test_stop_during_turn_finish_window_not_overwritten() -> None:
     task.stop_reason = "cancelled"
     assert settle_mod._try_transition(task, ex_mod.BgTaskStatus.RUNNING) is False
     assert task.status == ex_mod.BgTaskStatus.CANCELLED.value
-    # 非终态时写入正常（followup 复活路径：RUNNING 写回自身）
+    # 非终态时写入正常（追加消息 复活路径：RUNNING 写回自身）
     task.status = ex_mod.BgTaskStatus.RUNNING
     assert settle_mod._try_transition(task, ex_mod.BgTaskStatus.RUNNING) is True
     executor.cancel(task_id)
 
 
-def test_deliver_followup_after_cancel_resumes_task() -> None:
+def test_deliver_message_after_cancel_resumes_task() -> None:
     """执行/意图分离：停止只终止执行——CANCELLED 后 send_message 冷恢复续跑。"""
     worker = _build_worker(
         [AIMessage(content="第一轮产出")] + [_slow_call("s1", "c1")], slow=True,
@@ -1443,7 +1563,7 @@ def test_deliver_followup_after_cancel_resumes_task() -> None:
     time.sleep(0.2)
     executor.cancel(task_id)
     # 停止落终态后：追加消息触发冷恢复（同 thread 开新 turn），不再拒绝
-    snapshot = _followup(executor, task_id, "停止后的追加消息")
+    snapshot = _deliver_appended(executor, task_id, "停止后的追加消息")
     assert snapshot["status"] == BgTaskStatus.RUNNING.value
     deadline = time.time() + 15
     while time.time() < deadline:
@@ -1716,13 +1836,28 @@ async def test_collect_persisted_text_degrades_on_port_failure() -> None:
     assert text == ""
 
 
-def test_followup_cold_resume_prelude_failure_fails_task() -> None:
-    """冷恢复前置段（run 创建）异常：显式收口 FAILED，不得静默卡 RUNNING。
+def test_deliver_message_prelude_failure_restores_prev_terminal(monkeypatch) -> None:
+    """冷恢复前置段（run 创建）异常：投递失败不终态化任务——回退先前
+    终态，不得静默卡 RUNNING。
 
-    回归背景：send_message 对 _arun_followup fire-and-forget，前置段异常
-    滞留在未观察的 concurrent Future 里被吞——任务卡 RUNNING、后续追问
-    进队列无人消费（跨 loop 连接错误曾走此路径且无任何日志）。
+    回归背景：deliver_message 对 _arun_appended_turn fire-and-forget，前置段
+    异常滞留在未观察的 concurrent Future 里被吞——任务卡 RUNNING、后续
+    追问进队列无人消费（跨 loop 连接错误曾走此路径且无任何日志）。
     """
+    _install_fake_session_port()
+
+    def _fake_run_on_main_loop(coro, name=None):
+        try:
+            loop = asyncio.get_running_loop()
+        except RuntimeError:
+            coro.close()
+            return None
+        loop.create_task(coro)
+        return None
+
+    monkeypatch.setattr(
+        "noesis.runtime.main_loop.run_on_main_loop", _fake_run_on_main_loop,
+    )
     worker = _build_worker([AIMessage(content="第一轮完成")])
     executor = BackgroundTaskExecutor(task_timeout_seconds=30)
     task_id = executor.start(
@@ -1733,16 +1868,18 @@ def test_followup_cold_resume_prelude_failure_fails_task() -> None:
     assert task["status"] == BgTaskStatus.COMPLETED.value
 
     def _boom(*args: Any, **kwargs: Any) -> Any:
-        raise RuntimeError("followup run 创建失败")
+        raise RuntimeError("追加消息 run 创建失败")
 
     entry = _TASKS[task_id]
-    entry.followup_factory = _boom
+    entry.turn_factory = _boom
 
-    _followup(executor, task_id, "继续深入")
+    _deliver_appended(executor, task_id, "继续深入")
     task = _wait_terminal(executor, task_id)
-    # 收口为显式失败：状态可见、错误信息可定位（而非永远 RUNNING）
-    assert task["status"] == BgTaskStatus.FAILED.value
-    assert "followup run 创建失败" in (task["error"] or "")
+    # 回退先前终态：状态可见（completed 可续）、不卡 RUNNING、不落 FAILED
+    assert task["status"] == BgTaskStatus.COMPLETED.value
+    assert task["result"] == "第一轮完成"
+    time.sleep(0.1)  # 翻转在隔离 loop 异步完成
+    assert _FAKE_SERVICE.dropped, "投递失败的消息行必须翻转 dropped"
 
 
 @pytest.mark.asyncio
@@ -1878,7 +2015,7 @@ async def test_transient_deltas_forwarded_to_run_subscribers() -> None:
 
 
 @pytest.mark.asyncio
-async def test_deliver_followup_cold_resume_returns_new_run_id() -> None:
+async def test_deliver_message_cold_resume_returns_new_run_id() -> None:
     """异步冷恢复契约：响应前完成新 run 创建——run_id 权威，订阅方据此
     订阅即可收到全部事件。同步版响应可携带旧 run_id（新 run 异步创建），
     前端曾被迫轮询 active-run 绕过（契约缺陷的补丁，已回归根因修复）。"""
@@ -1897,9 +2034,13 @@ async def test_deliver_followup_cold_resume_returns_new_run_id() -> None:
         return {"run_id": "run-new", "assistant_message_id": "am-new"}
 
     entry = _TASKS[task_id]
-    entry.followup_factory = _factory
+    entry.turn_factory = _factory
 
-    snapshot = await BackgroundTaskExecutor.deliver_followup(task_id, "继续")
+    _install_fake_session_port()
+    mid = await _FAKE_SERVICE.create_pending_message(
+        session_id="child-asend", user_id="u1", message="继续",
+    )
+    snapshot = await executor.deliver_message(task_id, "继续", user_message_id=mid)
     # 契约：返回时新 run_id 已就绪（不是旧值），状态 running
     assert snapshot["run_id"] == "run-new"
     assert snapshot["run_id"] != old_run_id
@@ -1912,9 +2053,21 @@ async def test_deliver_followup_cold_resume_returns_new_run_id() -> None:
 
 
 @pytest.mark.asyncio
-async def test_deliver_followup_factory_failure_fails_task() -> None:
-    """异步冷恢复的前置失败（factory 抛异常）：显式收口 FAILED，
-    响应携带失败状态与错误信息（而非静默卡 RUNNING）。"""
+async def test_deliver_message_failure_restores_prev_terminal(monkeypatch) -> None:
+    """投递失败不终态化任务：factory 异常时回退先前终态（completed）、
+    消息行翻转 dropped——调用方拿到可继续下达的可续状态。"""
+    _install_fake_session_port()
+
+    def _fake_run_on_main_loop(coro, name=None):
+        try:
+            loop = asyncio.get_running_loop()
+        except RuntimeError:
+            coro.close()
+            return None
+        loop.create_task(coro)
+        return None
+
+    monkeypatch.setattr("noesis.runtime.main_loop.run_on_main_loop", _fake_run_on_main_loop)
     worker = _build_worker([AIMessage(content="第一轮完成")])
     executor = BackgroundTaskExecutor(task_timeout_seconds=30)
     task_id = executor.start(
@@ -1928,11 +2081,19 @@ async def test_deliver_followup_factory_failure_fails_task() -> None:
         raise RuntimeError("run 创建失败")
 
     entry = _TASKS[task_id]
-    entry.followup_factory = _boom
+    entry.turn_factory = _boom
 
-    snapshot = await BackgroundTaskExecutor.deliver_followup(task_id, "继续")
-    assert snapshot["status"] == BgTaskStatus.FAILED.value
-    assert "run 创建失败" in (snapshot["error"] or "")
+    _install_fake_session_port()
+    mid = await _FAKE_SERVICE.create_pending_message(
+        session_id=task["child_session_id"] or task_id, user_id="u1", message="继续",
+    )
+    snapshot = await executor.deliver_message(task_id, "继续", user_message_id=mid)
+    assert snapshot["status"] == BgTaskStatus.COMPLETED.value
+    assert snapshot["result"] == "第一轮完成"
+    await asyncio.sleep(0.05)
+    assert _FAKE_SERVICE.dropped, "投递失败的消息行必须翻转 dropped"
+    # 回退后任务仍可续（completed 可冷恢复）
+    assert entry.task.status == BgTaskStatus.COMPLETED.value
 
 
 def test_global_admission_queues_across_sessions() -> None:
@@ -1975,11 +2136,11 @@ def test_new_kind_registers_without_runtime_change() -> None:
 
     class _FakeKind:
         kind = "fake"
-        supports_followup = False
+        supports_message_append = False
         has_turns = False
 
         @staticmethod
-        def reject_followup_text() -> str:
+        def reject_append_text() -> str:
             return "fake 任务不可追问"
 
         @staticmethod
@@ -2008,14 +2169,14 @@ def test_new_kind_registers_without_runtime_change() -> None:
         task_id = executor.start(worker_factory=lambda: None, description="f",
                                   session_id="s-fake", user_id="u1", kind="fake")
         task = _wait_terminal(executor, task_id)
-        # 行为对象全链路生效：run 被调度、终态经 outcome 收口、followup 被能力门拒绝
+        # 行为对象全链路生效：run 被调度、终态经 outcome 收口、追加消息 被能力门拒绝
         assert calls == ["run"]
         assert task["status"] == BgTaskStatus.COMPLETED.value
         assert task["result"] == "fake done"
         assert task["kind"] == "fake"
         with pytest.raises(ValueError, match="fake 任务不可追问"):
-            _followup(executor, task_id, "追问")
-        assert behavior_of("fake").reject_followup_text() == "fake 任务不可追问"
+            _deliver_appended(executor, task_id, "追问")
+        assert behavior_of("fake").reject_append_text() == "fake 任务不可追问"
     finally:
         kinds_mod.KIND_BEHAVIORS.pop("fake", None)
 
@@ -2081,7 +2242,7 @@ def test_accept_terminal_late_nonstop_spec_returns_as_is() -> None:
 
 
 def test_try_transition_refuses_terminal_overwrite() -> None:
-    """终态不可覆写：followup 等非终态写入在终态后必须被拒。"""
+    """终态不可覆写：追加消息 等非终态写入在终态后必须被拒。"""
     from noesis.agents.background.jobs.settle import _try_transition
 
     entry = _race_entry("t-race-3", status=BgTaskStatus.CANCELLED)

@@ -1204,6 +1204,11 @@ async def test_stop_run_service_maps_cancel_to_interrupted(monkeypatch) -> None:
             # 乐观终态：无论协作还是即时路径，受理即 cancelled
             return {"status": "cancelled", "stop_reason": "cancelled"}
 
+        @staticmethod
+        async def cancel_with_fallback(task_id):
+            # 兜底路径与热集受理同语义（回收后重复停止幂等）
+            return {"status": "cancelled", "stop_reason": "cancelled"}
+
     import noesis.agents.background.ports as port
 
     monkeypatch.setattr(port, "ExecutorPort", _FakeExec)
@@ -1248,14 +1253,14 @@ async def test_stop_run_service_maps_cancel_to_interrupted(monkeypatch) -> None:
 
 @pytest.mark.asyncio
 async def test_write_endpoints_gate_on_csrf() -> None:
-    """写操作族（create run / stop / followup / test-case resume）统一 CSRF 门禁。
+    """写操作族（create run / stop / 追加消息 / test-case resume）统一 CSRF 门禁。
 
     无认证会话的请求在触达业务层之前即被拒绝（403 语义）。
     """
     from types import SimpleNamespace
 
     from noesis.errors.exceptions import PermissionException
-    from noesis.schemas.chat_vo import CreateRunRequest, SubagentFollowupRequest
+    from noesis.schemas.chat_vo import CreateRunRequest, SubagentMessageRequest
     from noesis.schemas.qa_vo import TestCaseResumeRequest
 
     user = SimpleNamespace(user_id="u1")
@@ -1272,9 +1277,9 @@ async def test_write_endpoints_gate_on_csrf() -> None:
     with pytest.raises(PermissionException):
         await chat_api.stop_run("run-1", http_request=no_auth, current_user=user, db=db)
     with pytest.raises(PermissionException):
-        await chat_api.send_subagent_followup(
+        await chat_api.send_subagent_message(
             "child-1",
-            SubagentFollowupRequest(message="hi"),
+            SubagentMessageRequest(message="hi"),
             http_request=no_auth,
             current_user=user,
         )
