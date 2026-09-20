@@ -241,7 +241,7 @@ class AsyncSubagentToolsMiddleware(
                     created_by_tool_call_id=created_by_tool_call_id,
                     run_id=run_id,
                     assistant_message_id=assistant_message_id,
-                    followup_factory=create_turn_run,
+                    turn_factory=create_turn_run,
                     model_id=effective_model,
                     subagent_type=subagent_type,
                 )
@@ -370,9 +370,15 @@ class AsyncSubagentToolsMiddleware(
         async def asend_message(
             task_id: str, message: str, tool_call_id: str = "",
         ) -> str | Command:
-            """向子任务追加一轮执行（write-ahead 落库先行；主规格 send_message）。"""
+            """向子任务追加一轮执行（与用户 HTTP 同走命令受理，单一路径）。"""
+            from noesis.agents.background.ports import SubagentSessionPort
+
             try:
-                task = await executor.deliver_message(task_id, message)
+                task = await SubagentSessionPort.accept_message(
+                    task_ref=task_id,
+                    user_id=user_id,
+                    message=message,
+                )
             except ValueError as exc:
                 return f"发送失败：{exc}"
             text = (

@@ -7,14 +7,14 @@ import { computed } from 'vue'
  * （跨抽屉开关存活）读写——队列的删除/编辑回填/重排逻辑只有这一份，
  * 两侧不再各自实现数组操作。
  */
-export interface FollowupQueueStore {
+export interface MessageQueueStore {
   /** 队列读取（须响应式：ref.value 或 reactive 容器读取） */
   get(): string[]
   /** 队列整体替换 */
   set(messages: string[]): void
 }
 
-export function useFollowupQueue(store: FollowupQueueStore) {
+export function useMessageQueue(store: MessageQueueStore) {
   const messages = computed(() => store.get())
 
   function remove(index: number): void {

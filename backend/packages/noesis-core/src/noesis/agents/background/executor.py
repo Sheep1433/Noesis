@@ -21,7 +21,7 @@ from noesis.agents.background.subagent.kernel import (
     _TurnParams,
     _apply_turn_params,
     _arun,
-    _arun_followup,
+    _arun_appended_turn,
 )
 from noesis.agents.background.jobs.events import (
     get_run_event_history,
@@ -61,7 +61,6 @@ from noesis.agents.background.jobs.settle import (
 )
 from noesis.agents.background.jobs.state import (
     MAX_CONCURRENT_PER_SESSION,
-    MAX_PENDING_MESSAGES,
     STOP_GRACE_SECONDS,
     STOP_RECONCILE_SECONDS,
     SHELL_TASK_TIMEOUT_SECONDS,
@@ -217,7 +216,7 @@ class BackgroundTaskExecutor:
         task_id: Optional[str] = None,
         run_id: Optional[str] = None,
         assistant_message_id: Optional[str] = None,
-        followup_factory: Optional[Callable[[str, str, Optional[str]], Any]] = None,
+        turn_factory: Optional[Callable[[str, str, Optional[str]], Any]] = None,
         model_id: Optional[str] = None,
         subagent_type: Optional[str] = None,
         kind: str = "subagent",
@@ -246,7 +245,7 @@ class BackgroundTaskExecutor:
         entry = _TaskEntry(
             task=task,
             agent_factory=worker_factory,
-            followup_factory=followup_factory,
+            turn_factory=turn_factory,
             recursion_limit=self._recursion_limit,
             timeout_seconds=self._task_timeout,
             # 创建时档位继承：start 在父 run 上下文调用（ContextVar 可见）；
@@ -390,48 +389,47 @@ class BackgroundTaskExecutor:
         model_id: Optional[str] = None,
         reasoning_effort: Optional[str] = None,
     ) -> dict[str, Any]:
-        """追加消息单一入口：write-ahead 落库先行，再入内存队列 / 冷恢复。
+        """追加消息消费路径（leader 命令消费者调用）：入执行队列 / 冷恢复。
 
-        - pending user message 行是队列事实：任何路径先落行再入内存
-          （内存 deque 只是执行镜像）；容量以 pending 行计数判定，超限在
-          落库前拒绝
+        - 受理（写 pending 行 + 插命令、容量执法）在 `send_message` 的
+          accept 端（任意实例）；本方法只消费已受理的消息——
+          `user_message_id` 必须来自受理写入的 pending 行
         - 内存 miss 走冷恢复：从 DB 投影 + descriptor 重建执行条目（仅
-          可续终态 completed / cancelled）并重载 pending 行；不可续 /
-          不存在抛可诊断错误
+          可续终态 completed / cancelled）并重载 pending 行
+        - 镜像查重 + 行状态保证命令重放/租约重置后不重复消费
         - 投递失败不终态化任务：settle_delivery_failure 裁决回退（冷恢复
           窗口内受理的停止终态获胜）
         """
         text = message.strip()
         if not text:
             raise ValueError("消息不能为空")
+        if user_message_id is None:
+            # 消费路径只消费已受理（accept 已落 pending 行）的消息：
+            # 行的写入与容量执法在受理端（任意实例），此处仅 leader 消费
+            raise ValueError("追加消息消费缺少 message_id（受理端命令载荷缺失）")
         params = _TurnParams(model_id=model_id, reasoning_effort=reasoning_effort)
         with _TASKS_LOCK:
             entry = _find_entry_locked(task_id)
         if entry is None:
             entry = await self._cold_recover_entry(task_id)
         task = entry.task
-        if not behavior_of(task.kind).supports_followup:
-            raise ValueError(behavior_of(task.kind).reject_followup_text())
+        if not behavior_of(task.kind).supports_message_append:
+            raise ValueError(behavior_of(task.kind).reject_append_text())
+        # 镜像查重：重放窗口内（命令重认领）已在执行镜像队列的消息不重复入队
+        with entry.pending_lock:
+            if any(pm.message_id == user_message_id for pm in entry.pending_messages):
+                return task.to_dict()
         if task.status.is_terminal and task.status not in REVIVABLE_END_STATES:
+            # 消费拒绝：受理与消费之间任务转为不可续——行翻转 dropped，
+            # 不留滞留（消费端权威；受理端的容量/校验只是咨询性快速失败）
+            from noesis.runtime.main_loop import run_on_main_loop
+
+            run_on_main_loop(
+                SubagentSessionPort.flip_pending_message_dropped(user_message_id),
+                name=f"bg-pending-drop:{user_message_id}",
+            )
             raise ValueError(f"任务已结束（{task.status.value}），无法追加消息")
         child_id = task.child_session_id or task.task_id
-        # 容量以 DB pending 行计数为准。count-then-insert 存在竞态：并发
-        # K 请求同时读到临界计数时至多超限 K-1 条，后果是队列多几条显式
-        # 下达的指示、功能无损，不为它加任务级互斥
-        pending_count = await SubagentSessionPort.count_pending_messages(child_id)
-        if pending_count >= MAX_PENDING_MESSAGES:
-            raise ValueError(
-                f"补话队列已满（{MAX_PENDING_MESSAGES} 条）：请等待当前轮完成后再发，"
-                f"或将多条指示合并为一条"
-            )
-        if user_message_id is None:
-            user_message_id = await SubagentSessionPort.create_pending_message(
-                session_id=child_id,
-                user_id=task.user_id,
-                message=text,
-                model_id=model_id,
-                reasoning_effort=reasoning_effort,
-            )
         pending = _PendingMessage(message_id=user_message_id, text=text, params=params)
         with _TASKS_LOCK:
             if task.status not in REVIVABLE_END_STATES:
@@ -469,20 +467,20 @@ class BackgroundTaskExecutor:
                 entry.terminal_notified = False
                 cancel_terminal_timers(entry)
         if queued:
-            _publish_task_event(task, "followup")
+            _publish_task_event(task, "message-appended")
             return task.to_dict()
-        if entry.followup_factory is None:
+        if entry.turn_factory is None:
             loop = _ensure_loop()
             entry.future = _submit_isolated(
-                loop, _arun_followup(entry, text, user_message_id, params),
+                loop, _arun_appended_turn(entry, text, user_message_id, params),
             )
             start_watchdog_timer(entry)
-            _publish_task_event(task, "followup")
+            _publish_task_event(task, "message-appended")
             return task.to_dict()
         try:
             _apply_turn_params(entry, params)
             task.turn_count += 1
-            launch = entry.followup_factory(child_id, text, user_message_id)
+            launch = entry.turn_factory(child_id, text, user_message_id)
             if inspect.isawaitable(launch):
                 launch = await launch
         except Exception as exc:
@@ -502,7 +500,7 @@ class BackgroundTaskExecutor:
                 _arun(entry, initial_source={"messages": [HumanMessage(content=text)]}),
             )
             start_watchdog_timer(entry)
-        _publish_task_event(task, "followup")
+        _publish_task_event(task, "message-appended")
         return task.to_dict()
 
     # -- 冷恢复与对账重建 ---------------------------------------------
@@ -561,7 +559,7 @@ class BackgroundTaskExecutor:
         entry = _TaskEntry(
             task=task,
             agent_factory=worker_factory,
-            followup_factory=self._make_cold_followup_factory(str(info["user_id"])),
+            turn_factory=self._make_cold_turn_factory(str(info["user_id"])),
             recursion_limit=self._recursion_limit,
             timeout_seconds=self._task_timeout,
             session_max_concurrent=self._max_concurrent,
@@ -590,7 +588,7 @@ class BackgroundTaskExecutor:
             _TASKS.setdefault(task.task_id, entry)
         return entry
 
-    def _make_cold_followup_factory(self, user_id: str) -> Callable[..., Any]:
+    def _make_cold_turn_factory(self, user_id: str) -> Callable[..., Any]:
         """冷恢复条目的 run 创建工厂（user_id 来自 DB 事实，非装配闭包）。
 
         经 run_on_main_loop 在主 loop 执行：pg_manager 连接池绑定主 loop，

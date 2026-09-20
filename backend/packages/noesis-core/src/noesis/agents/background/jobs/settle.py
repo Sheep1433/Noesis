@@ -65,7 +65,7 @@ def _notify_terminal(entry: "_TaskEntry", task: BackgroundTask) -> None:
     reclaim_terminal_entries()
 
 def _schedule_continuation(task: BackgroundTask) -> None:
-    """终态后尝试唤醒主 Agent（dsh parent.followup 的 run 级等价物）。
+    """终态后尝试唤醒主 Agent（对齐 dsh 父会话追加消息语义的 run 级等价物）。
 
     无活跃 run 时自动创建 continuation run；调度回主 loop（DB 引擎与
     RunManager 绑定主 loop）。所有终态都触发——仅认 COMPLETED 的旧门控
@@ -86,10 +86,10 @@ def _schedule_continuation(task: BackgroundTask) -> None:
 def _try_transition(task: BackgroundTask, next_status: BgTaskStatus) -> bool:
     """非终态状态写入收口（RUNNING 恢复）：
     终态不得被覆写（乐观停止受理即落 CANCELLED，执行侧的恢复/
-    followup 写入不得复活已停任务）。
+    追加消息 写入不得复活已停任务）。
 
     执行侧恢复/审批写入经此在同一把锁下复查——互斥关闭「检查后写入」
-    窗口（否则停止被覆写丢失，followup 甚至反向新开 run）。
+    窗口（否则停止被覆写丢失，追加消息 甚至反向新开 run）。
     返回 False = 任务已终态（多为停止受理），调用方走取消收尾。
     """
     with _TASKS_LOCK:
@@ -105,7 +105,7 @@ _STOP_TERMINALS: frozenset[BgTaskStatus] = frozenset(
 )
 
 # 可冷恢复续聊的终态：停止是乐观终态且只终止执行（执行/意图分离），
-# 排队与后续的 followup 意图保留——completed / cancelled 均可经
+# 排队与后续的 追加消息 意图保留——completed / cancelled 均可经
 # deliver_message 同 thread 续跑；failed / timed_out 语义上不可续
 REVIVABLE_END_STATES: frozenset[BgTaskStatus] = frozenset(
     {BgTaskStatus.COMPLETED, BgTaskStatus.CANCELLED}

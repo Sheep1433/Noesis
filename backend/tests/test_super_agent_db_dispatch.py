@@ -2,7 +2,7 @@
 
 _pg_manager 池绑定主 loop；三个子 Agent 回调（建子会话/删子会话/拒 run）
 必须在被投递到主 loop 的协程里执行 DB 操作，否则在 executor 隔离 loop
-上直连会出 asyncpg 跨 loop 错误（_create_followup_run 的冷恢复前科）。
+上直连会出 asyncpg 跨 loop 错误（_create_追加消息_run 的冷恢复前科）。
 """
 
 from __future__ import annotations

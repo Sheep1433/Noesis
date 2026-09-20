@@ -173,14 +173,14 @@ async def test_terminal_run_stream_skips_subscription(monkeypatch, subagent_stre
 
 
 # ---------------------------------------------------------------------------
-# 接口级：followup / children catalog
+# 接口级：追加消息 / children catalog
 # ---------------------------------------------------------------------------
 
 
 @pytest.mark.asyncio
-async def test_followup_endpoint_passes_through_and_maps_not_found(monkeypatch) -> None:
+async def test_追加消息_endpoint_passes_through_and_maps_not_found(monkeypatch) -> None:
     from noesis.errors.exceptions import ConflictException, NotFoundException
-    from noesis.schemas.chat_vo import SubagentFollowupRequest
+    from noesis.schemas.chat_vo import SubagentMessageRequest
     from noesis.services.subagent_session_service import SubagentSessionService
 
     monkeypatch.setattr(
@@ -191,7 +191,7 @@ async def test_followup_endpoint_passes_through_and_maps_not_found(monkeypatch) 
     monkeypatch.setattr(chat_api, "require_csrf", AsyncMock())
     ok = await chat_api.send_subagent_message(
         "child-1",
-        SubagentFollowupRequest(message="再查一下"),
+        SubagentMessageRequest(message="再查一下"),
         http_request=SimpleNamespace(),
         current_user=SimpleNamespace(user_id="u1"),
     )
@@ -207,7 +207,7 @@ async def test_followup_endpoint_passes_through_and_maps_not_found(monkeypatch) 
     with pytest.raises(NotFoundException):
         await chat_api.send_subagent_message(
             "child-none",
-            SubagentFollowupRequest(message="再查一下"),
+            SubagentMessageRequest(message="再查一下"),
             http_request=SimpleNamespace(),
             current_user=SimpleNamespace(user_id="u1"),
         )
@@ -222,7 +222,7 @@ async def test_followup_endpoint_passes_through_and_maps_not_found(monkeypatch) 
     with pytest.raises(ConflictException):
         await chat_api.send_subagent_message(
             "root-none",
-            SubagentFollowupRequest(message="再查一下"),
+            SubagentMessageRequest(message="再查一下"),
             http_request=SimpleNamespace(),
             current_user=SimpleNamespace(user_id="u1"),
         )

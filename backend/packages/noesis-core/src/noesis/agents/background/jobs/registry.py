@@ -18,7 +18,6 @@ from noesis.runtime.logging import logger
 from noesis.agents.background.jobs.events import _publish_run_event, _publish_task_event
 from noesis.agents.background.jobs.loop import _ensure_loop, _submit_isolated
 from noesis.agents.background.jobs.state import (
-    MAX_PENDING_MESSAGES,
     STOP_GRACE_SECONDS,
     STOP_RECONCILE_SECONDS,
     TERMINAL_RECLAIM_MAX,
@@ -61,7 +60,7 @@ class _TaskEntry:
     recursion_limit: int
     # > 0 时 watchdog 超时取消执行 future；0 = 不限时（shell 任务默认）
     timeout_seconds: float
-    followup_factory: Optional[Callable[[str, str, Optional[str]], Any]] = None
+    turn_factory: Optional[Callable[[str, str, Optional[str]], Any]] = None
     # 排队唤醒时按该值判断槽位（executor 实例不共享，cap 记在条目上）
     session_max_concurrent: int = 1
     # 提交序号：全局 FIFO 唤醒的排序键（跨会话公平）
@@ -72,14 +71,14 @@ class _TaskEntry:
     # 本 deque 只是热集内的执行镜像（出队开 turn；条目回收后由冷恢复从
     # DB 重载）。deliver_message 入队，当前 turn 结束后链式开新 turn
     pending_messages: "collections.deque[_PendingMessage]" = field(
-        default_factory=lambda: collections.deque(maxlen=MAX_PENDING_MESSAGES),
+        default_factory=collections.deque,
     )
     # 生效中的模型覆盖：非 None 时 _ensure_agent 以该模型重新编译 worker
     model_override: Optional[str] = None
     # 生效中的推理档位（turn 级；LLM 构造时经 ContextVar 固化为请求参数）。
     # 创建时在父 run 上下文捕获（后台 worker 隔离 loop 干净上下文拿不到父档位）
     turn_reasoning_effort: Optional[str] = None
-    # 保护 pending_messages 的跨线程读写（原 followup_lock 更名随队列语义）
+    # 保护 pending_messages 的跨线程读写
     pending_lock: threading.Lock = field(default_factory=threading.Lock, repr=False)
     # factory 首次调用后在隔离 loop 内缓存编译结果（同 executor 任务复用）
     compiled_agent: Any = None

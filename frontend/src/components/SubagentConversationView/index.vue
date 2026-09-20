@@ -20,15 +20,15 @@ import AssistantToolFailureBlocker from '@/components/AssistantToolFailureBlocke
 import ChatComposerToolbar from '@/components/Chat/ChatComposerToolbar.vue'
 import ContextWindowIndicator from '@/components/ContextWindowIndicator/index.vue'
 import ConversationPartsRenderer from '@/components/ConversationPartsRenderer/index.vue'
-import FollowupQueue from '@/components/FollowupQueue/index.vue'
 import HitlComposerPanel from '@/components/HitlComposerPanel/index.vue'
+import MessageQueue from '@/components/MessageQueue/index.vue'
 import ResearchSourcesPanel from '@/components/ResearchSourcesPanel/index.vue'
 import RunMetaLine from '@/components/RunMetaLine/index.vue'
 import SessionStatsLine from '@/components/SessionStatsLine/index.vue'
 import StopSendButton from '@/components/StopSendButton/index.vue'
-import { getQueuedFollowups, setQueuedFollowups } from '@/components/SubagentConversationView/queuedFollowups'
+import { getQueuedMessages, setQueuedMessages } from '@/components/SubagentConversationView/queuedMessages'
 import { langfuseUiOrigin } from '@/config'
-import { useFollowupQueue } from '@/hooks/useFollowupQueue'
+import { useMessageQueue } from '@/hooks/useMessageQueue'
 import { useTicker } from '@/hooks/useTicker'
 import { useToolDisplayMode } from '@/hooks/useToolDisplayMode'
 import { formatHHmm, wireTimestampMs } from '@/utils/formatTime'
@@ -76,19 +76,19 @@ const activeRunStreams = new Map<string, AbortController>()
 
 const messages = ref<ChatMessageResponse[]>([])
 const loading = ref(false)
-const followupInput = ref('')
-const followupSending = ref(false)
+const messageInput = ref('')
+const messageSending = ref(false)
 const streamAbort = ref<AbortController | null>(null)
 const activeRunId = ref<string | null>(props.runId)
 let requestSerial = 0
 const { now, start: startDurationTimer, stop: stopDurationTimer } = useTicker()
-/** followup 模型选择：初始取子会话 extra.model_id（ModelSelector 持久化），缺省目录默认 */
+/** 追加消息模型选择：初始取子会话 extra.model_id（ModelSelector 持久化），缺省目录默认 */
 const selectedModelId = ref('')
 /** run 事件消费单点状态（runEventReducer 持有唯一真相；run / contextSnapshot 为派生视图） */
 const reducerState = ref<RunEventState>(initialRunEventState())
 const run = computed<AgentRunSnapshot | null>(() => reducerState.value.run)
 const contextSnapshot = computed<Record<string, unknown> | null>(() => reducerState.value.contextSnapshot)
-/** followup 推理档位：与主 Agent 同款选择器（按 turn 覆盖） */
+/** 追加消息推理档位：与主 Agent 同款选择器（按 turn 覆盖） */
 const selectedReasoningEffort = ref('')
 /** 子会话统计条：与主会话同口径（assistant 消息 extra.usage 重建，随消息加载/终态更新） */
 const sessionStats = computed(() => rebuildSessionStats(messages.value))
@@ -198,36 +198,36 @@ function messageElapsedText(message: ChatMessageResponse): string {
   const finished = wireTimestampMs(message.run_finished_at) ?? now.value
   return `耗时 ${formatDurationMs(Math.max(0, finished - started))}`
 }
-const sendDisabled = computed(() => !followupInput.value.trim() || followupSending.value)
+const sendDisabled = computed(() => !messageInput.value.trim() || messageSending.value)
 
 /**
  * 单按钮形态（与主 Agent 一致）：运行中且输入为空 → 停止当前 run；
  * 有内容 → 发送（运行中发送自动进入待发队列）
  */
-const composerStopMode = computed(() => runActive.value && !followupInput.value.trim())
+const composerStopMode = computed(() => runActive.value && !messageInput.value.trim())
 
-// ---- 前端待发队列（跨抽屉开关存活，见 queuedFollowups.ts；CRUD 走共享 composable） ----
+// ---- 前端待发队列（跨抽屉开关存活，见 queuedMessages.ts；CRUD 走共享 composable） ----
 
-const followupQueue = useFollowupQueue({
-  get: () => getQueuedFollowups(props.sessionId),
-  set: (list) => setQueuedFollowups(props.sessionId, list),
+const messageQueue = useMessageQueue({
+  get: () => getQueuedMessages(props.sessionId),
+  set: (list) => setQueuedMessages(props.sessionId, list),
 })
-const queuedMessages = followupQueue.messages
+const queuedMessages = messageQueue.messages
 /** 编辑：文本回到输入框，从队列移除 */
 function editQueued(index: number): void {
-  followupInput.value = followupQueue.edit(index)
+  messageInput.value = messageQueue.edit(index)
 }
 
 /** 立即提交指定排队消息：空闲即开新 run；运行中由后端衔接为下一轮 */
 async function submitQueuedNow(index: number): Promise<void> {
   const message = queuedMessages.value[index]
-  if (!message || followupSending.value) {
+  if (!message || messageSending.value) {
     return
   }
-  followupSending.value = true
+  messageSending.value = true
   // 先出队再提交：同一子会话可能有多个视图实例（消息卡抽屉 + 任务目录），
   // 出队是同步操作，天然防止两个实例重复提交同一条消息
-  followupQueue.remove(index)
+  messageQueue.remove(index)
   try {
     const task = await sendSubagentMessage(
       props.sessionId,
@@ -239,24 +239,24 @@ async function submitQueuedNow(index: number): Promise<void> {
     emit('changed')
     await loadConversation()
   } catch (error) {
-    console.warn('[subagent] queued followup submit failed', error)
+    console.warn('[subagent] queued 追加消息 submit failed', error)
     const next = [...queuedMessages.value]
     next.splice(Math.min(index, next.length), 0, message)
-    setQueuedFollowups(props.sessionId, next)
+    setQueuedMessages(props.sessionId, next)
     window.$message?.error('发送失败')
   } finally {
-    followupSending.value = false
+    messageSending.value = false
   }
 }
 
 /** run 终态且有排队消息：提交队首（先出队，失败回插队首） */
 async function flushNextQueued(): Promise<void> {
   const message = queuedMessages.value[0]
-  if (!message || followupSending.value) {
+  if (!message || messageSending.value) {
     return
   }
-  followupSending.value = true
-  followupQueue.remove(0)
+  messageSending.value = true
+  messageQueue.remove(0)
   try {
     const task = await sendSubagentMessage(
       props.sessionId,
@@ -269,25 +269,25 @@ async function flushNextQueued(): Promise<void> {
     await loadConversation()
   } catch (error) {
     // 任务失败/取消后 API 拒绝追加：消息回插队首，由用户编辑或删除
-    console.warn('[subagent] queued followup flush failed', error)
-    setQueuedFollowups(props.sessionId, [message, ...queuedMessages.value])
+    console.warn('[subagent] queued 追加消息 flush failed', error)
+    setQueuedMessages(props.sessionId, [message, ...queuedMessages.value])
   } finally {
-    followupSending.value = false
+    messageSending.value = false
   }
 }
 
-async function sendFollowup() {
-  const message = followupInput.value.trim()
-  if (!message || followupSending.value) {
+async function sendAppendedMessage() {
+  const message = messageInput.value.trim()
+  if (!message || messageSending.value) {
     return
   }
   if (runActive.value) {
     // run 进行中：只进前端队列，等待终态后自动提交（保持可编辑/删除/排序）
-    followupInput.value = ''
-    setQueuedFollowups(props.sessionId, [...queuedMessages.value, message])
+    messageInput.value = ''
+    setQueuedMessages(props.sessionId, [...queuedMessages.value, message])
     return
   }
-  followupSending.value = true
+  messageSending.value = true
   try {
     const task = await sendSubagentMessage(
       props.sessionId,
@@ -296,14 +296,14 @@ async function sendFollowup() {
       selectedReasoningEffort.value || undefined,
     )
     activeRunId.value = task.run_id || activeRunId.value
-    followupInput.value = ''
+    messageInput.value = ''
     emit('changed')
     await loadConversation()
   } catch (error) {
-    console.warn('[subagent] followup failed', error)
+    console.warn('[subagent] 追加消息 failed', error)
     window.$message?.error('发送失败')
   } finally {
-    followupSending.value = false
+    messageSending.value = false
   }
 }
 
@@ -524,7 +524,7 @@ async function consumeStream(runId: string, serial: number) {
   // 已知终态的 run 不再（重）订阅。run-finished 触发的重载会再次走到这里；
   // 若继续订阅且订阅立即失败（网关错误 / 响应异常），resync 又拿到终态快照 →
   // run-finished → 再重载，形成无退避间隔的死循环（各环节皆已 resolve 的
-  // promise 时还会饿死宏任务）。新 run id 不受影响（排队续跑 / followup）。
+  // promise 时还会饿死宏任务）。新 run id 不受影响（排队续跑 / 追加消息）。
   if (run.value?.run_id === runId && !runActive.value) {
     return
   }
@@ -776,15 +776,15 @@ onBeforeUnmount(() => {
     </div>
     <div class="subagent-conversation__composer chat-composer">
       <!-- 前端待发队列：run 进行中发送的消息在此排队，终态后逐条自动提交 -->
-      <FollowupQueue
+      <MessageQueue
         :messages="queuedMessages"
-        @remove="followupQueue.remove"
+        @remove="messageQueue.remove"
         @edit="editQueued"
         @send-now="submitQueuedNow"
-        @reorder="followupQueue.reorder"
+        @reorder="messageQueue.reorder"
       />
       <n-input
-        v-model:value="followupInput"
+        v-model:value="messageInput"
         type="textarea"
         class="textarea-resize-none w-full text-15 [&_.n-input\\_\\_border]:hidden [&_.n-input\\_\\_state-border]:hidden [&_.n-input-wrapper]:p-0!"
         :style="{
@@ -794,7 +794,7 @@ onBeforeUnmount(() => {
         }"
         :placeholder="runActive ? '继续输入以排队后续消息…' : '继续向这个子 Agent 提问…'"
         :autosize="{ minRows: 1, maxRows: 5 }"
-        @keydown.enter.exact.prevent="sendFollowup"
+        @keydown.enter.exact.prevent="sendAppendedMessage"
       />
       <!-- 复用主 Agent 的 composer 容器：收窄为纯模型/档位工具栏（无附件/KB/MCP/Skills）；
            右槽组上下文环与单按钮（运行中且输入为空 = 停止；有内容 = 发送/入队） -->
@@ -804,7 +804,7 @@ onBeforeUnmount(() => {
         qa-type="SUPER_AGENT_QA"
         :session-id="sessionId"
         :persist-session-extra="true"
-        :disabled="followupSending"
+        :disabled="messageSending"
         :show-tools-menu="false"
       >
         <template #right>
@@ -816,7 +816,7 @@ onBeforeUnmount(() => {
             :stop-mode="composerStopMode"
             :send-disabled="sendDisabled"
             testid-prefix="subagent-"
-            @action="(kind) => (kind === 'stop' ? stopCurrentRun() : sendFollowup())"
+            @action="(kind) => (kind === 'stop' ? stopCurrentRun() : sendAppendedMessage())"
           />
         </template>
       </ChatComposerToolbar>

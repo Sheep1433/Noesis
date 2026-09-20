@@ -105,17 +105,17 @@ def test_next_turn_after_bg_task_terminal(
     _wait_run_terminal(auth_client, run["run_id"])
     _wait_subagent_terminal(auth_client, session_id)
 
-    followup_run = create_run(
+    追加消息_run = create_run(
         session_id=session_id,
         content="后台任务完成了吗？请用一句话告诉我它的结果。",
         qa_type="SUPER_AGENT_QA",
     )
-    snapshot = _wait_run_terminal(auth_client, followup_run["run_id"])
+    snapshot = _wait_run_terminal(auth_client, 追加消息_run["run_id"])
     assert snapshot["status"] in {"completed", "partial"}
 
     # 回复落历史且含非空文本
     message = auth_client.get(
-        f"/api/chat/messages/{followup_run['assistant_message_id']}"
+        f"/api/chat/messages/{追加消息_run['assistant_message_id']}"
     ).json()["data"]
     parts = (message.get("content") or {}).get("parts") or []
     assert any(
@@ -124,11 +124,11 @@ def test_next_turn_after_bg_task_terminal(
     ), "后续轮次 assistant 无文本输出"
 
 
-def test_subagent_followup_rejects_non_child_session(
+def test_subagent_message_rejects_non_child_session(
     auth_client, create_session
 ) -> None:
     """subagent-messages 只接受子会话：普通会话/不存在的会话 → 404。"""
-    session_id = create_session(title="followup 错误路径测试")
+    session_id = create_session(title="追加消息 错误路径测试")
 
     missing = auth_client.post(
         f"/api/chat/sessions/{session_id}/subagent-messages",
