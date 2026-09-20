@@ -1204,6 +1204,11 @@ async def test_stop_run_service_maps_cancel_to_interrupted(monkeypatch) -> None:
             # 乐观终态：无论协作还是即时路径，受理即 cancelled
             return {"status": "cancelled", "stop_reason": "cancelled"}
 
+        @staticmethod
+        async def cancel_with_fallback(task_id):
+            # 兜底路径与热集受理同语义（回收后重复停止幂等）
+            return {"status": "cancelled", "stop_reason": "cancelled"}
+
     import noesis.agents.background.ports as port
 
     monkeypatch.setattr(port, "ExecutorPort", _FakeExec)
@@ -1272,7 +1277,7 @@ async def test_write_endpoints_gate_on_csrf() -> None:
     with pytest.raises(PermissionException):
         await chat_api.stop_run("run-1", http_request=no_auth, current_user=user, db=db)
     with pytest.raises(PermissionException):
-        await chat_api.send_subagent_followup(
+        await chat_api.send_subagent_message(
             "child-1",
             SubagentFollowupRequest(message="hi"),
             http_request=no_auth,

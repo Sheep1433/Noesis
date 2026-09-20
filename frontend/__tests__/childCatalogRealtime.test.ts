@@ -13,7 +13,7 @@ const api = vi.hoisted(() => ({
   getSessionMessages: vi.fn(),
   getAgentRun: vi.fn(),
   resumeAgentRunHitl: vi.fn(),
-  sendSubagentFollowup: vi.fn(),
+  sendSubagentMessage: vi.fn(),
   stopAgentRun: vi.fn(),
   subscribeAgentRun: vi.fn(),
 }))
@@ -26,7 +26,7 @@ vi.mock('@/api/chat', () => ({
   getSessionMessages: api.getSessionMessages,
   getAgentRun: api.getAgentRun,
   resumeAgentRunHitl: api.resumeAgentRunHitl,
-  sendSubagentFollowup: api.sendSubagentFollowup,
+  sendSubagentMessage: api.sendSubagentMessage,
   stopAgentRun: api.stopAgentRun,
   subscribeAgentRun: api.subscribeAgentRun,
 }))
@@ -164,10 +164,10 @@ describe('子 Agent 标准会话展示', () => {
   beforeEach(() => {
     api.getSessionMessages.mockReset()
     api.subscribeAgentRun.mockReset()
-    api.sendSubagentFollowup.mockReset()
+    api.sendSubagentMessage.mockReset()
     api.getAgentRun.mockReset()
     api.subscribeAgentRun.mockResolvedValue({ body: null })
-    api.sendSubagentFollowup.mockResolvedValue(runningTask)
+    api.sendSubagentMessage.mockResolvedValue(runningTask)
     api.getAgentRun.mockResolvedValue(agentRunSnapshot())
     clearQueuedFollowups('child-session-1')
   })
@@ -258,7 +258,7 @@ describe('子 Agent 标准会话展示', () => {
     await textarea.trigger('keydown.enter')
     await flushPromises()
 
-    expect(api.sendSubagentFollowup).toHaveBeenCalledWith('child-session-1', '请补充来源', undefined, undefined)
+    expect(api.sendSubagentMessage).toHaveBeenCalledWith('child-session-1', '请补充来源', undefined, undefined)
   })
 
   it('父 Agent 中每次子 Agent 调用仍是独立卡片，并指向标准 run', async () => {
@@ -325,7 +325,7 @@ describe('子 Agent 标准会话展示', () => {
     await wrapper.find('textarea').setValue('排队消息 A')
     await wrapper.find('textarea').trigger('keydown.enter')
     await flushPromises()
-    expect(api.sendSubagentFollowup).not.toHaveBeenCalled()
+    expect(api.sendSubagentMessage).not.toHaveBeenCalled()
     expect(wrapper.find('[data-testid="followup-queue-item"]').text()).toContain('排队消息 A')
 
     // run 终态：自动提交队首并清空队列
@@ -335,7 +335,7 @@ describe('子 Agent 标准会话展示', () => {
       finished_at: 1,
     })}\n\n`)
     await flushPromises()
-    expect(api.sendSubagentFollowup).toHaveBeenCalledWith('child-session-1', '排队消息 A', undefined, undefined)
+    expect(api.sendSubagentMessage).toHaveBeenCalledWith('child-session-1', '排队消息 A', undefined, undefined)
     expect(wrapper.find('[data-testid="followup-queue-item"]').exists()).toBe(false)
   })
 
@@ -399,7 +399,7 @@ describe('子 Agent 标准会话展示', () => {
     const item = wrapper.find('[data-testid="followup-queue-item"]')
     await queueButton(item, '立即发送：空闲时立即开跑，运行中衔接为当前轮后的下一轮')!.trigger('click')
     await flushPromises()
-    expect(api.sendSubagentFollowup).toHaveBeenCalledWith('child-session-1', '立即这条', undefined, undefined)
+    expect(api.sendSubagentMessage).toHaveBeenCalledWith('child-session-1', '立即这条', undefined, undefined)
     expect(wrapper.find('[data-testid="followup-queue-item"]').exists()).toBe(false)
   })
 })

@@ -200,7 +200,7 @@ durable 重放（`message.updated` 全量投影事件已退役）。
 `astream_events` → `RuntimeEventMapper`（raw event → typed RunEvent）→
 `LangGraphSseBridge` + `AssistantMessageBuilder` 聚合（usage 累计、上下文快照、
 HITL 投影、终态 payload）。主链路经 delivery 序列化为 SSE 帧；子 Agent 的
-executor（生命周期包装：任务注册表、隔离事件循环、watchdog、followup 队列）
+executor（生命周期包装：任务注册表热集、隔离事件循环、watchdog、追加消息队列）
 消费同一管道：投递走统一投递内核（`chat/runs/delivery_bus.py`，主/子同一
 语义实现），投影经 `AgentRunRepository.save_checkpoint` 落库（与主链路同一
 事务实现）。
@@ -226,7 +226,7 @@ Harness「子 Agent 经 `ctx.agents.create/resume` 复用同一 runtime」的形
 
 ## 过渡层清理（已删除）
 
-- `t_bg_task` 持久化及整套快照存储（`BgTaskStore` 协议、repository、启动对账接线）：执行面完全在进程内，重启即丢，与 dsh `ctx.jobs` / deer-flow 注册表同构；subagent 的产品数据由标准会话/Run/消息表承载，shell job 不持久化
+- `t_bg_task` 持久化及整套快照存储（`BgTaskStore` 协议、repository、启动对账接线）：执行面完全在进程内，重启即丢，与 dsh `ctx.jobs` / deer-flow 注册表同构；subagent 的产品数据由标准会话/Run/消息表承载，shell job 不持久化（**已由 bg-task-durable-facts 部分推翻**：shell job 事实行落 `bg_shell_job` 表、追加消息 write-ahead 复用 pending user message 行、内存注册表降级为执行热集并按 retention 回收，见决策记录 `2026-09-20-后台任务事实源出内存落库`）
 - `/bg-tasks/{id}/messages` 与 `/messages/stream` API 及 checkpoint thread 读路径（checkpointer 只负责执行恢复）
 - 从 tool output 正则提取 child id 的逻辑（卡片按 `child_session_id` / `created_by_tool_call_id` 结构化关联）
 - `progress_count` 驱动的全量消息重拉

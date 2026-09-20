@@ -234,6 +234,8 @@ subagents:
   task_timeout_seconds: 900       # 子 Agent 任务超时
   shell_task_timeout_seconds: 0   # 后台命令超时：0 = 不限
   auto_continue: true             # 终态后自动续跑主 Agent（无活跃 run 时）
+  terminal_retention_seconds: 3600  # 终态条目热集 retention（秒），回收后查询走 DB 兜底
+  terminal_reclaim_max: 200         # 热集终态条目上限：超出从最旧回收
 
 web_tools:
   max_search_results: 8

@@ -69,7 +69,7 @@ class BackgroundTask:
     assistant_message_id: Optional[str] = None
     turn_count: int = 1
     projection_sequence: int = field(default=0, repr=False)
-    # subagent 任务均可经 deliver_followup 追加 turn；shell 任务使用独立 kind。
+    # subagent 任务均可经 deliver_message 追加 turn；shell 任务使用独立 kind。
     kind: str = "subagent"
     # 任务的角色类型（start_async_task 的 subagent_type）；shell 任务为 None。
     # 投影与任务卡展示用——worker 编译配方由角色注册表在启动前解析，
@@ -135,8 +135,12 @@ TASK_TIMEOUT_SECONDS = 900.0
 # 后台命令任务超时：默认 0=不限时（长命令正是后台化动机，防泄漏靠
 # cancel_task + 会话容器生命周期兜底）
 SHELL_TASK_TIMEOUT_SECONDS = 0.0
-# followup 消息上限（超出丢最旧）
-MAX_FOLLOWUPS = 10
+# 追加消息队列上限（pending 行计数为准，此值为容量判定上界）
+MAX_PENDING_MESSAGES = 10
+# 终态条目热集 retention（秒）：回收后查询走 DB 投影兜底
+TERMINAL_RETENTION_SECONDS = 3600.0
+# 热集终态条目上限：超出从最旧回收（长跑进程内存有界）
+TERMINAL_RECLAIM_MAX = 200
 # 执行过程摘要上限（超出丢最旧）
 MAX_PROGRESS_ENTRIES = 50
 _PROGRESS_PREVIEW_CHARS = 120
@@ -145,6 +149,33 @@ _SHELL_RESULT_TAIL_CHARS = 4000
 # 后台命令默认命令级超时（模型未显式传 timeout 时）：对齐 deepagents
 # execute 工具的 max_execute_timeout；docker runner 侧 0=不限时由模型显式传
 _SHELL_DEFAULT_COMMAND_TIMEOUT = 3600
+
+
+def run_status_to_task_status(run_status: str, finish_reason: Optional[str] = None) -> str:
+    """run 行状态 → 任务级状态的唯一映射（内存快照与 DB 投影共用同一函数）。
+
+    截断轮沿用现行收口规则：run 落 partial/truncated，任务级视为已完成并带
+    截断标注（kernel 仅 fallback 异常才落任务 FAILED）——DB 投影照搬该规则，
+    不制造「回收前可续聊、回收后变 failed 不可续」的资格悬崖。stopped 只
+    出现在主 run 路径与 stop API 快照覆写，防御性归并 cancelled。
+    """
+    if run_status == "queued":
+        return "queued"
+    if run_status in ("running", "retrying", "hitl_pending"):
+        return "running"
+    if run_status == "completed":
+        return "completed"
+    if run_status == "error":
+        return "failed"
+    if run_status == "partial":
+        if finish_reason == "timeout":
+            return "timed_out"
+        if finish_reason == "truncated":
+            return "completed"
+        return "cancelled"
+    if run_status == "interrupted":
+        return "cancelled"
+    return "failed"
 
 
 # 协作停止的部分成果前缀与上限（settle 通知预览 / agent_kernel 回收共用）

@@ -68,8 +68,59 @@ class SubagentSessionPort:
         return await _service().mark_launch_rejected(*args, **kwargs)
 
     @staticmethod
-    async def create_followup_run(*args: Any, **kwargs: Any) -> Any:
-        return await _service().create_followup_run(*args, **kwargs)
+    async def create_turn_run(*args: Any, **kwargs: Any) -> Any:
+        return await _service().create_turn_run(*args, **kwargs)
+
+    # -- 追加消息 write-ahead（pending user message 行 = 队列事实） ------
+
+    @staticmethod
+    async def create_pending_message(*args: Any, **kwargs: Any) -> str:
+        """写 pending user message 行（携带 turn 参数），返回消息行 id。"""
+        return await _service().create_pending_message(*args, **kwargs)
+
+    @staticmethod
+    async def count_pending_messages(session_id: str) -> int:
+        """该 child session 的 pending 行计数（队列容量判定）。"""
+        return await _service().count_pending_messages(session_id)
+
+    @staticmethod
+    async def flip_pending_message_dropped(message_id: str) -> int:
+        """单条 pending 行翻转 dropped（投递失败路径；幂等）。"""
+        return await _service().flip_pending_message_dropped(message_id)
+
+    @staticmethod
+    async def flip_pending_messages_dropped(session_id: str) -> int:
+        """该 child session 全部 pending 行翻转 dropped（不可续终态/对账）。"""
+        return await _service().flip_pending_messages_dropped(session_id)
+
+    # -- DB 投影与冷恢复 ------------------------------------------------
+
+    @staticmethod
+    async def db_task_projection(task_ref: str) -> Optional[dict[str, Any]]:
+        """任务 DB 投影（热集 miss 的查询兜底）；无 DB 事实返回 None。
+
+        task_ref = bg_task_id（child session extra）或 child session id。
+        """
+        return await _service().db_task_projection(task_ref)
+
+    @staticmethod
+    async def list_db_task_projections(session_id: str) -> list[dict[str, Any]]:
+        return await _service().list_db_task_projections(session_id)
+
+    @staticmethod
+    async def load_cold_task(task_ref: str) -> Optional[dict[str, Any]]:
+        """冷恢复全量事实：投影 + pending 行（执行镜像重载源）。"""
+        return await _service().load_cold_task(task_ref)
+
+    @staticmethod
+    async def list_queued_subagent_runs(db: Any = None) -> list[dict[str, Any]]:
+        """对账用：queued 状态的 child run 行（created_at 升序）。"""
+        return await _service().list_queued_subagent_runs(db=db)
+
+    @staticmethod
+    async def mark_terminal_persist_exhausted(run_id: str) -> None:
+        """终态落库重试耗尽标记（run 行 error_code 诊断位，不改状态）。"""
+        return await _service().mark_terminal_persist_exhausted(run_id)
 
     @staticmethod
     async def mark_started(*args: Any, **kwargs: Any) -> Any:
@@ -142,8 +193,24 @@ class ExecutorPort:
     # 单一异步入口（校验折叠在锁内前置）：曾因同步/异步双版本导致端口
     # 白名单漂移（漏 asend_message → 全部 followup 500），收敛为单方法
     @staticmethod
-    async def deliver_followup(*args: Any, **kwargs: Any) -> Any:
-        return await _executor().deliver_followup(*args, **kwargs)
+    async def deliver_message(*args: Any, **kwargs: Any) -> Any:
+        return await _executor().deliver_message(*args, **kwargs)
+
+    @staticmethod
+    async def check_with_fallback(*args: Any, **kwargs: Any) -> Any:
+        return await _executor().check_with_fallback(*args, **kwargs)
+
+    @staticmethod
+    async def list_with_fallback(*args: Any, **kwargs: Any) -> Any:
+        return await _executor().list_with_fallback(*args, **kwargs)
+
+    @staticmethod
+    async def cancel_with_fallback(*args: Any, **kwargs: Any) -> Any:
+        return await _executor().cancel_with_fallback(*args, **kwargs)
+
+    @staticmethod
+    async def restore_queued(*args: Any, **kwargs: Any) -> Any:
+        return await _executor().restore_queued(*args, **kwargs)
 
     @staticmethod
     def cancel(*args: Any, **kwargs: Any) -> Any:
@@ -160,6 +227,49 @@ class ExecutorPort:
     @staticmethod
     def get_run_event_history(*args: Any, **kwargs: Any) -> Any:
         return _executor().get_run_event_history(*args, **kwargs)
+
+
+_SHELL_JOBS: Any = None
+
+
+def configure_shell_job_port(service: Any) -> None:
+    """注册 shell job 事实行服务（bg_shell_job_service）。"""
+    global _SHELL_JOBS
+    _SHELL_JOBS = service
+
+
+def _shell_jobs() -> Any:
+    if _SHELL_JOBS is None:
+        raise RuntimeError("shell job port is not configured")
+    return _SHELL_JOBS
+
+
+class ShellJobPort:
+    """shell 任务事实行（bg_shell_job 表）：落库 / 投影 / 重启对账。"""
+
+    @staticmethod
+    async def persist_start(*args: Any, **kwargs: Any) -> None:
+        return await _shell_jobs().persist_start(*args, **kwargs)
+
+    @staticmethod
+    async def mark_started(task_id: str) -> None:
+        return await _shell_jobs().mark_started(task_id)
+
+    @staticmethod
+    async def mark_terminal(*args: Any, **kwargs: Any) -> None:
+        return await _shell_jobs().mark_terminal(*args, **kwargs)
+
+    @staticmethod
+    async def get_task(task_id: str) -> Optional[dict[str, Any]]:
+        return await _shell_jobs().get_task(task_id)
+
+    @staticmethod
+    async def list_for_session(session_id: str) -> list[dict[str, Any]]:
+        return await _shell_jobs().list_for_session(session_id)
+
+    @staticmethod
+    async def reconcile_orphaned(db: Any = None) -> int:
+        return await _shell_jobs().reconcile_orphaned(db=db)
 
 
 _NOTIFICATION_STORE: Any = None
@@ -194,12 +304,14 @@ class NotificationStorePort:
 __all__ = [
     "ContinuationPort",
     "ExecutorPort",
+    "ShellJobPort",
     "NotificationStorePort",
     "SessionOpsPort",
     "SubagentSessionPort",
     "configure_continuation_port",
     "configure_executor_port",
     "configure_notification_store",
+    "configure_shell_job_port",
     "configure_service_port",
     "configure_session_ops_port",
 ]

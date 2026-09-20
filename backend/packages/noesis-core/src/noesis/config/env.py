@@ -211,6 +211,10 @@ class SubagentSettings:
     task_timeout_seconds: float
     shell_task_timeout_seconds: float
     auto_continue: bool
+    # 终态条目热集 retention（秒）：回收后查询走 DB 投影兜底
+    terminal_retention_seconds: float
+    # 热集终态条目上限：超出从最旧回收
+    terminal_reclaim_max: int
 
 
 @dataclass(frozen=True)
@@ -550,6 +554,8 @@ def _build_subagents(yaml_cfg: AppYamlConfig) -> SubagentSettings:
         task_timeout_seconds=subagents.task_timeout_seconds,
         auto_continue=subagents.auto_continue,
         shell_task_timeout_seconds=subagents.shell_task_timeout_seconds,
+        terminal_retention_seconds=subagents.terminal_retention_seconds,
+        terminal_reclaim_max=subagents.terminal_reclaim_max,
     )
 
 

@@ -106,6 +106,19 @@ async def lifespan(app: FastAPI):
                 orphaned_subagents = await SubagentSessionService.reconcile_orphaned_runs(recovery_db)
                 if orphaned_subagents:
                     logger.warning("子 Agent 对账：{} 个遗留 run 已标记为中断", orphaned_subagents)
+                from noesis.services.bg_shell_job_service import BgShellJobService
+
+                orphaned_shell = await BgShellJobService.reconcile_orphaned(recovery_db)
+                if orphaned_shell:
+                    logger.warning("后台命令对账：{} 个非终态 shell 任务已收口为 cancelled", orphaned_shell)
+                # 排队重建（仅 child run 行）：queued 任务重启后继续执行，
+                # 按 created_at 升序重建进程内队列并触发 drain
+                from noesis.agents.background.ports import ExecutorPort
+
+                queued_specs = await SubagentSessionService.list_queued_subagent_runs(recovery_db)
+                if queued_specs:
+                    restored = await ExecutorPort.restore_queued(queued_specs)
+                    logger.info("后台任务排队重建：{} 个 queued 任务已恢复", restored)
                 from noesis.services.scheduled_task_service import ScheduledTaskService
 
                 interrupted_runs = await ScheduledTaskService.reconcile_interrupted_runs(recovery_db)

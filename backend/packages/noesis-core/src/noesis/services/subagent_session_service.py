@@ -15,10 +15,11 @@ import uuid
 from dataclasses import dataclass, replace
 from typing import Optional
 
-from sqlalchemy import select, update
+from sqlalchemy import func, or_, select, update
 from sqlalchemy.ext.asyncio import AsyncSession
 
 
+from noesis.agents.background.jobs.state import run_status_to_task_status
 from noesis.chat.runs.skeleton import (
     build_assistant_skeleton_row,
     build_queued_run_row,
@@ -120,9 +121,13 @@ class SubagentSessionService:
         origin=subagent）：executor 状态在进程内，重启即不可恢复，统一收口
         ERROR/SUBAGENT_PROCESS_RESTARTED；assistant 消息带最后投影内容并
         将运行中工具标为结果未知（与通用对账同规则，避免工具卡永久 running）。
+
+        QUEUED 行不在收口集合：排队任务重启后应继续执行，由排队重建
+        （list_queued_subagent_runs → executor.restore_queued）接手。被收口
+        会话的 pending 追加消息行同事务翻转 dropped（任务已不可续，永无
+        消费者；重启前已可续终态的任务不受影响）。
         """
         active = [
-            RunStatus.QUEUED.value,
             RunStatus.RUNNING.value,
             RunStatus.RETRYING.value,
             RunStatus.HITL_PENDING.value,
@@ -162,11 +167,42 @@ class SubagentSessionService:
                 .where(TChatMessage.id == message.id)
                 .values(status="error", content=content)
             )
+        # 被收口会话的 pending 行翻转 dropped（任务已不可续）：仅仍处
+        # pending 标记的行受影响，已采纳/已 dropped 的行幂等跳过
+        orphaned_sessions = list({row.session_id for row in orphaned})
+        pending_rows = (
+            await db.execute(
+                select(TChatMessage).where(
+                    TChatMessage.session_id.in_(orphaned_sessions),
+                    TChatMessage.deleted_at.is_(None),
+                    cls._pending_expr(),
+                )
+            )
+        ).scalars().all()
+        for row in pending_rows:
+            row.extra = {**(row.extra or {}), "pending_run": "dropped"}
         await db.commit()
         return len(orphaned)
 
     @classmethod
-    async def send_followup(
+    async def list_queued_subagent_runs(cls, db: AsyncSession) -> list[dict]:
+        """对账用：queued 状态的 child run 行（created_at 升序，排队重建源）。"""
+        result = await db.execute(
+            select(TAgentRun)
+            .where(TAgentRun.origin == "subagent", TAgentRun.status == RunStatus.QUEUED.value)
+            .order_by(TAgentRun.created_at.asc(), TAgentRun.id.asc())
+        )
+        return [
+            {
+                "run_id": run.id,
+                "child_session_id": run.session_id,
+                "created_at": run.created_at,
+            }
+            for run in result.scalars().all()
+        ]
+
+    @classmethod
+    async def send_message(
         cls,
         *,
         session_id: str,
@@ -180,15 +216,17 @@ class SubagentSessionService:
         task = await cls._owned_child(session_id, user_id)
         if task is None:
             raise NotFoundException(message="子会话不存在")
-        # 校验折叠进 deliver_followup 锁内前置：拒绝时丢弃已写的待定消息
-        pending_user_message_id = await cls.create_pending_user_message(
+        # 校验折叠进 deliver_message 锁内前置：拒绝时丢弃已写的待定消息
+        pending_user_message_id = await cls.create_pending_message(
             session_id=session_id,
             user_id=user_id,
             message=message,
+            model_id=model_id,
+            reasoning_effort=reasoning_effort,
         )
         try:
             # 冷恢复：响应前完成新 run 创建（run_id 权威）
-            return await BackgroundTaskExecutor.deliver_followup(
+            return await BackgroundTaskExecutor.deliver_message(
                 session_id,
                 message,
                 user_message_id=pending_user_message_id,
@@ -246,13 +284,20 @@ class SubagentSessionService:
             await db.commit()
 
     @classmethod
-    async def create_pending_user_message(
+    async def create_pending_message(
         cls,
         *,
         session_id: str,
         user_id: str,
         message: str,
+        model_id: Optional[str] = None,
+        reasoning_effort: Optional[str] = None,
     ) -> str:
+        """写 pending user message 行（追加消息的 write-ahead 载体）。
+
+        extra.pending_run=True 为待投递标记；turn 参数随行落库——排队期间
+        参数不再只存内存（重启后冷恢复重载队列据此还原逐 turn 覆盖）。
+        """
         from noesis.storage.postgres.manager import pg_manager
 
         async with pg_manager.get_async_session_context() as db:
@@ -262,18 +307,133 @@ class SubagentSessionService:
             now = _now_ms()
             message_id = str(uuid.uuid4())
             _, sequences = await ChatService.reserve_message_sequences(session_id, user_id, 1, db)
+            extra: dict = {"origin": "subagent", "pending_run": True}
+            turn_params: dict = {}
+            if model_id:
+                turn_params["model_id"] = model_id
+            if reasoning_effort:
+                turn_params["reasoning_effort"] = reasoning_effort
+            if turn_params:
+                extra["turn_params"] = turn_params
             db.add(build_user_message_row(
                 message_id=message_id,
                 session_id=session_id,
                 user_id=str(user_id),
                 text=message,
-                extra={"origin": "subagent", "pending_run": True},
+                extra=extra,
                 message_sequence=sequences[0],
                 created_at=now,
             ))
             session.updated_at = now
             await db.commit()
             return message_id
+
+    # -- pending 行：容量计数 / dropped 翻转 / 重载 ----------------------
+
+    @staticmethod
+    def _pending_expr():
+        """pending 标记的 JSON 查询表达式（->> 渲染 'true'，可靠区分 dropped）。"""
+        return TChatMessage.extra["pending_run"].as_string() == "true"
+
+    @staticmethod
+    def _dropped_expr():
+        return TChatMessage.extra["pending_run"].as_string() == "dropped"
+
+    @classmethod
+    async def count_pending_messages(cls, session_id: str) -> int:
+        """该 child session 的 pending 行计数（追加消息队列容量判定）。"""
+        from noesis.storage.postgres.manager import pg_manager
+
+        async with pg_manager.get_async_session_context() as db:
+            result = await db.execute(
+                select(func.count())
+                .select_from(TChatMessage)
+                .where(
+                    TChatMessage.session_id == session_id,
+                    TChatMessage.deleted_at.is_(None),
+                    cls._pending_expr(),
+                )
+            )
+            return int(result.scalar_one() or 0)
+
+    @classmethod
+    async def flip_pending_message_dropped(cls, message_id: str) -> int:
+        """单条 pending 行翻转 dropped（投递失败路径；幂等）。"""
+        from noesis.storage.postgres.manager import pg_manager
+
+        async with pg_manager.get_async_session_context() as db:
+            row = (
+                await db.execute(
+                    select(TChatMessage).where(
+                        TChatMessage.id == message_id,
+                        TChatMessage.deleted_at.is_(None),
+                        cls._pending_expr(),
+                    )
+                )
+            ).scalar_one_or_none()
+            if row is None:
+                return 0
+            row.extra = {**(row.extra or {}), "pending_run": "dropped"}
+            await db.commit()
+            return 1
+
+    @classmethod
+    async def flip_pending_messages_dropped(cls, session_id: str) -> int:
+        """该 child session 全部 pending 行翻转 dropped（不可续终态 / 对账）。"""
+        from noesis.storage.postgres.manager import pg_manager
+
+        async with pg_manager.get_async_session_context() as db:
+            rows = (
+                await db.execute(
+                    select(TChatMessage).where(
+                        TChatMessage.session_id == session_id,
+                        TChatMessage.deleted_at.is_(None),
+                        cls._pending_expr(),
+                    )
+                )
+            ).scalars().all()
+            for row in rows:
+                row.extra = {**(row.extra or {}), "pending_run": "dropped"}
+            if rows:
+                await db.commit()
+            return len(rows)
+
+    @classmethod
+    async def list_pending_message_rows(cls, session_id: str) -> list[dict]:
+        """pending 行重载源（冷恢复重建条目时还原执行镜像队列）。"""
+        from noesis.storage.postgres.manager import pg_manager
+
+        async with pg_manager.get_async_session_context() as db:
+            rows = (
+                await db.execute(
+                    select(TChatMessage)
+                    .where(
+                        TChatMessage.session_id == session_id,
+                        TChatMessage.deleted_at.is_(None),
+                        cls._pending_expr(),
+                    )
+                    .order_by(TChatMessage.message_sequence)
+                )
+            ).scalars().all()
+            out = []
+            for row in rows:
+                extra = row.extra if isinstance(row.extra, dict) else {}
+                params = extra.get("turn_params") if isinstance(extra.get("turn_params"), dict) else {}
+                out.append({
+                    "message_id": row.id,
+                    "text": cls._text_of(row),
+                    "model_id": params.get("model_id"),
+                    "reasoning_effort": params.get("reasoning_effort"),
+                })
+            return out
+
+    @staticmethod
+    def _text_of(row: TChatMessage) -> str:
+        content = row.content if isinstance(row.content, dict) else {}
+        for part in content.get("parts") or []:
+            if isinstance(part, dict) and part.get("type") == "text":
+                return str(part.get("content") or "")
+        return ""
 
     @classmethod
     async def resume_hitl(
@@ -308,7 +468,9 @@ class SubagentSessionService:
         from noesis.agents.background.ports import ExecutorPort as BackgroundTaskExecutor
 
         try:
-            accepted = BackgroundTaskExecutor.cancel(run.session_id)
+            # 带兜底：热集 miss（终态回收后）对 DB 已终态任务幂等返回快照，
+            # 而非 409「任务不存在」（主规格「重复停止幂等」）
+            accepted = await BackgroundTaskExecutor.cancel_with_fallback(run.session_id)
         except ValueError as exc:
             raise ConflictException(message=str(exc)) from exc
         snapshot = await RunService.get(run_id, user_id, db)
@@ -550,7 +712,7 @@ class SubagentSessionService:
             await db.commit()
 
     @classmethod
-    async def create_followup_run(
+    async def create_turn_run(
         cls,
         *,
         session_id: str,
@@ -559,7 +721,12 @@ class SubagentSessionService:
         user_message_id: Optional[str] = None,
         db: AsyncSession,
     ) -> ChildSessionLaunch:
-        """为同一 child session 创建下一轮 user/assistant/run。"""
+        """为同一 child session 创建下一轮 user/assistant/run（原 create_followup_run）。
+
+        采纳 pending 行：同一事务内清 pending_run 标记、盖 run_id（write-ahead
+        的投递确认与 run 创建原子）。注意采纳是整覆写 extra——调用方须在
+        本方法前从行上读走 turn_params（重载消费路径的约定）。
+        """
         session = await ChatService.get_session_by_id(session_id, user_id=user_id, db=db)
         if session is None or session.kind != "subagent":
             raise NotFoundException(message="子会话不存在")
@@ -739,6 +906,181 @@ class SubagentSessionService:
                 model_calls=model_calls,
             )
             await db.commit()
+
+
+    # -- DB 投影与冷恢复事实（热集 miss 的查询兜底 / 队列重载源） --------
+
+    _ACTIVE_RUN_STATUSES = (
+        RunStatus.QUEUED.value,
+        RunStatus.RUNNING.value,
+        RunStatus.RETRYING.value,
+        RunStatus.HITL_PENDING.value,
+    )
+
+    @classmethod
+    async def db_task_projection(cls, task_ref: str) -> Optional[dict]:
+        """任务 DB 投影：状态映射复用内存同源函数，结果/来源从落库内容派生。
+
+        task_ref = bg_task_id（child session extra）或 child session id。
+        多 run 的 child session 取活跃 run 优先、无活跃取最新 run 行。
+        返回 BackgroundTask.to_dict() 同形 dict（附 undelivered_messages /
+        retrieval_sources）；无 DB 事实返回 None。
+        """
+        async with pg_manager_scope() as db:
+            session = await cls._find_child_session(task_ref, db)
+            if session is None:
+                return None
+            return await cls._project_session(session, db)
+
+    @classmethod
+    async def list_db_task_projections(cls, session_id: str) -> list[dict]:
+        """父会话维度的 DB 投影清单（任务目录 / list 兜底）。"""
+        async with pg_manager_scope() as db:
+            result = await db.execute(
+                select(TChatSession).where(
+                    TChatSession.parent_id == session_id,
+                    TChatSession.kind == "subagent",
+                    TChatSession.deleted_at.is_(None),
+                )
+            )
+            out = []
+            for session in result.scalars().all():
+                projection = await cls._project_session(session, db)
+                if projection is not None:
+                    out.append(projection)
+            return out
+
+    @classmethod
+    async def load_cold_task(cls, task_ref: str) -> Optional[dict]:
+        """冷恢复全量事实：投影 + pending 行（执行镜像重载源）。"""
+        async with pg_manager_scope() as db:
+            session = await cls._find_child_session(task_ref, db)
+            if session is None:
+                return None
+            projection = await cls._project_session(session, db)
+            if projection is None:
+                return None
+            projection["pending"] = await cls.list_pending_message_rows(str(session.id))
+            return projection
+
+    @staticmethod
+    async def _find_child_session(task_ref: str, db: AsyncSession) -> Optional[TChatSession]:
+        result = await db.execute(
+            select(TChatSession).where(
+                TChatSession.kind == "subagent",
+                TChatSession.deleted_at.is_(None),
+                or_(
+                    TChatSession.id == task_ref,
+                    TChatSession.extra["bg_task_id"].as_string() == task_ref,
+                ),
+            )
+        )
+        return result.scalar_one_or_none()
+
+    @classmethod
+    async def _project_session(cls, session: TChatSession, db: AsyncSession) -> Optional[dict]:
+        session_id = str(session.id)
+        run_result = await db.execute(
+            select(TAgentRun)
+            .where(TAgentRun.session_id == session_id)
+            .order_by(
+                # 活跃 run 优先，无活跃取最新 run 行
+                TAgentRun.status.in_(cls._ACTIVE_RUN_STATUSES).desc(),
+                TAgentRun.created_at.desc(),
+                TAgentRun.id.desc(),
+            )
+            .limit(1)
+        )
+        run = run_result.scalar_one_or_none()
+        extra = session.extra if isinstance(session.extra, dict) else {}
+        descriptor = parse_subagent_descriptor(extra)
+        undelivered = (
+            await db.execute(
+                select(func.count())
+                .select_from(TChatMessage)
+                .where(
+                    TChatMessage.session_id == session_id,
+                    TChatMessage.deleted_at.is_(None),
+                    cls._dropped_expr(),
+                )
+            )
+        ).scalar_one()
+        turn_count = (
+            await db.execute(
+                select(func.count())
+                .select_from(TAgentRun)
+                .where(TAgentRun.session_id == session_id)
+            )
+        ).scalar_one()
+        projection: dict = {
+            "task_id": extra.get("bg_task_id") or session_id,
+            "child_session_id": session_id,
+            "session_id": session.parent_id or "",
+            "user_id": str(session.user_id),
+            "description": session.title or "子 Agent",
+            "kind": "subagent",
+            "subagent_type": descriptor.get("type") if descriptor else None,
+            "model_id": descriptor.get("model") if descriptor else None,
+            "status": "queued",
+            "run_id": None,
+            "assistant_message_id": None,
+            "result": None,
+            "error": None,
+            "started_at": None,
+            "completed_at": None,
+            "turn_count": int(turn_count or 0),
+            "progress_count": 0,
+            "undelivered_messages": int(undelivered or 0),
+            "retrieval_sources": [],
+            "created_at": session.created_at,
+        }
+        if run is None:
+            return projection
+        assistant = (
+            await db.execute(
+                select(TChatMessage).where(TChatMessage.id == run.assistant_message_id)
+            )
+        ).scalar_one_or_none()
+        content = assistant.content if isinstance(assistant.content, dict) else {}
+        from noesis.chat.event_mapping.retrieval import extract_deduped_sources
+
+        projection.update({
+            "run_id": run.id,
+            "assistant_message_id": run.assistant_message_id,
+            "status": run_status_to_task_status(run.status, run.finish_reason),
+            "result": cls._text_of(assistant) if assistant is not None else None,
+            "error": run.user_error_message,
+            "started_at": (run.started_at / 1000) if run.started_at else None,
+            "completed_at": (run.finished_at / 1000) if run.finished_at else None,
+            "retrieval_sources": extract_deduped_sources(content) if content else [],
+            "terminal_persist_exhausted": run.error_code == "TERMINAL_PERSIST_EXHAUSTED",
+        })
+        return projection
+
+    @classmethod
+    async def mark_terminal_persist_exhausted(cls, run_id: str) -> None:
+        """终态落库重试耗尽的诊断位（run 行 error_code；不改状态不伪造终态）。"""
+        from noesis.storage.postgres.manager import pg_manager
+
+        async with pg_manager.get_async_session_context() as db:
+            await db.execute(
+                update(TAgentRun)
+                .where(
+                    TAgentRun.id == run_id,
+                    TAgentRun.status.in_(cls._ACTIVE_RUN_STATUSES),
+                )
+                .values(error_code="TERMINAL_PERSIST_EXHAUSTED", updated_at=_now_ms())
+            )
+            await db.commit()
+
+
+def pg_manager_scope():
+    """pg 会话上下文的模块级转发（避免服务方法内重复 import）。"""
+    from contextlib import asynccontextmanager
+
+    from noesis.storage.postgres.manager import pg_manager
+
+    return pg_manager.get_async_session_context()
 
 
 configure_service_port(SubagentSessionService)

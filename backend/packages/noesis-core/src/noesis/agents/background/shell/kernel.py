@@ -28,6 +28,12 @@ from noesis.agents.background.jobs.state import (
         _SHELL_RESULT_TAIL_CHARS,
 )
 
+async def _mark_shell_row_started(task_id: str) -> None:
+    from noesis.agents.background.ports import ShellJobPort
+
+    await ShellJobPort.mark_started(task_id)
+
+
 async def _arun_shell(entry: _TaskEntry) -> None:
     """kind="shell"：直接经 backend 执行命令，终态写结果与通知。
 
@@ -37,6 +43,13 @@ async def _arun_shell(entry: _TaskEntry) -> None:
     由触发方（cancel / watchdog / 沙箱销毁）负责发布，这里不重复。
     """
     task = entry.task
+    # 事实行 queued→running（started_at）：查询投影与对账口径与内存一致
+    from noesis.runtime.main_loop import run_on_main_loop
+
+    run_on_main_loop(
+        _mark_shell_row_started(task.task_id),
+        name=f"bg-shell-started:{task.task_id}",
+    )
     try:
         timeout = entry.shell_command_timeout
         response = await entry.shell_backend.aexecute(

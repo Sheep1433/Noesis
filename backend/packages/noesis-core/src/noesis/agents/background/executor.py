@@ -22,7 +22,6 @@ from noesis.agents.background.subagent.kernel import (
     _apply_turn_params,
     _arun,
     _arun_followup,
-    settle_followup_prelude_failure,
 )
 from noesis.agents.background.jobs.events import (
     get_run_event_history,
@@ -40,17 +39,21 @@ from noesis.agents.background.jobs.registry import (
     _TASKS,
     _TASKS_LOCK,
     _TASK_NOT_FOUND,
+    _PendingMessage,
     _TaskEntry,
     _dequeue_locked,
     _find_entry_locked,
     _next_submit_seq,
     _publish_entry_started,
     _schedule_entry_locked,
+    configure_terminal_reclaim,
+    ensure_reclaim_timer,
 )
 from noesis.agents.background.jobs.settle import (
     REVIVABLE_END_STATES,
     _stop_terminal,
     cancel_terminal_timers,
+    settle_delivery_failure,
     settle_task_sync,
     start_stop_grace_timer,
     start_watchdog_timer,
@@ -58,22 +61,39 @@ from noesis.agents.background.jobs.settle import (
 )
 from noesis.agents.background.jobs.state import (
     MAX_CONCURRENT_PER_SESSION,
-    MAX_FOLLOWUPS,
+    MAX_PENDING_MESSAGES,
     STOP_GRACE_SECONDS,
     STOP_RECONCILE_SECONDS,
     SHELL_TASK_TIMEOUT_SECONDS,
     TASK_TIMEOUT_SECONDS,
+    TERMINAL_RECLAIM_MAX,
+    TERMINAL_RETENTION_SECONDS,
     _SHELL_DEFAULT_COMMAND_TIMEOUT,
     _SLOT_STATUSES,
     BackgroundTask,
     BgTaskStatus,
 )
 from noesis.agents.background.kinds import StopMode, behavior_of
-from noesis.agents.background.ports import configure_executor_port
+from noesis.agents.background.ports import (
+    SessionOpsPort,
+    ShellJobPort,
+    SubagentSessionPort,
+    configure_executor_port,
+)
 
 
 class BackgroundTaskExecutor:
     """start/check/cancel/list 的进程内执行面。"""
+
+    # 最近装配的实例（单执行 leader 进程内语义上单例）：对账重建等
+    # 无实例上下文的入口经 default() 取配置与冷恢复解析器
+    _active: Optional["BackgroundTaskExecutor"] = None
+
+    @classmethod
+    def default(cls) -> "BackgroundTaskExecutor":
+        if cls._active is None:
+            raise RuntimeError("BackgroundTaskExecutor 未装配")
+        return cls._active
 
     def __init__(
         self,
@@ -85,6 +105,11 @@ class BackgroundTaskExecutor:
         stop_grace_seconds: float = STOP_GRACE_SECONDS,
         stop_reconcile_seconds: float = STOP_RECONCILE_SECONDS,
         recursion_limit: int = 9999,
+        terminal_retention_seconds: float = TERMINAL_RETENTION_SECONDS,
+        terminal_reclaim_max: int = TERMINAL_RECLAIM_MAX,
+        # 冷恢复配方解析： (subagent_type, model_id) → worker_factory | None。
+        # 由装配方（super_agent）注入角色注册表解析；None = 冷恢复不可用
+        cold_resolver: Optional[Callable[[Optional[str], Optional[str]], Optional[Callable[..., Any]]]] = None,
     ) -> None:
         self._max_concurrent = max(1, max_concurrent_per_session)
         # 全局并发总闸（跨会话）：0 = 不限。两级准入先全局后会话，
@@ -95,6 +120,12 @@ class BackgroundTaskExecutor:
         self._stop_grace = max(1.0, stop_grace_seconds)
         self._stop_reconcile = max(1.0, stop_reconcile_seconds)
         self._recursion_limit = recursion_limit
+        # 终态条目热集回收旋钮（回收后查询走 DB 投影兜底）
+        self._terminal_retention = max(1.0, terminal_retention_seconds)
+        self._terminal_reclaim_max = max(1, terminal_reclaim_max)
+        self._cold_resolver = cold_resolver
+        configure_terminal_reclaim(self._terminal_retention, self._terminal_reclaim_max)
+        BackgroundTaskExecutor._active = self
 
     # -- 查询（任意线程安全调用） ------------------------------------
 
@@ -122,6 +153,54 @@ class BackgroundTaskExecutor:
                 if entry.task.session_id == session_id
             }
         return sorted(tasks.values(), key=lambda t: t["started_at"])
+
+    # -- 查询 DB 兜底（热集 miss：终态已回收 / 跨进程） ------------------
+
+    async def check_with_fallback(self, task_id: str) -> Optional[dict[str, Any]]:
+        """热集内读内存快照，miss 读 DB 投影（同源状态映射函数）。
+
+        返回 dict 附带 retrieval_sources / undelivered_messages；None =
+        无任何 DB 事实（真不存在）。
+        """
+        with _TASKS_LOCK:
+            entry = _find_entry_locked(task_id)
+        if entry is not None:
+            snap = entry.task.to_dict(include_progress=False)
+            snap["retrieval_sources"] = list(entry.task.retrieval_sources.values())
+            snap["undelivered_messages"] = 0
+            return snap
+        # 两 kind 兜底：subagent 走 child session/run 投影，shell 走事实行
+        projection = await SubagentSessionPort.db_task_projection(task_id)
+        if projection is not None:
+            return projection
+        return await ShellJobPort.get_task(task_id)
+
+    async def list_with_fallback(self, session_id: str) -> list[dict[str, Any]]:
+        memory = self.list_for_session(session_id)
+        seen = {str(t.get("task_id")) for t in memory} | {
+            str(t.get("child_session_id")) for t in memory if t.get("child_session_id")
+        }
+        rows = await SubagentSessionPort.list_db_task_projections(session_id)
+        merged = memory + [r for r in rows if str(r.get("task_id")) not in seen]
+        shell_rows = await ShellJobPort.list_for_session(session_id)
+        merged += [
+            r for r in shell_rows if str(r.get("task_id")) not in seen
+        ]
+        return sorted(merged, key=lambda t: t.get("started_at") or 0)
+
+    async def cancel_with_fallback(self, task_id: str) -> dict[str, Any]:
+        """取消：热集受理；miss 回退 DB——终态任务幂等返回快照（不误报不存在）。"""
+        try:
+            return self.cancel(task_id)
+        except ValueError:
+            projection = await SubagentSessionPort.db_task_projection(task_id)
+            if projection is None:
+                projection = await ShellJobPort.get_task(task_id)
+            if projection is not None and BgTaskStatus(
+                projection.get("status")
+            ).is_terminal:
+                return projection
+            raise
 
     # -- 启动 ---------------------------------------------------------
 
@@ -175,6 +254,18 @@ class BackgroundTaskExecutor:
             turn_reasoning_effort=get_request_reasoning_effort(),
         )
         self._launch(entry)
+        if child_session_id:
+            # task_id 落 child session extra（bg_task_id）：DB 投影据此解析
+            # 已回收任务（内存 bg-* id 不入任何其他表）。fire-and-forget
+            from noesis.runtime.main_loop import run_on_main_loop
+
+            run_on_main_loop(
+                SessionOpsPort.merge_session_extra(
+                    child_session_id, user_id, {"bg_task_id": task_id},
+                ),
+                name=f"bg-task-id-persist:{task_id}",
+            )
+        ensure_reclaim_timer()
         return task_id
 
     def start_shell(
@@ -215,6 +306,20 @@ class BackgroundTaskExecutor:
             ),
         )
         self._launch(entry)
+        # shell 事实行落库（task_id 即主键）：查询兜底与重启对账的事实源
+        from noesis.runtime.main_loop import run_on_main_loop
+
+        run_on_main_loop(
+            ShellJobPort.persist_start(
+                task_id=task_id,
+                session_id=session_id,
+                user_id=user_id,
+                command=task.command or "",
+                status=task.status.value,
+            ),
+            name=f"bg-shell-row:{task_id}",
+        )
+        ensure_reclaim_timer()
         return task_id
 
     def _launch(self, entry: _TaskEntry) -> None:
@@ -277,19 +382,24 @@ class BackgroundTaskExecutor:
 
 
 
-    @staticmethod
-    async def deliver_followup(
+    async def deliver_message(
+        self,
         task_id: str,
         message: str,
         user_message_id: Optional[str] = None,
         model_id: Optional[str] = None,
         reasoning_effort: Optional[str] = None,
     ) -> dict[str, Any]:
-        """单一异步 followup 入口：校验 + 入队 / 冷恢复。
+        """追加消息单一入口：write-ahead 落库先行，再入内存队列 / 冷恢复。
 
-        校验（能力门控 + 终态资格）在锁内前置完成；冷恢复分支在返回前
-        完成新 run 创建（run_id 权威）——响应携带旧 run_id 会让订阅方
-        错过新 run 全部事件。运行中任务入队，当前 turn 结束后链式执行。
+        - pending user message 行是队列事实：任何路径先落行再入内存
+          （内存 deque 只是执行镜像）；容量以 pending 行计数判定，超限在
+          落库前拒绝
+        - 内存 miss 走冷恢复：从 DB 投影 + descriptor 重建执行条目（仅
+          可续终态 completed / cancelled）并重载 pending 行；不可续 /
+          不存在抛可诊断错误
+        - 投递失败不终态化任务：settle_delivery_failure 裁决回退（冷恢复
+          窗口内受理的停止终态获胜）
         """
         text = message.strip()
         if not text:
@@ -297,40 +407,70 @@ class BackgroundTaskExecutor:
         params = _TurnParams(model_id=model_id, reasoning_effort=reasoning_effort)
         with _TASKS_LOCK:
             entry = _find_entry_locked(task_id)
-            if entry is None:
-                raise ValueError(_TASK_NOT_FOUND.format(task_id=task_id))
-            task = entry.task
-            if not behavior_of(task.kind).supports_followup:
-                raise ValueError(behavior_of(task.kind).reject_followup_text())
+        if entry is None:
+            entry = await self._cold_recover_entry(task_id)
+        task = entry.task
+        if not behavior_of(task.kind).supports_followup:
+            raise ValueError(behavior_of(task.kind).reject_followup_text())
+        if task.status.is_terminal and task.status not in REVIVABLE_END_STATES:
+            raise ValueError(f"任务已结束（{task.status.value}），无法追加消息")
+        child_id = task.child_session_id or task.task_id
+        # 容量以 DB pending 行计数为准。count-then-insert 存在竞态：并发
+        # K 请求同时读到临界计数时至多超限 K-1 条，后果是队列多几条显式
+        # 下达的指示、功能无损，不为它加任务级互斥
+        pending_count = await SubagentSessionPort.count_pending_messages(child_id)
+        if pending_count >= MAX_PENDING_MESSAGES:
+            raise ValueError(
+                f"补话队列已满（{MAX_PENDING_MESSAGES} 条）：请等待当前轮完成后再发，"
+                f"或将多条指示合并为一条"
+            )
+        if user_message_id is None:
+            user_message_id = await SubagentSessionPort.create_pending_message(
+                session_id=child_id,
+                user_id=task.user_id,
+                message=text,
+                model_id=model_id,
+                reasoning_effort=reasoning_effort,
+            )
+        pending = _PendingMessage(message_id=user_message_id, text=text, params=params)
+        with _TASKS_LOCK:
             if task.status not in REVIVABLE_END_STATES:
-                if task.status.is_terminal:
-                    raise ValueError(f"任务已结束（{task.status.value}），无法追加消息")
-                with entry.followup_lock:
-                    if len(entry.followups) >= MAX_FOLLOWUPS:
-                        raise ValueError(
-                            f"补话队列已满（{MAX_FOLLOWUPS} 条）：请等待当前轮完成后再发，"
-                            f"或将多条指示合并为一条"
-                        )
-                    entry.followups.append(text)
-                    entry.followup_message_ids.append(user_message_id)
-                    entry.followup_turn_params.append(params)
-                _publish_task_event(task, "followup")
-                return task.to_dict()
-            # 先占位 RUNNING：run 创建窗口内受理的停止由宽限对账兜底
-            task.status = BgTaskStatus.RUNNING
-            task.result = None
-            task.completed_at = None
-            # 复活中和：清停止信号、取消旧协程与在飞对账
-            # task、重置 terminal_published（复活轮发自己的终态事件与通知）
-            entry.cooperative_stop_signalled = False
-            if entry.future is not None and not entry.future.done():
-                entry.future.cancel()
-            entry.future = None
-            if entry.stop_reconcile_task is not None and not entry.stop_reconcile_task.done():
-                entry.stop_reconcile_task.cancel()
-            entry.stop_reconcile_task = None
-            entry.terminal_published = False
-            cancel_terminal_timers(entry)
+                # running / queued：入执行镜像队列，当前 turn 结束后链式消费
+                with entry.pending_lock:
+                    entry.pending_messages.append(pending)
+                queued = True
+            else:
+                queued = False
+                # 复活中和：记录先前终态快照（投递失败回退用），清停止信号、
+                # 取消旧协程与在飞对账任务、复位收口旗标（复活轮发自己的
+                # 终态事件与通知）
+                entry.prev_terminal_snapshot = {
+                    "status": task.status.value,
+                    "result": task.result,
+                    "error": task.error,
+                    "stop_reason": task.stop_reason,
+                    "completed_at": task.completed_at,
+                    "persist_ok": entry.terminal_persist_ok,
+                    "persist_exhausted": entry.terminal_persist_exhausted,
+                }
+                task.status = BgTaskStatus.RUNNING
+                task.result = None
+                task.completed_at = None
+                entry.cooperative_stop_signalled = False
+                if entry.future is not None and not entry.future.done():
+                    entry.future.cancel()
+                entry.future = None
+                if entry.stop_reconcile_task is not None and not entry.stop_reconcile_task.done():
+                    entry.stop_reconcile_task.cancel()
+                entry.stop_reconcile_task = None
+                entry.terminal_published = False
+                entry.terminal_persist_ok = False
+                entry.terminal_persist_exhausted = False
+                entry.terminal_notified = False
+                cancel_terminal_timers(entry)
+        if queued:
+            _publish_task_event(task, "followup")
+            return task.to_dict()
         if entry.followup_factory is None:
             loop = _ensure_loop()
             entry.future = _submit_isolated(
@@ -342,20 +482,18 @@ class BackgroundTaskExecutor:
         try:
             _apply_turn_params(entry, params)
             task.turn_count += 1
-            launch = entry.followup_factory(
-                task.child_session_id or task.task_id, text, user_message_id,
-            )
+            launch = entry.followup_factory(child_id, text, user_message_id)
             if inspect.isawaitable(launch):
                 launch = await launch
         except Exception as exc:
-            await settle_followup_prelude_failure(entry, task, exc)
+            await settle_delivery_failure(entry, task, exc, user_message_id)
             return task.to_dict()
         with _TASKS_LOCK:
             task.run_id = str(launch.get("run_id") or "") or None
             task.assistant_message_id = str(launch.get("assistant_message_id") or "") or None
             task.projection_sequence = 0
-            # 创建窗口内已受理停止：不提交执行——宽限 watchdog 对账时
-            # task.run_id 已是新 run，终态化正确收口
+            # 创建窗口内已受理停止：不提交执行——停止终态获胜（不回退），
+            # 消息行已被 launch 采纳为该 run 的输入，随 run 停止收口
             stopped_during_launch = entry.cooperative_stop_signalled
         if not stopped_during_launch:
             loop = _ensure_loop()
@@ -366,6 +504,155 @@ class BackgroundTaskExecutor:
             start_watchdog_timer(entry)
         _publish_task_event(task, "followup")
         return task.to_dict()
+
+    # -- 冷恢复与对账重建 ---------------------------------------------
+
+    async def _cold_recover_entry(
+        self, task_ref: str, *, expect_status: Optional[str] = None,
+    ) -> _TaskEntry:
+        """从 DB 重建执行条目（热集 miss）。
+
+        task_ref = bg_task_id（child session extra）或 child session id。
+        仅重建可续终态（completed / cancelled）；expect_status 用于对账
+        重建时校验 queued。pending 行随条目重载（队列事实在 DB）。
+        """
+        info = await SubagentSessionPort.load_cold_task(task_ref)
+        if info is None:
+            raise ValueError(_TASK_NOT_FOUND.format(task_id=task_ref))
+        status = str(info.get("status") or "")
+        if expect_status is not None:
+            if status != expect_status:
+                raise ValueError(
+                    f"任务状态与对账预期不符：{status}（预期 {expect_status}）"
+                )
+            task_status = BgTaskStatus.QUEUED
+        elif status in ("completed", "cancelled"):
+            task_status = BgTaskStatus(status)
+        elif status in ("failed", "timed_out"):
+            raise ValueError(f"任务已结束（{status}），无法追加消息")
+        else:
+            raise ValueError(f"任务状态异常：{status}（执行器重建仅支持可续终态）")
+        worker_factory = (
+            self._cold_resolver(info.get("subagent_type"), info.get("model"))
+            if self._cold_resolver is not None else None
+        )
+        if worker_factory is None:
+            raise ValueError(
+                "任务已回收且无法重建执行配方（类型未注册或未配置冷恢复解析器）"
+            )
+        task = BackgroundTask(
+            task_id=str(info["task_id"]),
+            session_id=str(info["session_id"]),
+            user_id=str(info["user_id"]),
+            description=str(info.get("description") or "子 Agent"),
+            child_session_id=str(info["child_session_id"]),
+            run_id=info.get("run_id"),
+            assistant_message_id=info.get("assistant_message_id"),
+            kind="subagent",
+            model_id=info.get("model_id"),
+            subagent_type=info.get("subagent_type"),
+            status=task_status,
+            result=info.get("result"),
+            error=info.get("error"),
+            started_at=info.get("started_at") or time.time(),
+            completed_at=info.get("completed_at"),
+            turn_count=int(info.get("turn_count") or 1),
+        )
+        entry = _TaskEntry(
+            task=task,
+            agent_factory=worker_factory,
+            followup_factory=self._make_cold_followup_factory(str(info["user_id"])),
+            recursion_limit=self._recursion_limit,
+            timeout_seconds=self._task_timeout,
+            session_max_concurrent=self._max_concurrent,
+            max_global=self._max_global,
+            stop_grace_seconds=self._stop_grace,
+            stop_reconcile_seconds=self._stop_reconcile,
+        )
+        if task_status.is_terminal:
+            # 终态事实来自 DB：回收资格三件套直接成立
+            entry.terminal_published = True
+            entry.terminal_persist_ok = True
+            entry.terminal_notified = True
+        with entry.pending_lock:
+            entry.pending_messages.extend(
+                _PendingMessage(
+                    message_id=row.get("message_id"),
+                    text=str(row.get("text") or ""),
+                    params=_TurnParams(
+                        model_id=row.get("model_id"),
+                        reasoning_effort=row.get("reasoning_effort"),
+                    ),
+                )
+                for row in info.get("pending") or []
+            )
+        with _TASKS_LOCK:
+            _TASKS.setdefault(task.task_id, entry)
+        return entry
+
+    def _make_cold_followup_factory(self, user_id: str) -> Callable[..., Any]:
+        """冷恢复条目的 run 创建工厂（user_id 来自 DB 事实，非装配闭包）。
+
+        经 run_on_main_loop 在主 loop 执行：pg_manager 连接池绑定主 loop，
+        本工厂在隔离 loop 上被调用——直连会触发跨 loop 连接错误。
+        """
+        from noesis.agents.background.ports import SubagentSessionPort
+
+        async def _factory(
+            child_session_id: str, message: str, user_message_id: Optional[str] = None,
+        ) -> dict[str, str]:
+            from noesis.storage.postgres.manager import pg_manager
+            from noesis.runtime.main_loop import run_on_main_loop
+
+            async def _launch() -> dict[str, str]:
+                async with pg_manager.get_async_session_context() as child_db:
+                    launch = await SubagentSessionPort.create_turn_run(
+                        session_id=child_session_id,
+                        user_id=user_id,
+                        message=message,
+                        user_message_id=user_message_id,
+                        db=child_db,
+                    )
+                    return launch.to_dict()
+
+            future = run_on_main_loop(
+                _launch(), name=f"subagent-turn-launch:{child_session_id}",
+            )
+            if future is None:
+                raise RuntimeError("主 loop 不可用，追加消息 run 创建失败")
+            return await asyncio.wrap_future(future)
+
+        return _factory
+
+    async def restore_queued(self, specs: list[dict[str, Any]]) -> int:
+        """对账后重建排队队列（仅 child run 行；shell 执行环境不持久化不重建）。
+
+        specs 按落库 created_at 升序给全量 queued child run；会话内 FIFO
+        与全局唤醒序复用既有 drain（唤醒候选按 created_at 全局升序）。
+        """
+        restored = 0
+        for spec in sorted(specs, key=lambda s: s.get("created_at") or 0):
+            child_session_id = str(spec.get("child_session_id") or "")
+            if not child_session_id:
+                continue
+            try:
+                entry = await self._cold_recover_entry(
+                    child_session_id, expect_status="queued",
+                )
+            except Exception:  # noqa: BLE001
+                logger.opt(exception=True).error(
+                    "bg task queue rebuild failed child_session_id={}",
+                    child_session_id,
+                )
+                continue
+            with _TASKS_LOCK:
+                if entry.task.status == BgTaskStatus.QUEUED:
+                    _PENDING_QUEUES.setdefault(entry.task.session_id, []).append(entry)
+            restored += 1
+        if restored:
+            logger.info("bg task queue restored count={}", restored)
+            _drain_restored()
+        return restored
 
     @staticmethod
     def get_future(task_id: str) -> Optional[Future]:
@@ -431,6 +718,13 @@ class BackgroundTaskExecutor:
     # -- 内部委托模块实现（见下方模块函数） ----------------------------
 
 
+def _drain_restored() -> None:
+    """对账重建后触发全局排队唤醒（复用既有两级准入与 drain 逻辑）。"""
+    from noesis.agents.background.jobs.registry import _drain_all_sessions
+
+    _drain_all_sessions()
+
+
 def shutdown() -> None:
     """清空注册表并停掉隔离 loop（测试 / 进程退出用）。"""
     with _TASKS_LOCK:
@@ -455,9 +749,29 @@ def shutdown() -> None:
 
 
 class _ExecutorRuntimePort:
-    # 单一异步 followup 入口（校验折叠在锁内前置；同步/异步双版本的
-    # 端口漂移事故见 ports.py 同名注释）
-    deliver_followup = staticmethod(BackgroundTaskExecutor.deliver_followup)
+    # 单一异步追加消息入口（校验折叠在锁内前置；同步/异步双版本的
+    # 端口漂移事故见 ports.py 同名注释）。查询族带 DB 兜底（热集 miss
+    # → DB 投影），经 default() 取最近装配实例
+    @staticmethod
+    async def deliver_message(*args: Any, **kwargs: Any) -> Any:
+        return await BackgroundTaskExecutor.default().deliver_message(*args, **kwargs)
+
+    @staticmethod
+    async def check_with_fallback(*args: Any, **kwargs: Any) -> Any:
+        return await BackgroundTaskExecutor.default().check_with_fallback(*args, **kwargs)
+
+    @staticmethod
+    async def list_with_fallback(*args: Any, **kwargs: Any) -> Any:
+        return await BackgroundTaskExecutor.default().list_with_fallback(*args, **kwargs)
+
+    @staticmethod
+    async def cancel_with_fallback(*args: Any, **kwargs: Any) -> Any:
+        return await BackgroundTaskExecutor.default().cancel_with_fallback(*args, **kwargs)
+
+    @staticmethod
+    async def restore_queued(*args: Any, **kwargs: Any) -> Any:
+        return await BackgroundTaskExecutor.default().restore_queued(*args, **kwargs)
+
     cancel = staticmethod(BackgroundTaskExecutor.cancel)
     subscribe_run_events = staticmethod(subscribe_run_events)
     unsubscribe_run_events = staticmethod(unsubscribe_run_events)

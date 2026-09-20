@@ -311,7 +311,19 @@ async def test_start_async_task_command_persists_async_tasks_across_turns() -> N
 # 端口方法面契约：ExecutorPort 白名单与执行器公开方法同步
 # ---------------------------------------------------------------------------
 
-def test_executor_port_exposes_deliver_followup() -> None:
+def test_bg_task_tool_name_allowlist_pinned() -> None:
+    """递归委派防线名单钉死：工具更名（update_async_task → send_message）后
+    名单必须同步——漏改会让防线对改名后的工具失明（回归 2.5）。"""
+    from noesis.agents.background.subagent.roles import BG_TASK_TOOL_NAMES
+
+    assert BG_TASK_TOOL_NAMES == frozenset({
+        "start_async_task", "check_async_task", "cancel_async_task",
+        "list_async_tasks", "send_message",
+    })
+    assert "update_async_task" not in BG_TASK_TOOL_NAMES
+
+
+def test_executor_port_exposes_deliver_message() -> None:
     """端口面 == 运行时公开面（全表面护栏）：白名单曾漏 asend_message 致全部
     followup 500——本测试枚举端口应暴露的完整集合，并要求运行时新增公开
     方法时必须在此显式登记（漏登记即红），删除的方法不得残留（防回流）。"""
@@ -320,7 +332,9 @@ def test_executor_port_exposes_deliver_followup() -> None:
     from noesis.agents.background.ports import ExecutorPort
 
     expected = {
-        "deliver_followup", "cancel",
+        "deliver_message", "cancel",
+        "check_with_fallback", "list_with_fallback", "cancel_with_fallback",
+        "restore_queued",
         "subscribe_run_events", "unsubscribe_run_events", "get_run_event_history",
     }
     exposed = {

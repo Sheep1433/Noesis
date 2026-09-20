@@ -10,7 +10,7 @@ import {
   getSession,
   getSessionMessages,
   resumeAgentRunHitl,
-  sendSubagentFollowup,
+  sendSubagentMessage,
   stopAgentRun,
   subscribeAgentRun,
 } from '@/api/chat'
@@ -134,6 +134,19 @@ const assistantMessage = computed(() => messages.value.find((item) => item.id ==
  * 用户消息取纯文本：主对话的用户气泡就是纯文本渲染，保持一致
  * （MarkdownPreview 在 fit-content 气泡里会因循环百分比按 max-content 溢出）
  */
+/** 追加消息投递标记：extra.pending_run = true（待执行）/ 'dropped'（未执行） */
+function messagePendingFlag(message: ChatMessageResponse): 'pending' | 'dropped' | null {
+  const extra = message.extra as Record<string, unknown> | null | undefined
+  const flag = extra?.pending_run
+  if (flag === true) {
+    return 'pending'
+  }
+  if (flag === 'dropped') {
+    return 'dropped'
+  }
+  return null
+}
+
 function userText(message: ChatMessageResponse): string {
   return normalizeApiContent(message.content).parts.filter((part) => part.type === 'text' && typeof part.content === 'string').map((part) => part.content).join('')
 }
@@ -216,7 +229,7 @@ async function submitQueuedNow(index: number): Promise<void> {
   // 出队是同步操作，天然防止两个实例重复提交同一条消息
   followupQueue.remove(index)
   try {
-    const task = await sendSubagentFollowup(
+    const task = await sendSubagentMessage(
       props.sessionId,
       message,
       selectedModelId.value || undefined,
@@ -245,7 +258,7 @@ async function flushNextQueued(): Promise<void> {
   followupSending.value = true
   followupQueue.remove(0)
   try {
-    const task = await sendSubagentFollowup(
+    const task = await sendSubagentMessage(
       props.sessionId,
       message,
       selectedModelId.value || undefined,
@@ -276,7 +289,7 @@ async function sendFollowup() {
   }
   followupSending.value = true
   try {
-    const task = await sendSubagentFollowup(
+    const task = await sendSubagentMessage(
       props.sessionId,
       message,
       selectedModelId.value || undefined,
@@ -682,7 +695,18 @@ onBeforeUnmount(() => {
       <template v-for="message in messages" :key="message.id">
         <div v-if="message.role === 'user'" class="subagent-conversation__user">
           <span class="subagent-conversation__avatar i-my-svg:user-avatar" aria-hidden="true"></span>
-          <div class="subagent-conversation__user-text">{{ userText(message) }}</div>
+          <div class="subagent-conversation__user-text">
+            {{ userText(message) }}
+            <span
+              v-if="messagePendingFlag(message) === 'pending'"
+              class="subagent-conversation__msg-flag subagent-conversation__msg-flag--pending"
+            >待执行</span>
+            <span
+              v-else-if="messagePendingFlag(message) === 'dropped'"
+              class="subagent-conversation__msg-flag subagent-conversation__msg-flag--dropped"
+              title="进程重启导致该消息未被投递执行"
+            >未执行</span>
+          </div>
         </div>
         <div v-else class="subagent-conversation__assistant">
           <!-- 回复级元信息（主 Agent assistant-run-meta 同构）：耗时在回复上方，
@@ -897,6 +921,25 @@ onBeforeUnmount(() => {
   line-height: 1.6;
   white-space: pre-wrap;
   overflow-wrap: anywhere;
+}
+
+.subagent-conversation__msg-flag {
+  display: inline-block;
+  margin-left: 6px;
+  padding: 1px 6px;
+  border-radius: 4px;
+  font-size: 12px;
+  vertical-align: middle;
+}
+
+.subagent-conversation__msg-flag--pending {
+  color: var(--noesis-color-text-secondary, #8a8f99);
+  background: color-mix(in srgb, var(--noesis-color-text-secondary, #8a8f99) 12%, transparent);
+}
+
+.subagent-conversation__msg-flag--dropped {
+  color: var(--noesis-color-warning, #b7791f);
+  background: color-mix(in srgb, var(--noesis-color-warning, #b7791f) 14%, transparent);
 }
 
 .subagent-conversation__avatar {

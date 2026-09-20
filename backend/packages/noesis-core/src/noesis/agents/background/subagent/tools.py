@@ -141,7 +141,7 @@ class AsyncSubagentToolsMiddleware(
         ] | None = None,
         delete_child_session: Callable[[str], Awaitable[None]] | None = None,
         fail_child_run: Callable[[str, str], Awaitable[None]] | None = None,
-        create_followup_run: Callable[[str, str, str | None], Awaitable[dict[str, Any]]] | None = None,
+        create_turn_run: Callable[[str, str, str | None], Awaitable[dict[str, Any]]] | None = None,
         model_id: str | None = None,
     ) -> None:
         super().__init__()
@@ -152,7 +152,7 @@ class AsyncSubagentToolsMiddleware(
         self._create_child_session = create_child_session
         self._delete_child_session = delete_child_session
         self._fail_child_run = fail_child_run
-        self._create_followup_run = create_followup_run
+        self._create_turn_run = create_turn_run
         self._model_id = model_id
         self.tools = self._build_tools()
         self.system_prompt: str | None = (
@@ -196,7 +196,7 @@ class AsyncSubagentToolsMiddleware(
         create_child_session = self._create_child_session
         delete_child_session = self._delete_child_session
         fail_child_run = self._fail_child_run
-        create_followup_run = self._create_followup_run
+        create_turn_run = self._create_turn_run
         model_id = self._model_id
 
         async def astart_async_task(
@@ -241,7 +241,7 @@ class AsyncSubagentToolsMiddleware(
                     created_by_tool_call_id=created_by_tool_call_id,
                     run_id=run_id,
                     assistant_message_id=assistant_message_id,
-                    followup_factory=create_followup_run,
+                    followup_factory=create_turn_run,
                     model_id=effective_model,
                     subagent_type=subagent_type,
                 )
@@ -327,17 +327,24 @@ class AsyncSubagentToolsMiddleware(
             return _command_with_identity(tool_call_id, _format_task(task), task)
 
         async def acheck_async_task(task_id: str) -> str:
-            task = executor.get(task_id)
+            # 热集内读内存快照，miss 读 DB 投影（回收后任务仍可答，不误报不存在）
+            task = await executor.check_with_fallback(task_id)
             if task is None:
-                # 内存 miss：当前无持久层回退（留存治理规划项）——到这里任务号确实未知
                 return f"{task_id} 不存在（可用 list_async_tasks 查看当前任务与完整 task_id）"
             if task["session_id"] != session_id:
                 return f"{task_id} 不属于当前会话"
             text = _format_task(task, output_budget=ModelConfig.tool_output_max_chars)
+            if task.get("undelivered_messages"):
+                text += (
+                    f"\n\n[提示] 该任务有 {task['undelivered_messages']} 条重启前追加的指示未执行"
+                    "（进程重启），是否重新下达请告知用户。"
+                )
+            if task.get("terminal_persist_exhausted"):
+                text += "\n\n[提示] 该任务终态落库失败（数据可能不完整）。"
             # 终态小结后附去重来源清单段（模型侧纯增益，受附录上界约束）；
             # 结构化清单同步进入跨边界登记，主 run 桥接层 finish 时落为
             # 带 origin（该子 Agent 任务）的 retrieval parts。
-            sources = BackgroundTaskExecutor.sources_of(task_id)
+            sources = task.get("retrieval_sources") or []
             if sources:
                 register_pending_sources(
                     session_id, str(task.get("description") or ""), sources,
@@ -349,7 +356,7 @@ class AsyncSubagentToolsMiddleware(
 
         async def acancel_async_task(task_id: str) -> str:
             try:
-                task = executor.cancel(task_id)
+                task = await executor.cancel_with_fallback(task_id)
             except ValueError as exc:
                 return f"取消失败：{exc}"
             if task.get("kind") == "subagent" or task["status"] == "timed_out":
@@ -360,12 +367,12 @@ class AsyncSubagentToolsMiddleware(
                 )
             return f"已取消：{task['task_id']}"
 
-        async def aupdate_async_task(
+        async def asend_message(
             task_id: str, message: str, tool_call_id: str = "",
         ) -> str | Command:
-            """向子任务追加一轮执行（上游 update_async_task 语义 + 本地 followup 管线）。"""
+            """向子任务追加一轮执行（write-ahead 落库先行；主规格 send_message）。"""
             try:
-                task = await executor.deliver_followup(task_id, message)
+                task = await executor.deliver_message(task_id, message)
             except ValueError as exc:
                 return f"发送失败：{exc}"
             text = (
@@ -375,7 +382,7 @@ class AsyncSubagentToolsMiddleware(
             return _command_with_identity(tool_call_id, text, task)
 
         async def alist_async_tasks() -> str:
-            tasks = executor.list_for_session(session_id)
+            tasks = await executor.list_with_fallback(session_id)
             if not tasks:
                 return "当前会话没有后台任务"
             return "\n".join(
@@ -413,8 +420,8 @@ class AsyncSubagentToolsMiddleware(
         )
         update = _ToolCallAwareStructuredTool.from_function(
             func=None,
-            coroutine=aupdate_async_task,
-            name="update_async_task",
+            coroutine=asend_message,
+            name="send_message",
             description=(
                 "向子任务追加一条消息，作为它的新一轮执行（子 Agent 带全部历史接续推理）："
                 "运行中任务在当前轮结束后执行该消息；已完成任务立即续跑并更新结果。"

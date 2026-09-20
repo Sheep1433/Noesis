@@ -4,7 +4,7 @@
 这里验证真实对话把链路串起来：
 1. SuperAgent 对话调用 ``start_task`` → 子会话出现在 children 列表并到终态；
 2. 任务终态后下一轮对话可正常完成（终态通知注入下一轮 prompt 的服务端路径）；
-3. ``subagent-followup`` 错误路径契约（非子会话 → 404）。
+3. ``subagent-messages`` 错误路径契约（非子会话 → 404）。
 
 前置：
     cd backend && uv run app.py
@@ -127,17 +127,17 @@ def test_next_turn_after_bg_task_terminal(
 def test_subagent_followup_rejects_non_child_session(
     auth_client, create_session
 ) -> None:
-    """subagent-followup 只接受子会话：普通会话/不存在的会话 → 404。"""
+    """subagent-messages 只接受子会话：普通会话/不存在的会话 → 404。"""
     session_id = create_session(title="followup 错误路径测试")
 
     missing = auth_client.post(
-        f"/api/chat/sessions/{session_id}/subagent-followup",
+        f"/api/chat/sessions/{session_id}/subagent-messages",
         json={"message": "补充要求"},
     )
     assert missing.status_code == 404
 
     random_id = auth_client.post(
-        "/api/chat/sessions/00000000-0000-0000-0000-000000000000/subagent-followup",
+        "/api/chat/sessions/00000000-0000-0000-0000-000000000000/subagent-messages",
         json={"message": "补充要求"},
     )
     assert random_id.status_code == 404

@@ -67,6 +67,15 @@ class AgentCatalogService:
             for task in runtime_tasks
             if task.get("kind") == "shell"
         )
+        # shell 目录 DB 兜底：热集 miss（终态回收 / 重启后）的 shell 任务
+        # 从 bg_shell_job 行补齐，消除「凭空消失」
+        from noesis.agents.background.ports import ShellJobPort
+
+        shell_rows = await ShellJobPort.list_for_session(session_id)
+        known_shell = {str(task.get("task_id")) for task in tasks if task.get("kind") == "shell"}
+        tasks.extend(
+            row for row in shell_rows if str(row.get("task_id")) not in known_shell
+        )
         return {"tasks": tasks}
 
     @staticmethod
@@ -80,10 +89,13 @@ class AgentCatalogService:
 
 class ShellJobService:
     @staticmethod
-    def get_task_status(*, session_id: str, task_id: str, user_id: str) -> dict[str, Any] | None:
-        """只读任务快照（command 提交后的响应组装用）；不存在返回 None。"""
+    async def get_task_status(*, session_id: str, task_id: str, user_id: str) -> dict[str, Any] | None:
+        """只读任务快照（command 提交后的响应组装用）；不存在返回 None。
+
+        热集 miss 回退 bg_shell_job 行（终态回收 / 重启后仍可答）。
+        """
         tasks = BackgroundTaskExecutor.list_for_session(session_id)
-        return next(
+        memory_hit = next(
             (
                 item for item in tasks
                 if item.get("task_id") == task_id
@@ -92,6 +104,14 @@ class ShellJobService:
             ),
             None,
         )
+        if memory_hit is not None:
+            return memory_hit
+        from noesis.agents.background.ports import ShellJobPort
+
+        row = await ShellJobPort.get_task(task_id)
+        if row is None or str(row.get("session_id")) != str(session_id) or str(row.get("user_id")) != str(user_id):
+            return None
+        return {key: value for key, value in row.items() if key != "user_id"}
 
     @staticmethod
     def stop(*, session_id: str, task_id: str, user_id: str) -> dict[str, Any]:

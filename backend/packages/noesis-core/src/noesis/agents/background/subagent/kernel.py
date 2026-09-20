@@ -46,6 +46,7 @@ from noesis.agents.background.jobs.settle import (
     _STOP_TERMINALS,
     TaskTerminal,
     _try_transition,
+    settle_delivery_failure,
     settle_stop,
     settle_task,
 )
@@ -275,17 +276,13 @@ def _apply_turn_params(entry: _TaskEntry, params: Optional[_TurnParams]) -> bool
         changed = True
     return changed
 
-def _pop_first_followup(entry: _TaskEntry) -> Optional[tuple[str, Optional[str], _TurnParams]]:
-    with entry.followup_lock:
-        if not entry.followups:
+def _pop_next_pending(entry: _TaskEntry) -> Optional[tuple[str, Optional[str], _TurnParams]]:
+    with entry.pending_lock:
+        if not entry.pending_messages:
             return None
-        text = entry.followups.popleft()
-        message_id = entry.followup_message_ids.popleft() if entry.followup_message_ids else None
-        params = (
-            entry.followup_turn_params.popleft()
-            if entry.followup_turn_params else None
-        )
-        return text, message_id, params
+        pending = entry.pending_messages.popleft()
+        params = pending.params if isinstance(pending.params, _TurnParams) else None
+        return pending.text, pending.message_id, params
 
 @dataclass
 class _TurnOutcome:
@@ -526,7 +523,7 @@ async def _arun(
     """执行一轮或多轮 turn。
 
     - start：initial_source 为原始 description 的 HumanMessage state
-    - 冷恢复（deliver_followup 对 completed 任务）：initial_source 为追加消息
+    - 冷恢复（deliver_message 对 completed 任务）：initial_source 为追加消息
     - kind="shell"：分派到 _arun_shell（无 worker / 无 turn 概念）
     turn 正常结束后若 followup 队列非空，链式开下一个 turn（同 thread
     追加 HumanMessage），队列清空前任务保持 running。
@@ -587,7 +584,7 @@ async def _arun(
                     entry.accumulated_usage, outcome.usage,
                 )
             # followup 链：队列非空则同 thread 开下一个 turn
-            next_followup = _pop_first_followup(entry)
+            next_followup = _pop_next_pending(entry)
             if next_followup is None:
                 break
             # 恢复 RUNNING 原子化并提前到 await 链之前：停止在 turn 收尾窗口受理时
@@ -622,13 +619,32 @@ async def _arun(
                 if current_run_future is not None:
                     await asyncio.wrap_future(current_run_future)
                 if entry.followup_factory is not None:
-                    launch = entry.followup_factory(
-                        task.child_session_id or task.task_id,
-                        next_message,
-                        next_user_message_id,
-                    )
-                    if inspect.isawaitable(launch):
-                        launch = await launch
+                    try:
+                        launch = entry.followup_factory(
+                            task.child_session_id or task.task_id,
+                            next_message,
+                            next_user_message_id,
+                        )
+                        if inspect.isawaitable(launch):
+                            launch = await launch
+                    except Exception as chain_exc:
+                        # 链式投递失败不终态化任务：本 turn 已正常结束，消息行
+                        # 翻转 dropped 后按队列耗尽收尾（剩余 pending 行保留，
+                        # 供后续冷恢复重载）
+                        from noesis.runtime.main_loop import run_on_main_loop as _run_flip
+
+                        if next_user_message_id:
+                            flip_future = _run_flip(
+                                SubagentSessionPort.flip_pending_message_dropped(next_user_message_id),
+                                name=f"bg-pending-drop:{next_user_message_id}",
+                            )
+                            if flip_future is not None:
+                                await asyncio.wrap_future(flip_future)
+                        logger.opt(exception=True).error(
+                            "bg subagent chain delivery failed task_id={} message_id={}",
+                            task.task_id, next_user_message_id,
+                        )
+                        break
                     task.run_id = str(launch.get("run_id") or "") or None
                     task.assistant_message_id = str(launch.get("assistant_message_id") or "") or None
                     task.turn_count += 1
@@ -637,7 +653,7 @@ async def _arun(
             logger.info(
                 "bg subagent followup turn task_id={} queued={}",
                 task.task_id,
-                len(entry.followups),
+                len(entry.pending_messages),
             )
             source = {"messages": [HumanMessage(content=next_message)]}
         final_fallback_error = outcome.fallback_error
@@ -717,10 +733,11 @@ async def _arun_followup(
     params 携带该 turn 的模型/推理档位覆盖；变化时以新参数编译 worker
     （同 thread 续跑）。新 turn 的投影由独立 builder 从零累积（统一管道）。
 
-    前置段（worker 编译 / run 创建）失败必须显式收口 FAILED：deliver_followup
-    对本协程 fire-and-forget，异常会滞留在未观察的 concurrent Future 里被
-    静默吞掉——任务卡 RUNNING、后续追问进队列无人消费（冷恢复静默失败
-    事故：跨 loop 连接错误曾走此路径无任何日志）。
+    前置段（worker 编译 / run 创建）失败经 settle_delivery_failure 收口：
+    投递失败不终态化任务——回退先前终态（冷恢复窗口内受理的停止获胜）+
+    消息行翻转 dropped + 异常记日志。deliver_message 对本协程 fire-and-forget，
+    异常若不显式收口会滞留在未观察的 concurrent Future 里被静默吞掉（冷
+    恢复静默失败事故：跨 loop 连接错误曾走此路径无任何日志）。
     """
     task = entry.task
     try:
@@ -740,34 +757,11 @@ async def _arun_followup(
             task.assistant_message_id = str(launch.get("assistant_message_id") or "") or None
             task.projection_sequence = 0
     except Exception as exc:
-        await settle_followup_prelude_failure(entry, task, exc)
+        # 投递失败不终态化任务：回退先前终态 + 消息行 dropped + 可诊断错误
+        # （冷恢复窗口内受理的停止终态获胜，settle_delivery_failure 内裁决）
+        await settle_delivery_failure(entry, task, exc, user_message_id)
         return
     await _arun(entry, initial_source={"messages": [HumanMessage(content=text)]})
-
-async def settle_followup_prelude_failure(
-    entry: _TaskEntry,
-    task: BackgroundTask,
-    exc: BaseException,
-) -> None:
-    """冷恢复前置段失败收口：task FAILED + run ERROR + 终态事件与通知。
-
-    run 未创建时（factory 抛出）task.run_id 仍指向上一个已完成 run，
-    mark_terminal 的 compare-and-set 会安全跳过。停止抢先受理时
-    _accept_terminal 把 FAILED 降级为停止语义并保留异常载荷。
-    """
-    await settle_task(
-        entry,
-        TaskTerminal(
-            task_status=BgTaskStatus.FAILED,
-            run_status=RunStatus.ERROR,
-            finish_reason="error",
-            error=str(exc),
-        ),
-    )
-    logger.opt(exception=True).error(
-        "bg subagent followup prelude failed task_id={}",
-        task.task_id,
-    )
 
 class _SubagentKind:
     """子 Agent 委派：可追问、有轮次概念、协作停止、协作超时。"""

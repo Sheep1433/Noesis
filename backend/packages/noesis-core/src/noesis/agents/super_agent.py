@@ -108,7 +108,7 @@ async def _db_on_main_loop(
     """DB 协程经主 loop 调度后再等待。
 
     pg_manager 连接池绑定主 loop，而子 Agent 回调可能在 executor 隔离
-    loop 上被 await（与 ``_create_followup_run`` 同理——冷恢复曾因直连
+    loop 上被 await（与 ``_create_turn_run`` 同理——冷恢复曾因直连
     静默失败）。主 loop 未注册（评测/CLI 等单 loop 进程）时退回当前
     loop 直连：该场景下池本就绑定当前 loop，直连即正确路径。
     工厂参数而非协程：``run_on_main_loop`` 在主 loop 不可用时会关闭
@@ -236,11 +236,25 @@ class SuperAgent(BaseAgent):
                 checkpointer=await create_isolated_checkpointer(),
             )
 
+        def _cold_resolver(subagent_type, model_id):
+            """冷恢复配方解析：按 descriptor 的 type/model 取角色 worker 工厂。
+
+            followup 工厂由 executor 生成（user_id 来自 DB 事实，不闭包捕获
+            装配期会话）；类型未注册返回 None（冷恢复按可诊断错误拒绝）。
+            """
+            role = subagent_registry.get(subagent_type or "")
+            if role is None:
+                return None
+            return role.worker_factory
+
         bg_executor = BackgroundTaskExecutor(
             max_concurrent_per_session=SubagentConfig.max_concurrent_per_session,
             max_concurrent_global=SubagentConfig.max_concurrent_global,
             task_timeout_seconds=SubagentConfig.task_timeout_seconds,
             shell_task_timeout_seconds=SubagentConfig.shell_task_timeout_seconds,
+            terminal_retention_seconds=SubagentConfig.terminal_retention_seconds,
+            terminal_reclaim_max=SubagentConfig.terminal_reclaim_max,
+            cold_resolver=_cold_resolver,
         )
 
         # 角色注册表：类型分发的唯一声明面（v1 单一 general，配方 = 既有
@@ -359,7 +373,7 @@ class SuperAgent(BaseAgent):
 
             await _db_on_main_loop(_reject, name=f"subagent-run-reject:{run_id}")
 
-        async def _create_followup_run(
+        async def _create_turn_run(
             child_session_id: str,
             message: str,
             user_message_id: str | None = None,
@@ -377,7 +391,7 @@ class SuperAgent(BaseAgent):
 
             async def _launch() -> dict[str, str]:
                 async with pg_manager.get_async_session_context() as child_db:
-                    launch = await SubagentSessionPort.create_followup_run(
+                    launch = await SubagentSessionPort.create_turn_run(
                         session_id=child_session_id,
                         user_id=user_id,
                         message=message,
@@ -412,7 +426,7 @@ class SuperAgent(BaseAgent):
                     create_child_session=_create_child_session,
                     delete_child_session=_delete_child_session,
                     fail_child_run=_fail_child_run,
-                    create_followup_run=_create_followup_run,
+                    create_turn_run=_create_turn_run,
                     model_id=model_id,
                 ),
                 # run 内即时感知后台任务终态：下一次模型调用注入 [系统通知]

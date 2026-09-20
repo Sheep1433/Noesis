@@ -23,6 +23,7 @@ from noesis.agents.background.jobs.registry import (
     _TASKS_LOCK,
     _TaskEntry,
     _drain_session_queue,
+    reclaim_terminal_entries,
 )
 from noesis.agents.background.jobs.state import (
     _PARTIAL_OUTPUT_PREFIX,
@@ -42,7 +43,7 @@ def _notify_preview(task: BackgroundTask) -> Optional[str]:
         return result[len(_PARTIAL_OUTPUT_PREFIX):].lstrip() or None
     return result or task.error
 
-def _notify_terminal(task: BackgroundTask) -> None:
+def _notify_terminal(entry: "_TaskEntry", task: BackgroundTask) -> None:
     """终态转换点统一记录会话通知（completed/failed/timed_out/cancelled）。"""
     notifications.record(
         session_id=task.session_id,
@@ -60,6 +61,8 @@ def _notify_terminal(task: BackgroundTask) -> None:
     )
     _schedule_continuation(task)
     _drain_session_queue(task.session_id)
+    entry.terminal_notified = True
+    reclaim_terminal_entries()
 
 def _schedule_continuation(task: BackgroundTask) -> None:
     """终态后尝试唤醒主 Agent（dsh parent.followup 的 run 级等价物）。
@@ -103,7 +106,7 @@ _STOP_TERMINALS: frozenset[BgTaskStatus] = frozenset(
 
 # 可冷恢复续聊的终态：停止是乐观终态且只终止执行（执行/意图分离），
 # 排队与后续的 followup 意图保留——completed / cancelled 均可经
-# deliver_followup 同 thread 续跑；failed / timed_out 语义上不可续
+# deliver_message 同 thread 续跑；failed / timed_out 语义上不可续
 REVIVABLE_END_STATES: frozenset[BgTaskStatus] = frozenset(
     {BgTaskStatus.COMPLETED, BgTaskStatus.CANCELLED}
 )
@@ -207,6 +210,55 @@ async def _persist_run_terminal(task: BackgroundTask, terminal: TaskTerminal) ->
     if terminal_future is not None:
         await asyncio.wrap_future(terminal_future)
 
+async def _persist_terminal_with_retry(
+    entry: "_TaskEntry",
+    task: BackgroundTask,
+    terminal: TaskTerminal,
+    persist_timeout: Optional[float],
+) -> None:
+    """终态落库有界重试（主链路同款 persistence 超时预算）。
+
+    成功置 terminal_persist_ok；预算耗尽置 terminal_persist_exhausted——
+    事件与通知照发（否则会话队列停摆），DB 投影按落库事实回答并携带
+    「终态落库失败」标注；条目在耗尽后允许回收（不伪造终态，不无界滞留）。
+    """
+    from noesis.config.env import StreamConfig
+
+    deadline = time.monotonic() + StreamConfig.persistence_timeout_seconds
+    while True:
+        try:
+            if persist_timeout is not None:
+                await asyncio.wait_for(
+                    _persist_run_terminal(task, terminal), timeout=persist_timeout,
+                )
+            else:
+                await _persist_run_terminal(task, terminal)
+        except Exception:
+            if time.monotonic() >= deadline:
+                with _TASKS_LOCK:
+                    entry.terminal_persist_exhausted = True
+                logger.opt(exception=True).error(
+                    "bg task terminal persist exhausted task_id={} finish_reason={}",
+                    task.task_id,
+                    terminal.finish_reason,
+                )
+                # 诊断位落 run 行（不改状态不伪造终态）：DB 投影据此携带
+                # 「终态落库失败」标注；进程重启对账随后把遗留 run 正常收口
+                if task.run_id:
+                    from noesis.agents.background.ports import SubagentSessionPort
+                    from noesis.runtime.main_loop import run_on_main_loop
+
+                    run_on_main_loop(
+                        SubagentSessionPort.mark_terminal_persist_exhausted(task.run_id),
+                        name=f"bg-persist-exhausted:{task.run_id}",
+                    )
+                return
+            await asyncio.sleep(0.2)
+            continue
+        with _TASKS_LOCK:
+            entry.terminal_persist_ok = True
+        return
+
 def _claim_terminal_publish(entry: _TaskEntry) -> bool:
     """终态事件归属权：持锁 check-and-set，唯一持有者发布事件。
 
@@ -221,12 +273,37 @@ def _claim_terminal_publish(entry: _TaskEntry) -> bool:
         entry.terminal_published = True
         return True
 
-def _publish_terminal_events(task: BackgroundTask, terminal: TaskTerminal) -> None:
+def _publish_terminal_events(entry: "_TaskEntry", task: BackgroundTask, terminal: TaskTerminal) -> None:
     _publish_run_event(
         task, "run.finished", content=terminal.content, finish_reason=terminal.finish_reason,
     )
     _publish_task_event(task, "terminal")
-    _notify_terminal(task)
+    _notify_terminal(entry, task)
+    # shell 任务事实行终态化（无 run_id，走独立表）
+    if task.kind == "shell":
+        from noesis.agents.background.ports import ShellJobPort
+        from noesis.runtime.main_loop import run_on_main_loop
+
+        run_on_main_loop(
+            ShellJobPort.mark_terminal(
+                task_id=task.task_id,
+                status=terminal.task_status.value,
+                error=terminal.error,
+                result_tail=task.result,
+                completed_at=task.completed_at,
+            ),
+            name=f"bg-shell-terminal:{task.task_id}",
+        )
+    # 不可续终态（failed / timed_out）的未消费追加消息永无消费者：
+    # 收口即翻转 dropped（可续终态 completed / cancelled 保留，供冷恢复重载）
+    if terminal.task_status in (BgTaskStatus.FAILED, BgTaskStatus.TIMED_OUT) and task.child_session_id:
+        from noesis.agents.background.ports import SubagentSessionPort
+        from noesis.runtime.main_loop import run_on_main_loop
+
+        run_on_main_loop(
+            SubagentSessionPort.flip_pending_messages_dropped(task.child_session_id),
+            name=f"bg-pending-drop-all:{task.child_session_id}",
+        )
 
 async def settle_task(
     entry: _TaskEntry,
@@ -243,22 +320,9 @@ async def settle_task(
     task = entry.task
     terminal = _accept_terminal(entry, terminal)
     cancel_terminal_timers(entry)
-    try:
-        if persist_timeout is not None:
-            await asyncio.wait_for(
-                _persist_run_terminal(task, terminal), timeout=persist_timeout,
-            )
-        else:
-            await _persist_run_terminal(task, terminal)
-    except Exception:
-        # 落库失败不吞事件：通知与 drain 唤醒照发（否则会话队列停摆）
-        logger.opt(exception=True).error(
-            "bg task terminal persist failed task_id={} finish_reason={}",
-            task.task_id,
-            terminal.finish_reason,
-        )
+    await _persist_terminal_with_retry(entry, task, terminal, persist_timeout)
     if _claim_terminal_publish(entry):
-        _publish_terminal_events(task, terminal)
+        _publish_terminal_events(entry, task, terminal)
     return True
 
 def settle_task_sync(entry: _TaskEntry, terminal: TaskTerminal) -> bool:
@@ -274,11 +338,11 @@ def settle_task_sync(entry: _TaskEntry, terminal: TaskTerminal) -> bool:
         from noesis.runtime.main_loop import run_on_main_loop
 
         run_on_main_loop(
-            _terminal_mark_call(task, terminal),
+            _persist_terminal_with_retry(entry, task, terminal, None),
             name=f"subagent-terminal:{task.run_id}",
         )
     if _claim_terminal_publish(entry):
-        _publish_terminal_events(task, terminal)
+        _publish_terminal_events(entry, task, terminal)
     return True
 
 async def settle_stop(
@@ -346,6 +410,54 @@ async def settle_orphaned_task(entry: _TaskEntry) -> None:
         task.task_id,
         task.stop_reason or "cancelled",
         task.step_count,
+    )
+
+
+async def settle_delivery_failure(
+    entry: "_TaskEntry",
+    task: BackgroundTask,
+    exc: BaseException,
+    user_message_id: Optional[str] = None,
+) -> None:
+    """追加消息投递失败收口：不终态化任务。
+
+    - 消息行翻转 dropped（幂等：仅仍处 pending 标记的行受影响；已被
+      launch 采纳的行不受影响）
+    - 冷恢复/复活路径回退先前终态并恢复完整收口态（result/completed_at/
+      published/notified/落库旗标）——不重发终态事件
+    - 冷恢复窗口内受理的停止终态获胜：不回退、不触碰已受理终态
+      （乐观终态契约优先于回退）
+    """
+    from noesis.agents.background.ports import SubagentSessionPort
+    from noesis.runtime.main_loop import run_on_main_loop
+
+    if user_message_id:
+        flip_future = run_on_main_loop(
+            SubagentSessionPort.flip_pending_message_dropped(user_message_id),
+            name=f"bg-pending-drop:{user_message_id}",
+        )
+        if flip_future is not None:
+            # 错误路径可等待：保证调用方拿到的回退快照与 DB 翻转的先后一致
+            await asyncio.wrap_future(flip_future)
+    snapshot = entry.prev_terminal_snapshot
+    with _TASKS_LOCK:
+        if task.status.is_terminal or snapshot is None:
+            # 停止获胜（新终态已受理）或无先前终态可回退：只落 dropped
+            return
+        task.status = BgTaskStatus(snapshot["status"])
+        task.result = snapshot.get("result")
+        task.error = snapshot.get("error")
+        task.stop_reason = snapshot.get("stop_reason")
+        task.completed_at = snapshot.get("completed_at")
+        entry.terminal_published = True
+        entry.terminal_persist_ok = bool(snapshot.get("persist_ok"))
+        entry.terminal_persist_exhausted = bool(snapshot.get("persist_exhausted"))
+        entry.terminal_notified = True
+        cancel_terminal_timers(entry)
+    logger.opt(exception=True).error(
+        "bg task message delivery failed task_id={} restored_status={}",
+        task.task_id,
+        snapshot.get("status"),
     )
 
 

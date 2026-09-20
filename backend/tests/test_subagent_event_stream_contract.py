@@ -185,11 +185,11 @@ async def test_followup_endpoint_passes_through_and_maps_not_found(monkeypatch) 
 
     monkeypatch.setattr(
         SubagentSessionService,
-        "send_followup",
+        "send_message",
         AsyncMock(return_value={"session_id": "child-1", "status": "running"}),
     )
     monkeypatch.setattr(chat_api, "require_csrf", AsyncMock())
-    ok = await chat_api.send_subagent_followup(
+    ok = await chat_api.send_subagent_message(
         "child-1",
         SubagentFollowupRequest(message="再查一下"),
         http_request=SimpleNamespace(),
@@ -201,11 +201,11 @@ async def test_followup_endpoint_passes_through_and_maps_not_found(monkeypatch) 
     # 子会话缺失抛 NotFoundException，交由全局异常处理器映射 404
     monkeypatch.setattr(
         SubagentSessionService,
-        "send_followup",
+        "send_message",
         AsyncMock(side_effect=NotFoundException(message="子会话不存在")),
     )
     with pytest.raises(NotFoundException):
-        await chat_api.send_subagent_followup(
+        await chat_api.send_subagent_message(
             "child-none",
             SubagentFollowupRequest(message="再查一下"),
             http_request=SimpleNamespace(),
@@ -216,11 +216,11 @@ async def test_followup_endpoint_passes_through_and_maps_not_found(monkeypatch) 
     # 端点不再做字符串嗅探
     monkeypatch.setattr(
         SubagentSessionService,
-        "send_followup",
+        "send_message",
         AsyncMock(side_effect=ConflictException(message="任务已结束（failed），无法追加消息")),
     )
     with pytest.raises(ConflictException):
-        await chat_api.send_subagent_followup(
+        await chat_api.send_subagent_message(
             "root-none",
             SubagentFollowupRequest(message="再查一下"),
             http_request=SimpleNamespace(),
