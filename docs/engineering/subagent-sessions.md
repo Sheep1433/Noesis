@@ -19,7 +19,7 @@
 长期问题：
 
 1. 主 Agent 和子 Agent 使用两套消息渲染与 SSE 协议，Markdown、工具调用、审批和耗时都会漂移。
-2. 一个任务的多轮对话只能通过 followup 队列拼接，无法自然表达轮次、消息父子关系和重新打开。
+2. 一个任务的多轮对话只能通过追加消息队列拼接，无法自然表达轮次、消息父子关系和重新打开。
 3. 任务列表、系统通知、子会话详情互相引用 task id，最终用户看不出“哪个 Agent、哪一轮、哪条结果”。
 4. 只在抽屉打开时补拉快照，运行过程不是事件流；关闭后又丢失实时性，重新打开还要重新拼装状态。
 
@@ -37,7 +37,7 @@ profile_id       task-worker / researcher / shell
 label            用户可见名称
 icon             用户可见图标
 model            使用的模型
-capabilities     tools / approval / followup
+capabilities     tools / approval / 追加消息
 ```
 
 ### ChatSession
@@ -207,7 +207,7 @@ executor（生命周期包装：任务注册表热集、隔离事件循环、wat
 
 由此主/子能力同源：usage 双口径（父会话当轮「主+子合并」/ 各会话自身
 `extra.usage` 终态落库）、上下文快照（bridge 模型调用边界统一提取）、
-推理档位（创建时在父上下文捕获继承，followup 逐 turn 覆盖 model_id +
+推理档位（创建时在父上下文捕获继承，追加消息逐 turn 覆盖 model_id +
 reasoning_effort，参数变化即重编译 worker）。同一 run 级能力不得在主/子
 链路各写一份实现。
 
@@ -228,7 +228,7 @@ Harness「子 Agent 经 `ctx.agents.create/resume` 复用同一 runtime」的形
 行 + `bg_task_deliver` 命令，同一事务）任意实例可用，消费（入执行队列 / 冷恢复开新
 turn）仅 leader 命令消费者；命令即引用（payload 只带 id），拒绝翻转 dropped，认领
 租约回收崩溃遗留。followup 历史命名已全体退出代码（验收门槛 `grep -ri followup`
-零命中）。
+零命中），规范词统一为「追加消息」。
 
 ## 过渡层清理（已删除）
 
@@ -251,7 +251,7 @@ turn）仅 leader 命令消费者；命令即引用（payload 只带 id），拒
 
 1. 先实现 child session/run 创建与消息落库，补充 parent/child API 和根历史过滤。
 2. 实现通用 session event stream，先让主 Agent 和 child session 都能消费同一协议。
-3. 把 `start_task`、follow-up、审批迁移到 child session；删除字符串 followup 队列作为产品接口。
+3. ~~把 `start_task`、follow-up、审批迁移到 child session；删除字符串 followup 队列作为产品接口。~~（已完成：start_task/追加消息/审批均走 child session 与标准 run，字符串队列已由 pending 行 + 命令取代）
 4. 抽取共享 `ConversationView`，替换两个旧子 Agent 组件；父会话只保留卡片和状态投影。
 5. 删除 BgTask 专用 API/UI，保留 shell job 的独立 job API。
 6. 做断线恢复、并行调用、同名 Agent、多轮追问、审批、失败/超时/取消、移动端抽屉回归测试。
