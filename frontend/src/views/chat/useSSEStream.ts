@@ -11,7 +11,6 @@ import {
   getActiveRun,
   getAgentRun,
   resumeAgentRunHitl,
-  resumeAgentRunTestCase,
   stopAgentRun,
   subscribeAgentRun,
   subscribeSessionEvents,
@@ -317,12 +316,6 @@ export function useSSEStream(options: SSEStreamOptions = {}) {
   }
 
   const customEventTypes = new Set([
-    'scenario-start',
-    'testpoints-confirm-required',
-    'scene-cases',
-    'phase-start',
-    'phase-delta',
-    'phase-end',
     'hitl-required',
   ])
 
@@ -615,20 +608,6 @@ export function useSSEStream(options: SSEStreamOptions = {}) {
       finalizeSubscription(sessionId, generation)
     }
   }
-  async function resumeTestCase(sessionId: string, selectedPointNames: string[]) {
-    const runId = sessionStorage.getItem(`noesis:active-run:${sessionId}`)
-      || (activeSessionId === sessionId ? currentRunId : null)
-    if (!runId) {
-      throw new Error('当前任务已中断，无法继续生成')
-    }
-    currentRunId = runId
-    const snapshot = await resumeAgentRunTestCase(runId, selectedPointNames)
-    dispatchFrame('run-snapshot', JSON.stringify({ type: 'run-snapshot', ...snapshot }))
-    if ((!isLoading.value || activeSessionId !== sessionId) && !streamSettled) {
-      void resumeActiveRun(sessionId)
-    }
-  }
-
   async function resumeHitl(
     sessionId: string,
     body: {
@@ -804,7 +783,6 @@ export function useSSEStream(options: SSEStreamOptions = {}) {
     isLoading,
     error,
     sendMessage,
-    resumeTestCase,
     resumeHitl,
     abortStream,
     stopCurrentRun,

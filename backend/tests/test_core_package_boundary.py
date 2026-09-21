@@ -149,7 +149,6 @@ def test_noesis_top_level_uses_stable_subsystems() -> None:
     for scattered_runtime_file in ("deps.py", "hitl.py", "logging.py", "stream.py"):
         assert not (NOESIS_ROOT / scattered_runtime_file).exists()
 
-    assert (NOESIS_ROOT / "agents" / "case_generate" / "case_graph.py").is_file()
     assert (NOESIS_ROOT / "runtime" / "attachments" / "resolver.py").is_file()
     assert (NOESIS_ROOT / "runtime" / "stream.py").is_file()
 

@@ -47,7 +47,6 @@ def set_load_complete() -> None:
 async def cancel_session_agent_runs(session_id: str) -> None:
     """取消各 Agent 在 session_id 上的进行中 run（幂等；lazy import 避免与 qa_service 循环）。"""
     from noesis.services.qa.helpers import (
-        case_coordinator,
         common_agent,
         super_agent,
         fault_agent,
@@ -56,7 +55,6 @@ async def cancel_session_agent_runs(session_id: str) -> None:
     await common_agent.cancel_task(session_id)
     await fault_agent.cancel_task(session_id)
     await super_agent.cancel_task(session_id)
-    await case_coordinator.cancel_task(session_id)
     logger.info("已请求取消 session Agent runs session_id={}", session_id)
 
 

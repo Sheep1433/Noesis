@@ -7,10 +7,23 @@ from unittest.mock import MagicMock, patch
 
 import pytest
 
-from noesis.chat.event_mapping.langgraph_bridge import TASK_TOOL_NAME, LangGraphSseBridge, bridge_raw_to_sse_lines
+from noesis.chat.event_mapping.langgraph_bridge import TASK_TOOL_NAME, LangGraphSseBridge
 from noesis.errors.tool_failure import ToolInfrastructureError
-from noesis.chat.event_mapping.bridge import END_SENTINEL, HEARTBEAT_SENTINEL
 from noesis.chat.message_builder import AssistantMessageBuilder, ToolPart
+
+
+
+from noesis.chat.delivery.sse import encode_run_event as _encode_run_event
+
+
+def _raw_sse_lines(bridge, item, builder, ctx):
+    """raw 运行时事件 → SSE 行（与生产主路径同形：map_item 后经统一编码器）。"""
+    return [line for event in bridge.map_item(item, builder, ctx) for line in _encode_run_event(event)]
+
+
+def _finalize_sse_lines(bridge, finish_reason=None):
+    """bridge 终态 → SSE 行（与生产主路径同形：finalize_events 后经统一编码器）。"""
+    return [line for event in bridge.finalize_events(finish_reason=finish_reason) for line in _encode_run_event(event)]
 
 
 def _ctx() -> Dict[str, Any]:
@@ -43,7 +56,7 @@ def test_message_start_and_text_delta_shapes() -> None:
     builder = AssistantMessageBuilder(session_id="sess-1", message_id=bridge.assistant_message_id)
     ctx = _ctx()
     chunks: List[str] = []
-    chunks.extend(bridge.process_item({"type": "text-delta", "text_delta": "hi"}, builder, ctx))
+    chunks.extend(_raw_sse_lines(bridge, {"type": "text-delta", "text_delta": "hi"}, builder, ctx))
     text = "".join(chunks)
     assert text.endswith("\n\n")
     assert "event: message-start\n" in text
@@ -72,7 +85,7 @@ def test_kb_retrieval_event_preserves_sources() -> None:
         "run_id": "call-1",
         "data": {"input": {"query": "验证码"}},
     }
-    bridge.process_item(start, builder, ctx)
+    _raw_sse_lines(bridge, start, builder, ctx)
     result = {
         "results": [{
             "collection_name": "requirements",
@@ -89,7 +102,7 @@ def test_kb_retrieval_event_preserves_sources() -> None:
         "run_id": "call-1",
         "data": {"output": json.dumps(result, ensure_ascii=False)},
     }
-    retrieval_lines = bridge.process_item(end, builder, ctx)
+    retrieval_lines = _raw_sse_lines(bridge, end, builder, ctx)
     retrieval_events = _data_json_objects("".join(retrieval_lines))
     retrieval = next(item for item in retrieval_events if item["type"] == "retrieval-results-available")
     assert retrieval["tool_call_id"] == "call-1"
@@ -103,7 +116,7 @@ def test_tool_provider_metadata_is_internal_only() -> None:
         session_id="sess-provider", message_id=bridge.assistant_message_id
     )
     ctx = _ctx()
-    lines = bridge.process_item(
+    lines = _raw_sse_lines(bridge, 
         {
             "event": "on_tool_start",
             "name": "search_knowledge_base",
@@ -130,7 +143,7 @@ def test_reasoning_can_continue_after_retrieval_result() -> None:
         message_id=bridge.assistant_message_id,
     )
     ctx = _ctx()
-    bridge.process_item(
+    _raw_sse_lines(bridge, 
         {
             "event": "on_tool_start",
             "name": "web_search",
@@ -140,7 +153,7 @@ def test_reasoning_can_continue_after_retrieval_result() -> None:
         builder,
         ctx,
     )
-    bridge.process_item(
+    _raw_sse_lines(bridge, 
         {
             "event": "on_tool_end",
             "name": "web_search",
@@ -167,7 +180,7 @@ def test_reasoning_can_continue_after_retrieval_result() -> None:
         content = ""
         additional_kwargs = {"reasoning_content": "继续分析检索结果"}
 
-    lines = bridge.process_item(
+    lines = _raw_sse_lines(bridge, 
         {
             "event": "on_chat_model_stream",
             "run_id": "run-after-search",
@@ -191,7 +204,7 @@ def test_message_start_does_not_include_client_stop_token() -> None:
     bridge = LangGraphSseBridge("sess-stop")
     builder = AssistantMessageBuilder(session_id="sess-stop", message_id=bridge.assistant_message_id)
     ctx = _ctx()
-    text = "".join(bridge.process_item({"type": "text-delta", "text_delta": "x"}, builder, ctx))
+    text = "".join(_raw_sse_lines(bridge, {"type": "text-delta", "text_delta": "x"}, builder, ctx))
     objs = _data_json_objects(text)
     assert objs[0]["type"] == "message-start"
     assert "stop_token" not in objs[0]
@@ -201,7 +214,7 @@ def test_message_start_with_langfuse_hint() -> None:
     bridge = LangGraphSseBridge("sess-lf", emit_langfuse_session_hint=True)
     builder = AssistantMessageBuilder(session_id="sess-lf", message_id=bridge.assistant_message_id)
     ctx = _ctx()
-    text = "".join(bridge.process_item({"type": "text-delta", "text_delta": "x"}, builder, ctx))
+    text = "".join(_raw_sse_lines(bridge, {"type": "text-delta", "text_delta": "x"}, builder, ctx))
     objs = _data_json_objects(text)
     assert objs[0]["type"] == "message-start"
     assert objs[0]["langfuse_session_id"] == "sess-lf"
@@ -214,10 +227,10 @@ def test_context_update_emitted_on_model_end() -> None:
     builder = AssistantMessageBuilder(session_id="sess-usage-ctx", message_id=bridge.assistant_message_id)
     ctx = _ctx()
     parts: List[str] = []
-    parts.extend(bridge.process_item({"type": "text-delta", "text_delta": "hi"}, builder, ctx))
+    parts.extend(_raw_sse_lines(bridge, {"type": "text-delta", "text_delta": "hi"}, builder, ctx))
     with patch("noesis.chat.event_mapping.langgraph_bridge.resolve_context_max_tokens", return_value=128000):
         parts.extend(
-            bridge.process_item(
+            _raw_sse_lines(bridge, 
                 {
                     "event": "on_chat_model_end",
                     "data": {"output": MagicMock(usage_metadata={"input_tokens": 10, "output_tokens": 5})},
@@ -241,7 +254,7 @@ def test_context_update_event_shape() -> None:
     ctx = _ctx()
     with patch("noesis.chat.event_mapping.langgraph_bridge.resolve_context_max_tokens", return_value=128000):
         blob = "".join(
-            bridge.process_item(
+            _raw_sse_lines(bridge, 
                 {
                     "event": "on_chat_model_end",
                     "data": {"output": MagicMock(usage_metadata={"input_tokens": 87040, "output_tokens": 100})},
@@ -284,7 +297,7 @@ def test_context_update_is_bound_to_the_current_model_run() -> None:
     with patch.object(ContextMetricsRegistry, "put", classmethod(interleave_other_run)):
         with patch("noesis.chat.event_mapping.langgraph_bridge.resolve_context_max_tokens", return_value=128000):
             blob = "".join(
-                bridge.process_item(
+                _raw_sse_lines(bridge, 
                     {
                         "event": "on_chat_model_end",
                         "run_id": "run-current",
@@ -305,9 +318,9 @@ def test_finish_usage_and_done() -> None:
     builder = AssistantMessageBuilder(session_id="sess-2", message_id=bridge.assistant_message_id)
     ctx = _ctx()
     parts: List[str] = []
-    parts.extend(bridge.process_item({"type": "text-delta", "text_delta": "x"}, builder, ctx))
+    parts.extend(_raw_sse_lines(bridge, {"type": "text-delta", "text_delta": "x"}, builder, ctx))
     parts.extend(
-        bridge.process_item(
+        _raw_sse_lines(bridge, 
             {
                 "type": "finish",
                 "finish_reason": "stop",
@@ -317,7 +330,7 @@ def test_finish_usage_and_done() -> None:
             ctx,
         )
     )
-    parts.extend(bridge.finalize())
+    parts.extend(_finalize_sse_lines(bridge))
     blob = "".join(parts)
     assert "data: [DONE]" in blob
     finish_objs = [o for o in _data_json_objects(blob) if o.get("type") == "finish"]
@@ -332,55 +345,11 @@ def test_error_event_type() -> None:
     bridge = LangGraphSseBridge("sess-3")
     builder = AssistantMessageBuilder(session_id="sess-3", message_id=bridge.assistant_message_id)
     ctx = _ctx()
-    blob = "".join(bridge.process_item({"type": "__tw_error__", "content": "oops"}, builder, ctx))
+    blob = "".join(_raw_sse_lines(bridge, {"type": "__tw_error__", "content": "oops"}, builder, ctx))
     assert "event: error\n" in blob
     err = [o for o in _data_json_objects(blob) if o.get("type") == "error"][0]
     assert err["error"] == "操作失败，请稍后重试。"
     assert err["message_id"] == bridge.assistant_message_id
-
-
-def test_phase_start_end_through_bridge() -> None:
-    bridge = LangGraphSseBridge("sess-ph")
-    builder = AssistantMessageBuilder(session_id="sess-ph", message_id=bridge.assistant_message_id)
-    ctx = _ctx()
-    parts: List[str] = []
-    parts.extend(
-        bridge.process_item(
-            {"type": "phase-start", "phase_id": "parse_requirements", "title": "解析需求"},
-            builder,
-            ctx,
-        )
-    )
-    parts.extend(
-        bridge.process_item(
-            {
-                "type": "phase-delta",
-                "phase_id": "parse_requirements",
-                "text_delta": "上下文已就绪",
-            },
-            builder,
-            ctx,
-        )
-    )
-    parts.extend(
-        bridge.process_item(
-            {"type": "phase-end", "phase_id": "parse_requirements", "ok": True},
-            builder,
-            ctx,
-        )
-    )
-    blob = "".join(parts)
-    objs = _data_json_objects(blob)
-    ps = [o for o in objs if o.get("type") == "phase-start"][0]
-    assert ps["phase_id"] == "parse_requirements"
-    assert ps["title"] == "解析需求"
-    assert ps["message_id"] == bridge.assistant_message_id
-    pd = [o for o in objs if o.get("type") == "phase-delta"][0]
-    assert pd["text_delta"] == "上下文已就绪"
-    assert pd["phase_id"] == "parse_requirements"
-    pend = [o for o in objs if o.get("type") == "phase-end"][0]
-    assert pend["phase_id"] == "parse_requirements"
-    assert pend["ok"] is True
 
 
 def test_tool_output_duration_ms() -> None:
@@ -390,7 +359,7 @@ def test_tool_output_duration_ms() -> None:
     run_id = "run-tool-1"
     parts: List[str] = []
     parts.extend(
-        bridge.process_item(
+        _raw_sse_lines(bridge, 
             {
                 "event": "on_tool_start",
                 "name": "search",
@@ -402,7 +371,7 @@ def test_tool_output_duration_ms() -> None:
         )
     )
     parts.extend(
-        bridge.process_item(
+        _raw_sse_lines(bridge, 
             {
                 "event": "on_tool_end",
                 "name": "search",
@@ -431,7 +400,7 @@ def test_tool_start_omits_injected_runtime_from_sse_and_builder() -> None:
         session_id="sess-runtime",
         message_id=bridge.assistant_message_id,
     )
-    lines = bridge.process_item(
+    lines = _raw_sse_lines(bridge, 
         {
             "event": "on_tool_start",
             "name": "web_search",
@@ -473,7 +442,7 @@ def test_chat_model_end_emits_text_delta_for_non_streamed_output() -> None:
         usage_metadata = {"input_tokens": 706, "output_tokens": 22, "total_tokens": 728}
 
     parts.extend(
-        bridge.process_item(
+        _raw_sse_lines(bridge, 
             {
                 "event": "on_chat_model_end",
                 "run_id": "run-end-1",
@@ -483,8 +452,8 @@ def test_chat_model_end_emits_text_delta_for_non_streamed_output() -> None:
             ctx,
         )
     )
-    parts.extend(bridge.process_item({"type": "__tw_finish__"}, builder, ctx))
-    parts.extend(bridge.finalize())
+    parts.extend(_raw_sse_lines(bridge, {"type": "__tw_finish__"}, builder, ctx))
+    parts.extend(_finalize_sse_lines(bridge))
 
     objs = _data_json_objects("".join(parts))
     td = [o for o in objs if o.get("type") == "text-delta"]
@@ -511,7 +480,7 @@ def test_chat_model_end_does_not_duplicate_streamed_text() -> None:
         usage_metadata = {"input_tokens": 1, "output_tokens": 2, "total_tokens": 3}
 
     parts.extend(
-        bridge.process_item(
+        _raw_sse_lines(bridge, 
             {
                 "event": "on_chat_model_stream",
                 "run_id": "run-dedup",
@@ -522,7 +491,7 @@ def test_chat_model_end_does_not_duplicate_streamed_text() -> None:
         )
     )
     parts.extend(
-        bridge.process_item(
+        _raw_sse_lines(bridge, 
             {
                 "event": "on_chat_model_end",
                 "run_id": "run-dedup",
@@ -553,7 +522,7 @@ def test_reasoning_stream_then_text_closes_reasoning() -> None:
         additional_kwargs = {}
 
     parts.extend(
-        bridge.process_item(
+        _raw_sse_lines(bridge, 
             {
                 "event": "on_chat_model_stream",
                 "run_id": "run-r1",
@@ -564,7 +533,7 @@ def test_reasoning_stream_then_text_closes_reasoning() -> None:
         )
     )
     parts.extend(
-        bridge.process_item(
+        _raw_sse_lines(bridge, 
             {
                 "event": "on_chat_model_stream",
                 "run_id": "run-r1",
@@ -597,7 +566,7 @@ def test_subagent_child_tool_gets_parent_task_call_id() -> None:
 
     parts: List[str] = []
     parts.extend(
-        bridge.process_item(
+        _raw_sse_lines(bridge, 
             {
                 "event": "on_tool_start",
                 "name": TASK_TOOL_NAME,
@@ -616,7 +585,7 @@ def test_subagent_child_tool_gets_parent_task_call_id() -> None:
         )
     )
     parts.extend(
-        bridge.process_item(
+        _raw_sse_lines(bridge, 
             {
                 "event": "on_tool_start",
                 "name": "read",
@@ -640,7 +609,7 @@ def test_subagent_child_tool_gets_parent_task_call_id() -> None:
     assert read_part.parent_task_call_id == task_avail["tool_call_id"]
 
     parts.extend(
-        bridge.process_item(
+        _raw_sse_lines(bridge, 
             {
                 "event": "on_tool_end",
                 "name": TASK_TOOL_NAME,
@@ -664,7 +633,7 @@ def test_subagent_text_delta_gets_parent_task_call_id() -> None:
     task_run = "run-task-text"
     llm_run = "run-llm-sub"
 
-    bridge.process_item(
+    _raw_sse_lines(bridge, 
         {
             "event": "on_tool_start",
             "name": TASK_TOOL_NAME,
@@ -680,7 +649,7 @@ def test_subagent_text_delta_gets_parent_task_call_id() -> None:
         content = "好的，我先检查根目录。"
 
     text = "".join(
-        bridge.process_item(
+        _raw_sse_lines(bridge, 
             {
                 "event": "on_chat_model_stream",
                 "name": "ChatOpenAI",
@@ -709,7 +678,7 @@ def test_parallel_tasks_parent_task_call_id_not_cross_wired() -> None:
     run_a, run_b = "run-task-a", "run-task-b"
     run_child_b = "run-read-b"
 
-    bridge.process_item(
+    _raw_sse_lines(bridge, 
         {
             "event": "on_tool_start",
             "name": TASK_TOOL_NAME,
@@ -720,7 +689,7 @@ def test_parallel_tasks_parent_task_call_id_not_cross_wired() -> None:
         builder,
         ctx,
     )
-    bridge.process_item(
+    _raw_sse_lines(bridge, 
         {
             "event": "on_tool_start",
             "name": TASK_TOOL_NAME,
@@ -731,7 +700,7 @@ def test_parallel_tasks_parent_task_call_id_not_cross_wired() -> None:
         builder,
         ctx,
     )
-    bridge.process_item(
+    _raw_sse_lines(bridge, 
         {
             "event": "on_tool_start",
             "name": "read",
@@ -755,22 +724,11 @@ def test_parallel_tasks_parent_task_call_id_not_cross_wired() -> None:
     assert read_saved["parent_task_call_id"] == task_b["tool_call_id"]
 
 
-def test_bridge_raw_to_sse_lines_skips_end_sentinel() -> None:
-    bridge = LangGraphSseBridge("sess-sentinel")
-    ctx = _ctx()
-    assert bridge_raw_to_sse_lines(
-        END_SENTINEL, bridge, None, ctx, keepalive_comment=": keepalive\n\n",
-    ) is None
-    assert bridge_raw_to_sse_lines(
-        HEARTBEAT_SENTINEL, bridge, None, ctx, keepalive_comment=": keepalive\n\n",
-    ) == [": keepalive\n\n"]
-
-
 def test_execute_nonzero_exit_is_projected_as_tool_error() -> None:
     bridge = LangGraphSseBridge("sess-exit")
     builder = AssistantMessageBuilder(session_id="sess-exit", message_id=bridge.assistant_message_id)
     ctx = _ctx()
-    bridge.process_item(
+    _raw_sse_lines(bridge, 
         {
             "event": "on_tool_start",
             "name": "execute",
@@ -785,7 +743,7 @@ def test_execute_nonzero_exit_is_projected_as_tool_error() -> None:
         status = "success"
         content = "\n[Command failed with exit code 1]"
 
-    lines = bridge.process_item(
+    lines = _raw_sse_lines(bridge, 
         {
             "event": "on_tool_end",
             "name": "execute",
@@ -823,7 +781,7 @@ def test_execute_uses_exit_protocol_not_output_words(
     bridge = LangGraphSseBridge("sess-exit-protocol")
     builder = AssistantMessageBuilder()
     ctx = _ctx()
-    bridge.process_item({
+    _raw_sse_lines(bridge, {
         "event": "on_tool_start",
         "name": "execute",
         "run_id": "run-exec-protocol",
@@ -836,7 +794,7 @@ def test_execute_uses_exit_protocol_not_output_words(
         def __init__(self, value: str) -> None:
             self.content = value
 
-    lines = bridge.process_item({
+    lines = _raw_sse_lines(bridge, {
         "event": "on_tool_end",
         "name": "execute",
         "run_id": "run-exec-protocol",
@@ -854,12 +812,12 @@ def test_abort_with_error_reason_emits_error_without_success_finish() -> None:
     bridge = LangGraphSseBridge("sess-abort-error")
     builder = AssistantMessageBuilder()
     ctx = _ctx()
-    first = bridge.process_item(
+    first = _raw_sse_lines(bridge, 
         {"type": "abort", "finish_reason": "error", "content": "internal stack"},
         builder,
         ctx,
     )
-    final = bridge.finalize()
+    final = _finalize_sse_lines(bridge)
     blob = "".join(first + final)
     assert "event: error" in blob
     assert "event: finish" not in blob
@@ -876,7 +834,7 @@ def test_tool_error_uses_inflight_tool_call_id() -> None:
 
     parts: list[str] = []
     parts.extend(
-        bridge.process_item(
+        _raw_sse_lines(bridge, 
             {
                 "event": "on_tool_start",
                 "name": "bash",
@@ -888,7 +846,7 @@ def test_tool_error_uses_inflight_tool_call_id() -> None:
         )
     )
     parts.extend(
-        bridge.process_item(
+        _raw_sse_lines(bridge, 
             {
                 "event": "on_tool_error",
                 "name": "bash",
@@ -934,7 +892,7 @@ def test_parallel_tool_error_uses_run_mapping_without_overwriting_sibling() -> N
         ("web_search", "run-web", "call-web"),
         ("search_knowledge_base", "run-kb", "call-kb"),
     ):
-        bridge.process_item(
+        _raw_sse_lines(bridge, 
             {
                 "event": "on_tool_start",
                 "name": name,
@@ -945,7 +903,7 @@ def test_parallel_tool_error_uses_run_mapping_without_overwriting_sibling() -> N
             ctx,
         )
 
-    bridge.process_item(
+    _raw_sse_lines(bridge, 
         {
             "event": "on_tool_error",
             "name": "web_search",
@@ -955,7 +913,7 @@ def test_parallel_tool_error_uses_run_mapping_without_overwriting_sibling() -> N
         builder,
         ctx,
     )
-    bridge.process_item(
+    _raw_sse_lines(bridge, 
         {
             "event": "on_tool_end",
             "name": "search_knowledge_base",
@@ -991,7 +949,7 @@ def test_tool_output_error_frame_golden_fields() -> None:
 
     parts: list[str] = []
     parts.extend(
-        bridge.process_item(
+        _raw_sse_lines(bridge, 
             {
                 "event": "on_tool_start",
                 "name": "bash",
@@ -1003,7 +961,7 @@ def test_tool_output_error_frame_golden_fields() -> None:
         )
     )
     parts.extend(
-        bridge.process_item(
+        _raw_sse_lines(bridge, 
             {
                 "event": "on_tool_end",
                 "name": "bash",
@@ -1038,7 +996,7 @@ def test_task_tool_success_with_child_error_keeps_parent_success() -> None:
     task_run = "run-task-child"
     child_run = "run-bash-child"
 
-    bridge.process_item(
+    _raw_sse_lines(bridge, 
         {
             "event": "on_tool_start",
             "name": TASK_TOOL_NAME,
@@ -1049,7 +1007,7 @@ def test_task_tool_success_with_child_error_keeps_parent_success() -> None:
         ctx,
     )
     task_tc = ctx["run_id_to_tool_call_id"][task_run]
-    bridge.process_item(
+    _raw_sse_lines(bridge, 
         {
             "event": "on_tool_start",
             "name": "bash",
@@ -1060,7 +1018,7 @@ def test_task_tool_success_with_child_error_keeps_parent_success() -> None:
         builder,
         ctx,
     )
-    bridge.process_item(
+    _raw_sse_lines(bridge, 
         {
             "event": "on_tool_error",
             "name": "bash",
@@ -1072,7 +1030,7 @@ def test_task_tool_success_with_child_error_keeps_parent_success() -> None:
         ctx,
     )
     blob = "".join(
-        bridge.process_item(
+        _raw_sse_lines(bridge, 
             {
                 "event": "on_tool_end",
                 "name": TASK_TOOL_NAME,
@@ -1100,7 +1058,7 @@ def test_task_tool_child_error_without_parent_result_maps_subagent_failure() -> 
     task_run = "run-task-child-fallback"
     child_run = "run-bash-child-fallback"
 
-    bridge.process_item(
+    _raw_sse_lines(bridge, 
         {
             "event": "on_tool_start",
             "name": TASK_TOOL_NAME,
@@ -1110,7 +1068,7 @@ def test_task_tool_child_error_without_parent_result_maps_subagent_failure() -> 
         builder,
         ctx,
     )
-    bridge.process_item(
+    _raw_sse_lines(bridge, 
         {
             "event": "on_tool_start",
             "name": "bash",
@@ -1121,7 +1079,7 @@ def test_task_tool_child_error_without_parent_result_maps_subagent_failure() -> 
         builder,
         ctx,
     )
-    bridge.process_item(
+    _raw_sse_lines(bridge, 
         {
             "event": "on_tool_error",
             "name": "bash",
@@ -1133,7 +1091,7 @@ def test_task_tool_child_error_without_parent_result_maps_subagent_failure() -> 
         ctx,
     )
     blob = "".join(
-        bridge.process_item(
+        _raw_sse_lines(bridge, 
             {
                 "event": "on_tool_end",
                 "name": TASK_TOOL_NAME,
@@ -1159,7 +1117,7 @@ def test_task_tool_failed_maps_subagent_failure() -> None:
     ctx = _ctx()
     task_run = "run-task-fail"
 
-    bridge.process_item(
+    _raw_sse_lines(bridge, 
         {
             "event": "on_tool_start",
             "name": TASK_TOOL_NAME,
@@ -1170,7 +1128,7 @@ def test_task_tool_failed_maps_subagent_failure() -> None:
         ctx,
     )
     blob = "".join(
-        bridge.process_item(
+        _raw_sse_lines(bridge, 
             {
                 "event": "on_tool_end",
                 "name": TASK_TOOL_NAME,
@@ -1198,7 +1156,7 @@ def test_reasoning_disabled_when_show_thinking_off() -> None:
         additional_kwargs = {"reasoning_content": "hidden"}
 
     text = "".join(
-        bridge.process_item(
+        _raw_sse_lines(bridge, 
             {
                 "event": "on_chat_model_stream",
                 "run_id": "run-x",
@@ -1229,10 +1187,10 @@ def test_parallel_tools_same_model_step_share_step_id() -> None:
     ctx = _ctx()
 
     # step 1: model start → 两个并行 tool start
-    bridge.process_item({"event": "on_chat_model_start", "run_id": "m-1"}, builder, ctx)
+    _raw_sse_lines(bridge, {"event": "on_chat_model_start", "run_id": "m-1"}, builder, ctx)
     parts: List[str] = []
-    parts.extend(bridge.process_item(_tool_start_event("web_search", "t-1a", "call-1a"), builder, ctx))
-    parts.extend(bridge.process_item(_tool_start_event("web_fetch", "t-1b", "call-1b"), builder, ctx))
+    parts.extend(_raw_sse_lines(bridge, _tool_start_event("web_search", "t-1a", "call-1a"), builder, ctx))
+    parts.extend(_raw_sse_lines(bridge, _tool_start_event("web_fetch", "t-1b", "call-1b"), builder, ctx))
     objs = _data_json_objects("".join(parts))
     avail = [o for o in objs if o["type"] == "tool-input-available"]
     assert len(avail) == 2
@@ -1240,7 +1198,7 @@ def test_parallel_tools_same_model_step_share_step_id() -> None:
 
     # tool-output-available 也带同一 step_id
     out_parts: List[str] = []
-    out_parts.extend(bridge.process_item(
+    out_parts.extend(_raw_sse_lines(bridge, 
         {"event": "on_tool_end", "name": "web_search", "run_id": "t-1a",
          "data": {"output": "ok"}}, builder, ctx,
     ))
@@ -1249,9 +1207,9 @@ def test_parallel_tools_same_model_step_share_step_id() -> None:
     assert out_avail[0]["step_id"] == "root:1"
 
     # step 2: 新 model start → 单个 tool，step_id 递增
-    bridge.process_item({"event": "on_chat_model_start", "run_id": "m-2"}, builder, ctx)
+    _raw_sse_lines(bridge, {"event": "on_chat_model_start", "run_id": "m-2"}, builder, ctx)
     parts2: List[str] = []
-    parts2.extend(bridge.process_item(_tool_start_event("read", "t-2a", "call-2a"), builder, ctx))
+    parts2.extend(_raw_sse_lines(bridge, _tool_start_event("read", "t-2a", "call-2a"), builder, ctx))
     objs2 = _data_json_objects("".join(parts2))
     avail2 = [o for o in objs2 if o["type"] == "tool-input-available"]
     assert avail2[0]["step_id"] == "root:2"
@@ -1262,8 +1220,8 @@ def test_single_tool_still_gets_step_id() -> None:
     bridge = LangGraphSseBridge("sess-step-single")
     builder = AssistantMessageBuilder(session_id="sess-step-single", message_id=bridge.assistant_message_id)
     ctx = _ctx()
-    bridge.process_item({"event": "on_chat_model_start", "run_id": "m-1"}, builder, ctx)
-    parts = bridge.process_item(_tool_start_event("read", "t-1", "call-1"), builder, ctx)
+    _raw_sse_lines(bridge, {"event": "on_chat_model_start", "run_id": "m-1"}, builder, ctx)
+    parts = _raw_sse_lines(bridge, _tool_start_event("read", "t-1", "call-1"), builder, ctx)
     avail = next(o for o in _data_json_objects("".join(parts)) if o["type"] == "tool-input-available")
     assert avail["step_id"] == "root:1"
 
@@ -1276,9 +1234,9 @@ def test_subagent_parallel_tools_step_id_scoped_by_task() -> None:
 
     task_run = "run-task-s"
     # 顶层 model step + task tool
-    bridge.process_item({"event": "on_chat_model_start", "run_id": "m-top"}, builder, ctx)
+    _raw_sse_lines(bridge, {"event": "on_chat_model_start", "run_id": "m-top"}, builder, ctx)
     parts: List[str] = []
-    parts.extend(bridge.process_item(
+    parts.extend(_raw_sse_lines(bridge, 
         {"event": "on_tool_start", "name": TASK_TOOL_NAME, "run_id": task_run, "parent_ids": [],
          "data": {"input": {"description": "d", "subagent_type": "general-purpose", "prompt": "p"}}},
         builder, ctx,
@@ -1287,12 +1245,12 @@ def test_subagent_parallel_tools_step_id_scoped_by_task() -> None:
     task_call_id = task_avail["tool_call_id"]
 
     # 子 Agent 内部 model step + 两个并行 tool
-    bridge.process_item({"event": "on_chat_model_start", "run_id": "m-sub", "parent_ids": [task_run]}, builder, ctx)
+    _raw_sse_lines(bridge, {"event": "on_chat_model_start", "run_id": "m-sub", "parent_ids": [task_run]}, builder, ctx)
     sub_parts: List[str] = []
-    sub_parts.extend(bridge.process_item(
+    sub_parts.extend(_raw_sse_lines(bridge, 
         _tool_start_event("read", "r-sub-1", "call-sub-1", parent_ids=[task_run]), builder, ctx,
     ))
-    sub_parts.extend(bridge.process_item(
+    sub_parts.extend(_raw_sse_lines(bridge, 
         _tool_start_event("grep", "r-sub-2", "call-sub-2", parent_ids=[task_run]), builder, ctx,
     ))
     sub_objs = _data_json_objects("".join(sub_parts))
@@ -1321,7 +1279,7 @@ def test_subagent_reasoning_end_keeps_part_identity_and_parent() -> None:
         content = "回答"
         additional_kwargs = {}
 
-    output = bridge.process_item(
+    output = _raw_sse_lines(bridge, 
         {
             "event": "on_chat_model_stream",
             "run_id": "model-sub",
@@ -1331,7 +1289,7 @@ def test_subagent_reasoning_end_keeps_part_identity_and_parent() -> None:
         builder,
         ctx,
     )
-    output.extend(bridge.process_item(
+    output.extend(_raw_sse_lines(bridge, 
         {
             "event": "on_chat_model_stream",
             "run_id": "model-sub",
@@ -1353,9 +1311,9 @@ def test_step_id_survives_builder_persistence() -> None:
     bridge = LangGraphSseBridge("sess-step-persist")
     builder = AssistantMessageBuilder(session_id="sess-step-persist", message_id=bridge.assistant_message_id)
     ctx = _ctx()
-    bridge.process_item({"event": "on_chat_model_start", "run_id": "m-1"}, builder, ctx)
-    bridge.process_item(_tool_start_event("read", "t-1", "call-1"), builder, ctx)
-    bridge.process_item(_tool_start_event("read", "t-2", "call-2"), builder, ctx)
+    _raw_sse_lines(bridge, {"event": "on_chat_model_start", "run_id": "m-1"}, builder, ctx)
+    _raw_sse_lines(bridge, _tool_start_event("read", "t-1", "call-1"), builder, ctx)
+    _raw_sse_lines(bridge, _tool_start_event("read", "t-2", "call-2"), builder, ctx)
 
     dumped = builder.to_dict()
     restored = MessageContent.from_dict(dumped)
@@ -1371,7 +1329,7 @@ def test_model_fallback_event_then_finish_does_not_emit_duplicate_finish() -> No
     builder = AssistantMessageBuilder(session_id="sess-fb", message_id=bridge.assistant_message_id)
     ctx = _ctx()
 
-    lines_before = bridge.process_item(
+    lines_before = _raw_sse_lines(bridge, 
         {
             "event": "on_custom_event",
             "name": "noesis_model_fallback",
@@ -1388,7 +1346,7 @@ def test_model_fallback_event_then_finish_does_not_emit_duplicate_finish() -> No
     # fallback 发了 error 事件
     assert any('"error"' in line for line in lines_before)
 
-    lines_after = bridge.process_item(
+    lines_after = _raw_sse_lines(bridge, 
         {"type": "__tw_finish__", "finish_reason": "stop"}, builder, ctx,
     )
     # __tw_finish__ 不再发 finish 帧（幂等 guard）
@@ -1402,7 +1360,7 @@ def test_noesis_compaction_event_emits_run_status_sse() -> None:
     ctx = _ctx()
 
     # started
-    lines = bridge.process_item(
+    lines = _raw_sse_lines(bridge, 
         {"event": "on_custom_event", "name": "noesis_compaction",
          "data": {"compaction_type": "started", "mode": "auto", "message": "正在压缩对话上下文…", "pre_tokens": 180000}},
         builder, ctx,
@@ -1413,7 +1371,7 @@ def test_noesis_compaction_event_emits_run_status_sse() -> None:
     assert started["mode"] == "auto"
 
     # completed
-    lines = bridge.process_item(
+    lines = _raw_sse_lines(bridge, 
         {"event": "on_custom_event", "name": "noesis_compaction",
          "data": {"compaction_type": "completed", "mode": "auto", "message": "已压缩 16 条对话历史", "pre_tokens": 180000, "post_tokens": 50000, "messages_summarized": 16}},
         builder, ctx,
@@ -1424,7 +1382,7 @@ def test_noesis_compaction_event_emits_run_status_sse() -> None:
     assert completed["messages_summarized"] == 16
 
     # failed
-    lines = bridge.process_item(
+    lines = _raw_sse_lines(bridge, 
         {"event": "on_custom_event", "name": "noesis_compaction",
          "data": {"compaction_type": "failed", "mode": "auto", "reason": "summary_invalid"}},
         builder, ctx,
@@ -1444,12 +1402,12 @@ def test_compaction_boundary_closes_previous_text_part() -> None:
     )
     ctx = _ctx()
 
-    bridge.process_item(
+    _raw_sse_lines(bridge, 
         {"type": "text-delta", "text_delta": "压缩前的正文"},
         builder,
         ctx,
     )
-    lines = bridge.process_item(
+    lines = _raw_sse_lines(bridge, 
         {
             "event": "on_custom_event",
             "name": "noesis_compaction",
@@ -1476,7 +1434,7 @@ def test_noesis_model_fallback_emits_error_and_marks_finished() -> None:
     builder = AssistantMessageBuilder(session_id="sess-fb", message_id=bridge.assistant_message_id)
     ctx = _ctx()
 
-    lines = bridge.process_item(
+    lines = _raw_sse_lines(bridge, 
         {"event": "on_custom_event", "name": "noesis_model_fallback",
          "data": {"content": "API 额度不足，请检查 provider 账户后重试。"}},
         builder, ctx,
@@ -1534,7 +1492,7 @@ def _model_call_sequence(
     _FakeOutput.response_metadata = {"finish_reason": finish_reason}
 
     lines.extend(
-        bridge.process_item(
+        _raw_sse_lines(bridge, 
             {
                 "event": "on_chat_model_start",
                 "run_id": run_id,
@@ -1546,7 +1504,7 @@ def _model_call_sequence(
         )
     )
     lines.extend(
-        bridge.process_item(
+        _raw_sse_lines(bridge, 
             {
                 "event": "on_chat_model_stream",
                 "run_id": run_id,
@@ -1557,7 +1515,7 @@ def _model_call_sequence(
         )
     )
     lines.extend(
-        bridge.process_item(
+        _raw_sse_lines(bridge, 
             {
                 "event": "on_chat_model_end",
                 "run_id": run_id,
@@ -1597,8 +1555,8 @@ def test_model_call_records_accumulate_with_usage_and_finish_frame() -> None:
             finish_reason="stop",
         )
     )
-    parts.extend(bridge.process_item({"type": "__tw_finish__"}, builder, ctx))
-    parts.extend(bridge.finalize())
+    parts.extend(_raw_sse_lines(bridge, {"type": "__tw_finish__"}, builder, ctx))
+    parts.extend(_finalize_sse_lines(bridge))
 
     assert [c["step"] for c in bridge.message_model_calls] == [1, 2]
     first, second = bridge.message_model_calls
@@ -1669,8 +1627,8 @@ def test_finish_reason_promotes_last_call_provider_length() -> None:
             usage={"input_tokens": 3, "output_tokens": 4}, finish_reason="length",
         )
     )
-    parts.extend(bridge.process_item({"type": "__tw_finish__"}, builder, ctx))
-    parts.extend(bridge.finalize())
+    parts.extend(_raw_sse_lines(bridge, {"type": "__tw_finish__"}, builder, ctx))
+    parts.extend(_finalize_sse_lines(bridge))
 
     fin = [o for o in _data_json_objects("".join(parts)) if o.get("type") == "finish"][-1]
     assert fin["finish_reason"] == "length_stop"
@@ -1694,8 +1652,8 @@ def test_finish_reason_promotes_last_call_provider_length() -> None:
             usage={"input_tokens": 3, "output_tokens": 4}, finish_reason="stop",
         )
     )
-    parts2.extend(bridge2.process_item({"type": "__tw_finish__"}, builder2, ctx2))
-    parts2.extend(bridge2.finalize())
+    parts2.extend(_raw_sse_lines(bridge2, {"type": "__tw_finish__"}, builder2, ctx2))
+    parts2.extend(_finalize_sse_lines(bridge2))
     fin2 = [o for o in _data_json_objects("".join(parts2)) if o.get("type") == "finish"][-1]
     assert fin2["finish_reason"] == "stop"
     assert bridge2.message_model_calls[0]["finish_reason"] == "length"
@@ -1725,8 +1683,8 @@ def test_finish_reason_gateway_duplication_collapsed() -> None:
             finish_reason="lengthlength",
         )
     )
-    parts.extend(bridge.process_item({"type": "__tw_finish__"}, builder, ctx))
-    parts.extend(bridge.finalize())
+    parts.extend(_raw_sse_lines(bridge, {"type": "__tw_finish__"}, builder, ctx))
+    parts.extend(_finalize_sse_lines(bridge))
 
     assert [c["finish_reason"] for c in bridge.message_model_calls] == ["tool_calls", "length"]
     fin = [o for o in _data_json_objects("".join(parts)) if o.get("type") == "finish"][-1]
@@ -1750,7 +1708,7 @@ def test_model_attempt_ordinal_is_per_call() -> None:
     )
     # att-1 失败后中间件产出的重试事件（结构与 _build_retry_event 一致）
     parts.extend(
-        bridge.process_item(
+        _raw_sse_lines(bridge, 
             {
                 "event": "on_custom_event",
                 "name": "noesis_model_retry",
@@ -1783,7 +1741,7 @@ def test_model_attempt_ordinal_is_per_call() -> None:
             usage={"input_tokens": 3, "output_tokens": 3}, finish_reason="stop",
         )
     )
-    parts.extend(bridge.finalize())
+    parts.extend(_finalize_sse_lines(bridge))
 
     assert [c["attempt"] for c in bridge.message_model_calls] == [1, 2, 1]
 
@@ -1793,8 +1751,8 @@ def _stream_attempt_partial(bridge, builder, ctx) -> str:
     + 本次尝试经 wire 帧/ctx 缓冲——尝试内容不进 builder，flush 点意味着
     调用已成功）。返回本次尝试铸造的 text part id。"""
     builder.append_tool("web_search", {"query": "q"}, tool_call_id="b1")
-    bridge.process_item({"event": "on_chat_model_start", "run_id": "model-fail", "data": {}}, builder, ctx)
-    out = bridge.process_item({"type": "text-delta", "text_delta": "Phase 3-5 完成。"}, builder, ctx)
+    _raw_sse_lines(bridge, {"event": "on_chat_model_start", "run_id": "model-fail", "data": {}}, builder, ctx)
+    out = _raw_sse_lines(bridge, {"type": "text-delta", "text_delta": "Phase 3-5 完成。"}, builder, ctx)
     return next(o["part_id"] for o in _data_json_objects("".join(out)) if o["type"] == "text-start")
 
 
@@ -1809,7 +1767,7 @@ def test_model_retry_rolls_back_partial_stream_output() -> None:
     ctx = _ctx()
     attempt_part_id = _stream_attempt_partial(bridge, builder, ctx)
 
-    out = bridge.process_item(
+    out = _raw_sse_lines(bridge, 
         {
             "event": "on_custom_event",
             "name": "noesis_model_retry",
@@ -1848,7 +1806,7 @@ def test_model_fallback_rolls_back_partial_stream_and_appends_notice() -> None:
     ctx = _ctx()
     attempt_part_id = _stream_attempt_partial(bridge, builder, ctx)
 
-    out = bridge.process_item(
+    out = _raw_sse_lines(bridge, 
         {
             "event": "on_custom_event",
             "name": "noesis_model_fallback",
@@ -1876,8 +1834,8 @@ def test_retry_without_streamed_output_emits_no_rollback_and_keeps_prior_parts()
     builder = AssistantMessageBuilder(session_id="sess-rb-zero", message_id=bridge.assistant_message_id)
     ctx = _ctx()
     # 上一成功调用产出正文；压缩完成插入分割线（真实流径：缓冲 → flush → builder）
-    bridge.process_item({"type": "text-delta", "text_delta": "第一段结论"}, builder, ctx)
-    bridge.process_item(
+    _raw_sse_lines(bridge, {"type": "text-delta", "text_delta": "第一段结论"}, builder, ctx)
+    _raw_sse_lines(bridge, 
         {"event": "on_custom_event", "name": "noesis_compaction",
          "data": {"compaction_type": "completed"}},
         builder, ctx,
@@ -1886,8 +1844,8 @@ def test_retry_without_streamed_output_emits_no_rollback_and_keeps_prior_parts()
     assert len(prior_parts) == 2  # 正文 + 分割线
 
     # 新模型调用零输出失败 → 重试：无输出可回滚，不得发 stream-rollback
-    bridge.process_item({"event": "on_chat_model_start", "run_id": "model-fail", "data": {}}, builder, ctx)
-    out = bridge.process_item(
+    _raw_sse_lines(bridge, {"event": "on_chat_model_start", "run_id": "model-fail", "data": {}}, builder, ctx)
+    out = _raw_sse_lines(bridge, 
         {"event": "on_custom_event", "name": "noesis_model_retry",
          "data": {"type": "noesis_model_retry", "status": "retrying", "attempt_id": 1}},
         builder, ctx,
@@ -1903,21 +1861,21 @@ def test_retry_rollback_frame_names_attempt_parts_and_spares_prior_parts() -> No
     bridge = LangGraphSseBridge("sess-rb-part")
     builder = AssistantMessageBuilder(session_id="sess-rb-part", message_id=bridge.assistant_message_id)
     ctx = _ctx()
-    bridge.process_item({"type": "text-delta", "text_delta": "旧正文"}, builder, ctx)
-    bridge.process_item(
+    _raw_sse_lines(bridge, {"type": "text-delta", "text_delta": "旧正文"}, builder, ctx)
+    _raw_sse_lines(bridge, 
         {"event": "on_custom_event", "name": "noesis_compaction",
          "data": {"compaction_type": "completed"}},
         builder, ctx,
     )
     prior_parts = builder.to_dict()["parts"]
 
-    bridge.process_item({"event": "on_chat_model_start", "run_id": "model-fail", "data": {}}, builder, ctx)
-    out = bridge.process_item({"type": "text-delta", "text_delta": "失败尝试的半截"}, builder, ctx)
+    _raw_sse_lines(bridge, {"event": "on_chat_model_start", "run_id": "model-fail", "data": {}}, builder, ctx)
+    out = _raw_sse_lines(bridge, {"type": "text-delta", "text_delta": "失败尝试的半截"}, builder, ctx)
     attempt_part_id = next(
         o["part_id"] for o in _data_json_objects("".join(out)) if o["type"] == "text-start"
     )
 
-    out = bridge.process_item(
+    out = _raw_sse_lines(bridge, 
         {"event": "on_custom_event", "name": "noesis_model_retry",
          "data": {"type": "noesis_model_retry", "status": "retrying", "attempt_id": 1}},
         builder, ctx,

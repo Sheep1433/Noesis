@@ -1,4 +1,4 @@
-"""QaService — Run-managed QA orchestration (exec_query / resume / export)."""
+"""QaService — Run-managed QA orchestration (exec_query / exec_hitl_resume)."""
 
 import asyncio
 import re
@@ -17,8 +17,6 @@ from noesis.chat.message_builder import AssistantMessageBuilder
 from noesis.chat.event_mapping.langgraph_bridge import LangGraphSseBridge
 from noesis.chat.event_mapping.mapper import RuntimeEventMapper, new_stream_ctx
 from noesis.chat.tool_state import ToolState
-from noesis.errors.exceptions import NotFoundException
-from noesis.llm.catalog import get_default_model_id
 from noesis.runtime.logging import logger
 from noesis.schemas.login_vo import CurrentUser
 from noesis.schemas.qa_vo import QaQueryRequest
@@ -27,15 +25,12 @@ from noesis.services.chat_service import ChatService
 from noesis.services.mention_resolve_service import MentionResolveService
 from noesis.agents.background.notifications import notify_agent_query
 from noesis.services.qa.helpers import (
-    _finalize_sse_bridge_stream,
     _finalize_run_events,
     _resolve_enabled_skills_for_query,
     _resolve_kb_settings_for_query,
     _resolve_mcp_servers_for_query,
     _resolve_model_for_query,
-    _yield_sse_from_agent_bridge,
     _yield_run_events_from_agent,
-    case_coordinator,
     common_agent,
     fault_agent,
     seed_session_stats_from_history,
@@ -43,13 +38,6 @@ from noesis.services.qa.helpers import (
 )
 from noesis.storage.postgres.manager import pg_manager
 
-
-
-def _encode_events(events) -> List[str]:
-    """typed RunEvent → SSE 行（错误兜底路径与主投递路径同一编码器）。"""
-    from noesis.chat.delivery.sse import encode_run_event
-
-    return [line for event in events for line in encode_run_event(event)]
 
 class QaService:
     @classmethod
@@ -61,12 +49,12 @@ class QaService:
         *,
         assistant_message_id: Optional[str] = None,
         run_id: Optional[str] = None,
-    ) -> AsyncGenerator[RunEvent | str, None]:
+    ) -> AsyncGenerator[RunEvent, None]:
         """
-        执行问答。目标 Agent Run 返回 typed RunEvent；TEST_CASE_QA 返回旧 SSE 文本。
+        执行问答，返回 typed RunEvent。
 
         Yields:
-            RunEvent | str: typed 主路径事件，或 TEST_CASE_QA 的独立 SSE 帧。
+            RunEvent: typed 主路径事件。
         """
         logger.info(f"query param: {req_obj.json()}")
         clean_query = re.sub(r"\s+", "", req_obj.query or "")
@@ -112,23 +100,17 @@ class QaService:
                 f"exec_query 流式上游开始 session_id={session_id} qa_type={req_obj.qa_type} user_id={current_user.user_id}"
             )
 
-            resolved_model_id = get_default_model_id()
-            if req_obj.qa_type != IntentEnum.TEST_CASE_QA.value[0]:
-                resolved_model_id = await _resolve_model_for_query(
-                    session_id=session_id,
-                    user_id=str(current_user.user_id),
-                    request_model_id=req_obj.model_id,
-                    db=db,
-                )
+            resolved_model_id = await _resolve_model_for_query(
+                session_id=session_id,
+                user_id=str(current_user.user_id),
+                request_model_id=req_obj.model_id,
+                db=db,
+            )
             # 本 Run 的推理档位（get_llm 经 ContextVar 消费；子 Agent 随
-            # create_task 自动继承）。TEST_CASE_QA 不参与档位控制。
+            # create_task 自动继承）。
             from noesis.llm.reasoning import set_request_reasoning_effort
 
-            set_request_reasoning_effort(
-                req_obj.reasoning_effort
-                if req_obj.qa_type != IntentEnum.TEST_CASE_QA.value[0]
-                else None
-            )
+            set_request_reasoning_effort(req_obj.reasoning_effort)
 
             # 根据 qa_type 选择 agent 并执行
             kb_collections: List[str] = []
@@ -144,24 +126,23 @@ class QaService:
 
             mcp_server_ids: List[str] = []
             enabled_skills: Optional[List[str]] = None
-            if req_obj.qa_type != IntentEnum.TEST_CASE_QA.value[0]:
-                mcp_server_ids = await _resolve_mcp_servers_for_query(
-                    session_id=session_id,
-                    user_id=str(current_user.user_id),
-                    qa_type=req_obj.qa_type,
-                    request_mcp_servers=req_obj.mcp_servers,
-                    db=db,
+            mcp_server_ids = await _resolve_mcp_servers_for_query(
+                session_id=session_id,
+                user_id=str(current_user.user_id),
+                qa_type=req_obj.qa_type,
+                request_mcp_servers=req_obj.mcp_servers,
+                db=db,
+            )
+            enabled_skills = await _resolve_enabled_skills_for_query(
+                session_id=session_id,
+                user_id=str(current_user.user_id),
+                request_enabled_skills=req_obj.enabled_skills,
+                db=db,
+            )
+            if resolved_mentions.skill_ids and enabled_skills is not None:
+                enabled_skills = list(
+                    dict.fromkeys([*enabled_skills, *resolved_mentions.skill_ids]),
                 )
-                enabled_skills = await _resolve_enabled_skills_for_query(
-                    session_id=session_id,
-                    user_id=str(current_user.user_id),
-                    request_enabled_skills=req_obj.enabled_skills,
-                    db=db,
-                )
-                if resolved_mentions.skill_ids and enabled_skills is not None:
-                    enabled_skills = list(
-                        dict.fromkeys([*enabled_skills, *resolved_mentions.skill_ids]),
-                    )
 
             mcp_tools: List[Any] = []
             if mcp_server_ids:
@@ -195,13 +176,6 @@ class QaService:
                     db=db,
                     run_id=run_id,
                 )
-            elif req_obj.qa_type == IntentEnum.TEST_CASE_QA.value[0]:
-                agent_generator = case_coordinator.run_agent(
-                    agent_query,
-                    session_id,
-                    req_obj.file_dict,
-                    qa_type=req_obj.qa_type,
-                )
             elif req_obj.qa_type == IntentEnum.SUPER_AGENT_QA.value[0]:
                 agent_generator = super_agent.run_agent(
                     agent_query,
@@ -218,7 +192,6 @@ class QaService:
                     run_id=run_id,
                 )
             else:
-                # 即时代码路径，连续产出多帧 SSE，无长时间阻塞，无需注释保活。
                 br = LangGraphSseBridge(
                     session_id,
                     emit_langfuse_session_hint=LangfuseConfig.langfuse_tracing_enabled,
@@ -227,10 +200,10 @@ class QaService:
                 ctx_err: Dict[str, Any] = {}
                 # 经 mapper 归一化：错误/终态走统一 run.finished 词汇
                 err_mapper = RuntimeEventMapper(br)
-                for line in _encode_events(err_mapper.map_item({"type": "__tw_error__", "content": "未知的qa_type"}, None, ctx_err)):
-                    yield line
-                for line in _encode_events(err_mapper.finalize(finish_reason="error")):
-                    yield line
+                for event in err_mapper.map_item({"type": "__tw_error__", "content": "未知的qa_type"}, None, ctx_err):
+                    yield event
+                for event in err_mapper.finalize(finish_reason="error"):
+                    yield event
                 return
 
             bridge = LangGraphSseBridge(
@@ -246,45 +219,20 @@ class QaService:
             ctx = new_stream_ctx()
             ctx["_assistant_db_id"] = bridge.assistant_message_id
 
-            ka_sec = float(StreamConfig.sse_keepalive_interval_seconds)
-            lf_thread = (
-                f"case_graph_{session_id}"
-                if req_obj.qa_type == IntentEnum.TEST_CASE_QA.value[0]
-                else None
-            )
-            if req_obj.qa_type == IntentEnum.TEST_CASE_QA.value[0]:
-                async for sse_line in _yield_sse_from_agent_bridge(
-                    agent_generator,
-                    bridge=bridge,
-                    builder=builder,
-                    ctx=ctx,
-                    session_id=session_id,
-                    user_id=current_user.user_id,
-                    qa_type=req_obj.qa_type,
-                    keepalive_seconds=ka_sec,
-                    langfuse_thread_id=lf_thread,
-                ):
-                    yield sse_line
-                async for sse_line in _finalize_sse_bridge_stream(
-                    bridge, builder, ctx, session_id, current_user.user_id
-                ):
-                    yield sse_line
-            else:
-                async for event in _yield_run_events_from_agent(
-                    agent_generator,
-                    bridge=bridge,
-                    builder=builder,
-                    ctx=ctx,
-                    session_id=session_id,
-                    user_id=str(current_user.user_id),
-                    qa_type=req_obj.qa_type,
-                    langfuse_thread_id=lf_thread,
-                ):
-                    yield event
-                async for event in _finalize_run_events(
-                    bridge, ctx, session_id, str(current_user.user_id)
-                ):
-                    yield event
+            async for event in _yield_run_events_from_agent(
+                agent_generator,
+                bridge=bridge,
+                builder=builder,
+                ctx=ctx,
+                session_id=session_id,
+                user_id=str(current_user.user_id),
+                qa_type=req_obj.qa_type,
+            ):
+                yield event
+            async for event in _finalize_run_events(
+                bridge, ctx, session_id, str(current_user.user_id)
+            ):
+                yield event
 
             logger.info(
                 f"exec_query 流式正常结束 session_id={session_id} qa_type={req_obj.qa_type} "
@@ -332,115 +280,6 @@ class QaService:
                         yield event
                 except Exception:
                     logger.exception("failed to emit SSE after QA exception")
-
-    @classmethod
-    async def exec_test_case_resume(
-        cls,
-        session_id: str,
-        selected_point_names: List[str],
-        current_user: CurrentUser,
-        db: AsyncSession,
-        run_id: Optional[str] = None,
-        *,
-        assistant_message_id: Optional[str] = None,
-    ) -> AsyncGenerator[str, None]:
-        """
-        测试用例生成第二阶段：用户采纳测试点并二次确认后，流式生成具体用例。
-        """
-        names = [n for n in (selected_point_names or []) if isinstance(n, str) and n.strip()]
-        builder: Optional[AssistantMessageBuilder] = None
-        bridge: Optional[LangGraphSseBridge] = None
-        ctx: Dict[str, Any] = {}
-
-        try:
-            logger.info(
-                f"exec_test_case_resume 流式上游开始 session_id={session_id} user_id={current_user.user_id} point_count={len(names)}"
-            )
-
-            resolved_model_id = get_default_model_id()
-            agent_generator = case_coordinator.resume_agent(session_id, selected_point_names=names)
-
-            bridge = LangGraphSseBridge(
-                session_id,
-                emit_langfuse_session_hint=LangfuseConfig.langfuse_tracing_enabled,
-                assistant_message_id=assistant_message_id,
-                model_id=resolved_model_id,
-            )
-            builder = AssistantMessageBuilder(
-                session_id=session_id,
-                message_id=bridge.assistant_message_id,
-            )
-            from sqlalchemy import select
-            from noesis.storage.postgres.models.chat import TChatMessage
-
-            async with pg_manager.get_async_session_context() as persist_db:
-                result = await persist_db.execute(
-                    select(TChatMessage).where(TChatMessage.id == bridge.assistant_message_id)
-                )
-                existing = result.scalar_one_or_none()
-                if existing is not None and isinstance(existing.content, dict):
-                    builder.load_from_content_dict(existing.content)
-            ctx = new_stream_ctx()
-            tc_qa = IntentEnum.TEST_CASE_QA.value[0]
-            ctx["_assistant_db_id"] = bridge.assistant_message_id
-
-            ka_sec = float(StreamConfig.sse_keepalive_interval_seconds)
-            async for sse_line in _yield_sse_from_agent_bridge(
-                agent_generator,
-                bridge=bridge,
-                builder=builder,
-                ctx=ctx,
-                session_id=session_id,
-                user_id=current_user.user_id,
-                qa_type=tc_qa,
-                keepalive_seconds=ka_sec,
-                langfuse_thread_id=f"case_graph_{session_id}",
-            ):
-                yield sse_line
-
-            async for sse_line in _finalize_sse_bridge_stream(
-                bridge, builder, ctx, session_id, current_user.user_id
-            ):
-                yield sse_line
-
-            logger.info(
-                f"exec_test_case_resume 流式正常结束 session_id={session_id} "
-                f"assistant_message_id={bridge.assistant_message_id if bridge else ''} "
-                f"finish_reason={bridge.last_finish_reason if bridge else ''}"
-            )
-
-        except asyncio.CancelledError:
-            logger.info(
-                f"exec_test_case_resume 流式被取消(CancelledError) session_id={session_id} "
-                f"user_id={current_user.user_id} assistant_db_id={(ctx or {}).get('_assistant_db_id')}"
-            )
-            raise
-
-        except GeneratorExit:
-            logger.info(
-                f"exec_test_case_resume 流式消费者断开(GeneratorExit) session_id={session_id} "
-                f"user_id={current_user.user_id} assistant_db_id={(ctx or {}).get('_assistant_db_id')}"
-            )
-            raise
-
-        except Exception as e:
-            logger.exception(f"测试用例 resume 异常: {e}")
-            if bridge is not None:
-                b = builder or AssistantMessageBuilder(session_id=session_id)
-                c = ctx or {
-                    "text_buffer": "",
-                    "current_tool_name": None,
-                    "current_tool_call_id": None,
-                    "tool_start_times": {},
-                }
-                try:
-                    err_mapper = RuntimeEventMapper(bridge)
-                    for line in _encode_events(err_mapper.map_item({"type": "__tw_error__", "content": str(e)}, b, c)):
-                        yield line
-                    for line in _encode_events(err_mapper.finalize(finish_reason="error")):
-                        yield line
-                except Exception:
-                    logger.exception("failed to emit SSE after test case resume exception")
 
     @classmethod
     async def exec_hitl_resume(
@@ -679,39 +518,3 @@ class QaService:
                 except Exception:
                     logger.exception("failed to emit SSE after HITL resume exception")
 
-    @classmethod
-    async def export_test_case_markdown(
-        cls,
-        session_id: str,
-        current_user: CurrentUser,
-        db: AsyncSession,
-        test_cases: Optional[List[Dict[str, Any]]] = None,
-        query: Optional[str] = None,
-    ) -> tuple[str, str]:
-        """
-        导出测试用例 Markdown 报告。
-
-        Returns:
-            (markdown 正文, 建议下载文件名)
-        """
-
-        session = await ChatService.get_session_by_id(
-            session_id, current_user.user_id, db
-        )
-        if not session:
-            raise NotFoundException(message="会话不存在")
-
-        md = case_coordinator.get_export_markdown(
-            session_id,
-            test_cases=test_cases,
-            query=query,
-        )
-        if not md:
-            raise NotFoundException(message="暂无可导出的测试用例，请先生成用例")
-
-        safe_title = re.sub(
-            r"[^\w\u4e00-\u9fff\-]+",
-            "_",
-            (session.title or "测试用例").strip(),
-        )[:60] or "测试用例"
-        return md, f"{safe_title}.md"

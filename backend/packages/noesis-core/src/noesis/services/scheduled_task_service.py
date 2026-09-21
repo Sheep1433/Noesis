@@ -23,7 +23,6 @@ from noesis.storage.postgres.models.settings import TUserScheduledTaskRun
 _ALLOWED_QA = {
     IntentEnum.COMMON_QA.value[0],
     IntentEnum.FAULT_OPERATION_QA.value[0],
-    IntentEnum.TEST_CASE_QA.value[0],
     IntentEnum.SUPER_AGENT_QA.value[0],
 }
 
@@ -624,7 +623,7 @@ class ScheduledTaskService:
 
     @staticmethod
     async def _execute_task(row: TUserScheduledTask) -> None:
-        """经现有 headless RunOrchestrator 执行，不另建 Agent 调用路径。
+        """经渠道 headless 路径 run_channel_agent 执行，不另建 Agent 调用路径。
 
         定时任务无人值守：注入自动化模式 prompt 前缀 + 禁用 HITL，避免 agent 卡在 ask_user/审批等待。
         用户点进定时会话手动续聊时走网页 RunService 路径，HITL 照常生效，不受此影响。

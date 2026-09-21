@@ -101,7 +101,7 @@ Harness SHALL 从实际构造结果生成 middleware inventory，记录每个实
 
 ### Requirement: 各 Agent Profile SHALL 使用确定的 Middleware 集合
 
-最终装配 SHALL 满足下列行为矩阵；"可选"能力只有在配置或 Profile 明确启用时才出现。`TEST_CASE_QA` 继续使用 CaseCoordinator workflow。
+最终装配 SHALL 满足下列行为矩阵；"可选"能力只有在配置或 Profile 明确启用时才出现。
 
 | Profile | 必需能力 | 可选能力 |
 |---|---|---|

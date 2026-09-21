@@ -35,10 +35,9 @@
 |-----------|--------|
 | `COMMON_QA` | GeneralQAAgent |
 | `FAULT_OPERATION_QA` | FaultOperationAgent |
-| `TEST_CASE_QA` | CaseCoordinator |
 | `SUPER_AGENT_QA` | SuperAgent |
 
-未知 `qa_type` SHALL 拒绝。历史仅展示的废弃类型（如旧 DeepResearch）MAY 只读映射，**SHALL NOT** 作为新发送入口。
+未知 `qa_type` SHALL 拒绝。历史仅展示的废弃类型（如旧 DeepResearch、`TEST_CASE_QA`）MAY 只读映射，**SHALL NOT** 作为新发送入口。
 
 #### Scenario: SUPER_AGENT 路由
 
@@ -49,7 +48,7 @@
 
 浏览器实时响应 SHALL 使用 `/api/chat` 下的 run 创建与 SSE 订阅端点。系统 SHALL 提供独立的 run 创建、状态查询、SSE 订阅和停止能力，并 SHALL 删除 `POST /api/chat/sessions/stream`。浏览器主实时通道仍为 SSE，不要求 WebSocket。
 
-事件类型至少覆盖：`run-snapshot`、`run-status`、`message-start`、`reasoning-*`、`text-*`、`tool-input-*`、`tool-output-available`、`context-update`、`stats-update`、`retrieval-results-available`、`hitl-required`、`run.finished`、`[DONE]`。`run.finished` 为唯一终态事件（载荷含 status / finish_reason / usage / model_calls），主路径 `finish` / `abort` / `error` 终态编码名退役（CaseCoordinator 兼容适配路径除外，见适用范围 Requirement）。durable 业务事件 SHALL 携带 `run_id` 与 sequence；transient 事件 SHALL 带 transient 标记且不占 sequence；keepalive 注释帧 SHALL 仅由传输层注入。该事件词汇对主会话 run 与子 Agent run 为同一套；事件名清单的权威记录在 `docs/engineering/platform/chat-streaming.md` §4.2b，由契约测试钉住。
+事件类型至少覆盖：`run-snapshot`、`run-status`、`message-start`、`reasoning-*`、`text-*`、`tool-input-*`、`tool-output-available`、`context-update`、`stats-update`、`retrieval-results-available`、`hitl-required`、`run.finished`、`[DONE]`。`run.finished` 为唯一终态事件（载荷含 status / finish_reason / usage / model_calls），主路径 `finish` / `abort` / `error` 终态编码名退役。durable 业务事件 SHALL 携带 `run_id` 与 sequence；transient 事件 SHALL 带 transient 标记且不占 sequence；keepalive 注释帧 SHALL 仅由传输层注入。该事件词汇对主会话 run 与子 Agent run 为同一套；事件名清单的权威记录在 `docs/engineering/platform/chat-streaming.md` §4.2b，由契约测试钉住。
 
 #### Scenario: 创建后独立订阅
 - **WHEN** 已认证用户成功创建 run
@@ -632,13 +631,13 @@ chat 页 SHALL 按服务端 tool `state` 显示“正在执行、等待确认、
 
 typed RuntimeEventMapper、可靠 Run、多 Tab、snapshot 恢复和统一 Delivery 的演进与验收范围 SHALL 为 `COMMON_QA`、`FAULT_OPERATION_QA` 与 `SUPER_AGENT_QA`。
 
-`TEST_CASE_QA`、CaseCoordinator、`phase-*`、test-case resume/export 不再纳入本能力的演进与验收范围。现有 Web 入口 MAY 继续使用相同 `run_id`、assistant identity 与订阅 API 承载该旧流程，并在 producer 边界把 CaseCoordinator 的旧 SSE 帧适配为 RunEvent；该兼容适配 SHALL 保持隔离，SHALL NOT 进入上述三种目标 Agent 共用的 RuntimeEventMapper，也 SHALL NOT 成为新增可靠性设计的约束。
+`TEST_CASE_QA` 与其旧 SSE 形状（CaseCoordinator、`phase-*`、test-case resume/export）已整体下线：`qa_type=TEST_CASE_QA` 的存量会话仅作只读历史展示，任何入口 SHALL NOT 再创建该类型的新 run，也不 SHALL 为其保留兼容 parser 或独立 SSE 边界。
 
-#### Scenario: 测试用例生成不参与主路径验收
+#### Scenario: 废弃类型不接受新 run
 
 - **WHEN** 执行本能力的实现或验收
 - **THEN** SHALL 只验收 `COMMON_QA`、`FAULT_OPERATION_QA` 与 `SUPER_AGENT_QA` 的 typed 主路径
-- **AND** SHALL NOT 因 `TEST_CASE_QA` 的旧 SSE 形状向目标 Agent 的 RuntimeEventMapper 增加兼容 parser
+- **AND** 以 `TEST_CASE_QA` 发起新 run SHALL 走未知 `qa_type` 的拒绝路径
 
 ### Requirement: 服务端 SHALL 提供权威 active Run 发现
 

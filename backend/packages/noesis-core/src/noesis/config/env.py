@@ -260,10 +260,6 @@ class QdrantSettings:
     qdrant_grpc_port: int
     qdrant_prefer_grpc: bool
     qdrant_default_collection: str
-    requirement_docs_collection: str
-    test_case_docs_collection: str
-    test_case_upload_collection: str
-    case_rag_historical_requirements_enabled: bool
 
 
 @dataclass(frozen=True)
@@ -588,10 +584,6 @@ def _build_qdrant(secrets: EnvSecrets, yaml_cfg: AppYamlConfig) -> QdrantSetting
         qdrant_grpc_port=q.grpc_port,
         qdrant_prefer_grpc=q.prefer_grpc,
         qdrant_default_collection=q.default_collection,
-        requirement_docs_collection=q.requirement_docs_collection,
-        test_case_docs_collection=q.test_case_docs_collection,
-        test_case_upload_collection=q.test_case_upload_collection,
-        case_rag_historical_requirements_enabled=q.case_rag_historical_requirements_enabled,
     )
 
 

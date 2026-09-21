@@ -56,4 +56,4 @@
 
 - [x] 8.1 更新 `docs/engineering/` 后台任务相关文档的注册表语义描述（如存在对应章节）；按审计文档状态流转回写处理结论。
 - [x] 8.2 提炼决策记录（`docs/decisions/`）：事实源三层承载与被否的 Redis 队列/租约、追加消息载体取舍。
-- [ ] 8.3 归档时替换主规格残留 followup 措辞（Purpose、协作式停止 3 处、输出截断 1 处）为「追加消息」（RENAMED 机制只处理 requirement 标题，自由文本需手工替换），替换后跑 `python3 scripts/verify-md-links.py`。
+- [x] 8.3 归档时替换主规格残留 followup 措辞（Purpose、协作式停止 3 处、输出截断 1 处）为「追加消息」（RENAMED 机制只处理 requirement 标题，自由文本需手工替换），替换后跑 `python3 scripts/verify-md-links.py`。

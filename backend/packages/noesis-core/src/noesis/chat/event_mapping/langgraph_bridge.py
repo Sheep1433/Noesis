@@ -35,7 +35,7 @@ from noesis.chat.tool_state import (
     ToolState,
     derive_tool_state,
 )
-from noesis.chat.event_mapping.bridge import END_SENTINEL, HEARTBEAT_SENTINEL, StreamBridgeError
+
 from noesis.chat.event_mapping.failure_notice import sanitize_stream_error, sanitize_tool_error
 from noesis.chat.event_mapping.tool_run_tracker import ToolRunTracker
 from noesis.chat.event_mapping.tool_payload import (
@@ -623,23 +623,6 @@ class LangGraphSseBridge:
         )
         return out
 
-    def process_item(self, item: Dict[str, Any], builder: Optional[AssistantMessageBuilder],
-                     ctx: Dict[str, Any]) -> List[str]:
-        """仅供独立 TEST_CASE_QA 旧 SSE 边界使用。"""
-        from noesis.chat.delivery.sse import encode_run_event
-
-        return [line for event in self.map_item(item, builder, ctx) for line in encode_run_event(event)]
-
-    def finalize(self, *, finish_reason: Optional[str] = None) -> List[str]:
-        """仅供独立 TEST_CASE_QA 旧 SSE 边界使用。"""
-        from noesis.chat.delivery.sse import encode_run_event
-
-        return [
-            line
-            for event in self.finalize_events(finish_reason=finish_reason)
-            for line in encode_run_event(event)
-        ]
-
     # ---------- Noesis / 业务事件 ----------
 
     def _handle_tw_or_business(self, item: Dict[str, Any], builder: Optional[AssistantMessageBuilder],
@@ -798,24 +781,6 @@ class LangGraphSseBridge:
                             },
                         )
             out.append(_format_sse("hitl-required", payload))
-            return
-
-        if t in ("phase-start", "phase-delta", "phase-end"):
-            self._ensure_started(out)
-            payload = dict(item)
-            payload.setdefault("type", str(t))
-            payload.setdefault("message_id", self.assistant_message_id)
-            if t == "phase-end":
-                payload.setdefault("ok", True)
-            out.append(_format_sse(str(t), payload))
-            return
-
-        if t in {"scenario-start", "testpoints-confirm-required", "scene-cases"}:
-            # 仅供未迁移的 TEST_CASE_QA / CaseCoordinator 独立边界使用。
-            self._ensure_started(out)
-            payload = dict(item)
-            payload.setdefault("message_id", self.assistant_message_id)
-            out.append(_format_sse(str(t), payload))
             return
 
         if t and t not in ("ai", "tool"):
@@ -1268,19 +1233,3 @@ class LangGraphSseBridge:
         )
 
 
-def bridge_raw_to_sse_lines(
-    raw: Any,
-    bridge: LangGraphSseBridge,
-    builder: Optional[AssistantMessageBuilder],
-    ctx: Dict[str, Any],
-    *,
-    keepalive_comment: str,
-) -> Optional[List[str]]:
-    """将 MemoryStreamBridge 单条原始事件转为 SSE 行；``None`` 表示结束哨兵应跳过。"""
-    if raw is HEARTBEAT_SENTINEL:
-        return [keepalive_comment]
-    if raw is END_SENTINEL:
-        return None
-    if isinstance(raw, StreamBridgeError):
-        raise raw.exc
-    return bridge.process_item(raw, builder, ctx)

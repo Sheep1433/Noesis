@@ -137,7 +137,6 @@ RunManager 暴露：
 - 进程崩溃只保留最近 checkpoint，内存 replay token 会丢失。
 - Channel outbound 不是 durable spool。
 - PostgreSQL 持续不可用时，系统选择有界停止而不是继续生成无法保存的内容。
-- `TEST_CASE_QA` 不使用本 Run 主路径。
 
 ## 13. 关联资料
 

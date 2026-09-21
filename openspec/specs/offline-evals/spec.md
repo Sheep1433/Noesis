@@ -2,7 +2,7 @@
 
 ## Purpose
 
-本能力索引 Noesis **离线评测**入口：`evals.agent`（DeepResearch / Harbor / Agentic RAG / 记忆应召回）、`evals.case`（测试用例两阶段 promptfoo）、`evals.compression`（消息摘要压缩）、`evals.kb`（单集合检索 + ERB 企业级基准）。在线 chat 与 CaseCoordinator 产品行为见 `agent-profiles` / `platform-chat`。
+本能力索引 Noesis **离线评测**入口：`evals.agent`（DeepResearch / Harbor / Agentic RAG / 记忆应召回）、`evals.compression`（消息摘要压缩）、`evals.kb`（单集合检索 + ERB 企业级基准）。在线 chat 产品行为见 `agent-profiles` / `platform-chat`。
 ## Requirements
 ### Requirement: Agent 离线评测经 harness
 
@@ -49,25 +49,6 @@
 - **THEN** Agentic RAG collector、scoring 和 dependency binding SHALL 使用 fake event 或 fake service 验证
 - **AND** SHALL NOT 要求真实 LLM、PostgreSQL 或 Qdrant
 
-### Requirement: Case 展示评测维持可运行
-
-系统 SHALL 修复测试用例 RAG provider 对已删除模块路径的依赖，但不要求 Case 评测迁移到 Agent benchmark 公共 runner。
-
-#### Scenario: Case RAG 使用当前 Harness 模块
-
-- **WHEN** Case RAG provider 覆盖评测 collection 配置
-- **THEN** patch 目标 SHALL 指向 `noesis.agents.case_generate.rag`
-- **AND** provider SHALL 能继续调用当前 Case RAG 构建函数
-
-### Requirement: 测试用例两阶段评测
-
-`evals.case` SHALL 支持 promptfoo 两阶段（如 RAG / 生成）评测测试用例 Agent；配置与数据集路径 SHALL 可发现。
-
-#### Scenario: phase 可选
-
-- **WHEN** 指定 phase 运行
-- **THEN** 仅该 phase 的用例 SHALL 执行（或按文档跳过其它 phase）
-
 ### Requirement: 消息压缩评测
 
 `evals.compression` SHALL 以「压缩后任务保持率」为 headline 评测消息压缩：评测 SHALL 将真实长会话导出并脱敏为 transcript fixture，由 LLM 从将被压缩的区域生成事实 recall 题库（按 transcript 内容缓存以保证可复现），对每个评测臂（压缩策略档）仅凭压缩后上下文闭卷作答，judge 按 2/1/0（正确/部分/错误）判卷，headline 指标 SHALL 为 recall% @ retained tokens。评测 SHALL 包含 uncompacted 对照臂（不压缩直接闭卷作答，作为 recall 上限），并 SHALL 报告任务保持率 Δ（压缩臂 recall% − uncompacted 臂 recall%）。多策略档 SHALL 经参数化的压缩配置生效。judge 模型 SHALL 与摘要及作答模型分离；judge 解析失败 SHALL 重试后剔除并单列失败率，SHALL NOT 以 0 分计入 recall%。摘要识别 SHALL 依赖压缩中间件写入的结构化标记，SHALL NOT 依赖内容启发式猜测。可种植事实的合成 fixture SHALL 保留为零 LLM 冒烟档。
@@ -111,7 +92,7 @@ KB 检索评测入口（`evals.kb.erb`，ERB 企业级基准）SHALL 与 `knowle
 #### Scenario: 索引存在
 
 - **WHEN** 开发者打开 `backend/evals/` 文档
-- **THEN** SHALL 能找到 kb / case / agent / compression 各类入口说明
+- **THEN** SHALL 能找到 kb / agent / compression 各类入口说明
 
 ### Requirement: ERB 企业级检索基准
 

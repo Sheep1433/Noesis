@@ -25,7 +25,6 @@ export const themeColors = {
   primaryBorderSoft: '#d4d0c8',
   primaryTextSoft: '#525252',
   qaFault: '#e67e22',
-  qaTest: '#16a085',
   blockLightIcon: '#111111',
   blockDarkIcon: '#8bd9f0',
 } as const
@@ -50,7 +49,6 @@ export type QaTypeKey =
   | 'SUPER_AGENT_QA'
   | 'DEEP_RESEARCH_QA'
   | 'FAULT_OPERATION_QA'
-  | 'TEST_CASE_QA'
 
 /** 欢迎页 QA 卡片 — 对应 CSS 变量名 */
 export const welcomeGradientVar: Record<QaTypeKey, string> = {
@@ -58,7 +56,6 @@ export const welcomeGradientVar: Record<QaTypeKey, string> = {
   SUPER_AGENT_QA: '--noesis-welcome-gradient-research',
   DEEP_RESEARCH_QA: '--noesis-welcome-gradient-research',
   FAULT_OPERATION_QA: '--noesis-welcome-gradient-fault',
-  TEST_CASE_QA: '--noesis-welcome-gradient-test',
 }
 
 export function cssVar(name: string): string {

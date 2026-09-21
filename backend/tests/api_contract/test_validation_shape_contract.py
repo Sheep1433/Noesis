@@ -8,9 +8,10 @@
 from __future__ import annotations
 
 
-def test_create_session_wrong_type_returns_fastapi_422(contract_client) -> None:
+def test_create_run_wrong_type_returns_fastapi_422(contract_client) -> None:
     resp = contract_client.post(
-        "/api/chat/sessions", json={"title": 123, "extra": "not-a-dict"}
+        "/api/chat/runs",
+        json={"session_id": 123, "content": 456, "client_request_id": 789},
     )
     assert resp.status_code == 422
     body = resp.json()

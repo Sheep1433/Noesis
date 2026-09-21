@@ -277,11 +277,6 @@ async function restoreActiveSessionFromRoute(sessionId: string) {
   try {
     const session = await getSession(sessionId)
     const qt = String(session.extra?.qa_type ?? '').trim() || 'COMMON_QA'
-    if (qt === 'TEST_CASE_QA') {
-      await router.replace({ name: 'TestCaseGenerate' })
-      return
-    }
-
     showDefaultPage.value = false
     isInit.value = false
     isView.value = true
@@ -379,9 +374,6 @@ function resetComposingSurface() {
 // 使用 onMounted 生命周期钩子加载历史对话
 onBeforeMount(async () => {
   try {
-    if (businessStore.qa_type === 'TEST_CASE_QA') {
-      businessStore.update_qa_type('COMMON_QA')
-    }
     applyWelcomeRouteQaType()
     isLoadingHistory.value = true
     isInit.value = true
@@ -650,8 +642,6 @@ function sessionQaIconClass(qt: string) {
       return 'i-hugeicons:search-01'
     case 'FAULT_OPERATION_QA':
       return 'i-hugeicons:settings-01'
-    case 'TEST_CASE_QA':
-      return 'i-hugeicons:note-edit'
     default:
       return 'i-hugeicons:ai-chat-02'
   }
@@ -695,8 +685,6 @@ function sessionQaIconColor(qt: string) {
   switch (qt) {
     case 'FAULT_OPERATION_QA':
       return themeColors.qaFault
-    case 'TEST_CASE_QA':
-      return themeColors.qaTest
     default:
       return naivePresetColors.value.primary
   }
@@ -1132,15 +1120,6 @@ function buildSessionConfigExtra(): Record<string, unknown> {
     extra.kb_collections = selectedKbCollections.value
     extra.kb_search_enabled = kbSearchEnabled.value
   }
-  if (qa_type.value !== 'TEST_CASE_QA' && selectedModelId.value) {
-    extra.model_id = selectedModelId.value
-  }
-  if (qa_type.value !== 'TEST_CASE_QA' && selectedReasoningEffort.value) {
-    extra.reasoning_effort = selectedReasoningEffort.value
-  }
-  if (qa_type.value !== 'TEST_CASE_QA') {
-    extra.mcp_servers = selectedMcpServers.value
-  }
   if (qa_type.value === 'SUPER_AGENT_QA' && !skillsAllEnabled.value) {
     extra.enabled_skills = selectedSkills.value
   }
@@ -1152,7 +1131,7 @@ function normalizeKbCollections(raw: unknown): string[] {
 }
 
 const showContextIndicator = computed(
-  () => qa_type.value !== 'TEST_CASE_QA' && hasValidContextWindow(sessionContext.value),
+  () => hasValidContextWindow(sessionContext.value),
 )
 
 function applySessionConfig(extra: Record<string, unknown>) {
@@ -1402,7 +1381,7 @@ async function onTaskCancel(task: TaskCatalogEntry): Promise<void> {
 
 async function loadSessionContext(sessionId: string) {
   const loadId = ++sessionContextLoadId
-  if (!sessionId || qa_type.value === 'TEST_CASE_QA') {
+  if (!sessionId) {
     sessionContext.value = null
     sessionContextSessionId.value = ''
     sessionContextIsLive.value = false
@@ -2179,9 +2158,6 @@ function appendConversationTurn(
 function buildStreamExtra(file_dict: Record<string, string> | undefined): Record<string, unknown> {
   const extra = buildSessionConfigExtra()
   extra.file_dict = file_dict
-  if (qa_type.value !== 'TEST_CASE_QA' && selectedMcpServers.value.length === 0) {
-    delete extra.mcp_servers
-  }
   if (composerMentions.value.length > 0) {
     extra.mentions = composerMentions.value.map(mentionToPayload)
   }
@@ -2810,11 +2786,6 @@ const activateChatMode = (
     if (!fromHistorySelection) {
       void navigateToComposingUrl(true)
     }
-  }
-
-  // 测试用例生成在独立页面（TestAssistant），不在对话页内完成
-  if (targetQaType === 'TEST_CASE_QA' && route.name !== 'TestCaseGenerate') {
-    router.push({ name: 'TestCaseGenerate' })
   }
 }
 

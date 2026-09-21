@@ -57,9 +57,9 @@ def test_run_routes_replace_legacy_stream_and_stop() -> None:
     assert ("/api/chat/runs/{run_id}/stream", "GET") in paths
     assert ("/api/chat/runs/{run_id}/stop", "POST") in paths
     assert ("/api/chat/runs/{run_id}/hitl/resume", "POST") in paths
-    assert ("/api/chat/runs/{run_id}/test-case/resume", "POST") in paths
     assert ("/api/chat/sessions/stream", "POST") not in paths
     assert ("/api/chat/sessions/{session_id}/stop", "POST") not in paths
+    assert ("/api/chat/runs/{run_id}/test-case/resume", "POST") not in paths
     assert ("/api/chat/sessions/{session_id}/test-case/resume", "POST") not in paths
     assert ("/api/chat/sessions/{session_id}/hitl/resume", "POST") not in paths
 
@@ -361,7 +361,7 @@ async def test_alternate_terminal_projection_finalizes_run(
         user_id="1",
         session_id="session-1",
         assistant_message_id="assistant-1",
-        qa_type="TEST_CASE_QA",
+        qa_type="SUPER_AGENT_QA",
     )
     projection.apply(WireFrame(event="text-delta", data={"text_delta": "完成恢复"}))
     projection.apply(RunCompleted(finish_reason="stop"))
@@ -715,7 +715,7 @@ def test_run_projection_discards_late_tool_result_after_cancel() -> None:
 
 @pytest.mark.parametrize(
     "qa_type",
-    ["COMMON_QA", "SUPER_AGENT_QA", "FAULT_OPERATION_QA", "TEST_CASE_QA"],
+    ["COMMON_QA", "SUPER_AGENT_QA", "FAULT_OPERATION_QA"],
 )
 def test_all_qa_types_keep_run_and_assistant_identity(qa_type: str) -> None:
     request = CreateRunRequest(
@@ -1261,7 +1261,6 @@ async def test_write_endpoints_gate_on_csrf() -> None:
 
     from noesis.errors.exceptions import PermissionException
     from noesis.schemas.chat_vo import CreateRunRequest, SubagentMessageRequest
-    from noesis.schemas.qa_vo import TestCaseResumeRequest
 
     user = SimpleNamespace(user_id="u1")
     db = SimpleNamespace()
@@ -1282,12 +1281,4 @@ async def test_write_endpoints_gate_on_csrf() -> None:
             SubagentMessageRequest(message="hi"),
             http_request=no_auth,
             current_user=user,
-        )
-    with pytest.raises(PermissionException):
-        await chat_api.resume_test_case_run(
-            "run-1",
-            TestCaseResumeRequest(selected_point_names=["p1"]),
-            http_request=no_auth,
-            current_user=user,
-            db=db,
         )

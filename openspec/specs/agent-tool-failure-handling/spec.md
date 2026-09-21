@@ -14,12 +14,13 @@
 2. 经事件映射层发出 `tool-output-available`；
 3. 工具调用链装配了 `ToolFailureMiddleware`（经 `create_noesis_agent` 的 Agent 路径）。
 
-**In scope**：`COMMON_QA`、`FAULT_OPERATION_QA`、`SUPER_AGENT_QA` 的 ReAct Agent 工具调用。**Out of scope**：`TEST_CASE_QA` 的 CaseCoordinator（产出 `phase-*` 自定义事件，不受本规格约束）；整轮 SSE `error`（由 `sanitize_stream_error` 处理，见分流 Requirement）；前端 UI 标签与占位文案（权威来源：`platform-chat`）。
+**In scope**：`COMMON_QA`、`FAULT_OPERATION_QA`、`SUPER_AGENT_QA` 的 ReAct Agent 工具调用。**Out of scope**：整轮 SSE `error`（由 `sanitize_stream_error` 处理，见分流 Requirement）；前端 UI 标签与占位文案（权威来源：`platform-chat`）。
 
-#### Scenario: 测试用例流不走双层模型
+#### Scenario: in-scope 路径的判定
 
-- **WHEN** `qa_type=TEST_CASE_QA` 且 `CaseCoordinator` 产出 `phase-start`
-- **THEN** 该路径 **SHALL NOT** 要求 `outcome` 或 `errorCategory` 字段
+- **WHEN** 目标 Agent（经 `create_noesis_agent` 装配 `ToolFailureMiddleware`）的工具调用以 `on_tool_end` / `on_tool_error` 结束并映射为 `tool-output-available`
+- **THEN** 该路径 SHALL 由本规格约束双层语义与 `state` 生命周期
+- **AND** 未装配 `ToolFailureMiddleware` 的路径与整轮 SSE `error` SHALL NOT 适用本规格
 
 ### Requirement: 系统 SHALL 区分调用层 status 与执行层 outcome
 

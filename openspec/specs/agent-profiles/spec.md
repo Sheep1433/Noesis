@@ -2,7 +2,7 @@
 
 ## Purpose
 
-本能力规定四大 `qa_type` 对应的 Agent **产品行为与装配边界**：`COMMON_QA`、`SUPER_AGENT_QA`、`FAULT_OPERATION_QA`、`TEST_CASE_QA`。运行时路径/沙箱见 `agent-runtime`；HITL 策略见 `agent-hitl`；平台路由见 `platform-chat`。实现目录：`packages/noesis-core/src/noesis/agents/`、`packages/noesis-core/src/noesis/agents/case_generate/`。
+本能力规定三大 `qa_type` 对应的 Agent **产品行为与装配边界**：`COMMON_QA`、`SUPER_AGENT_QA`、`FAULT_OPERATION_QA`。运行时路径/沙箱见 `agent-runtime`；HITL 策略见 `agent-hitl`；平台路由见 `platform-chat`。实现目录：`packages/noesis-core/src/noesis/agents/`。
 ## Requirements
 ### Requirement: COMMON_QA / GeneralQAAgent
 
@@ -78,20 +78,9 @@ SuperAgent 主 Agent SHALL 使用与 COMMON_QA 相同的普通 Markdown citation
 - **WHEN** 同一用户两个故障运维会话分别写入文件
 - **THEN** 文件 SHALL 落在各自 `sessions/{sid}/workspace/`，互不覆盖
 
-### Requirement: TEST_CASE_QA / CaseCoordinator
-
-`TEST_CASE_QA` SHALL 使用 CaseCoordinator（LangGraph 多阶段 workflow）：需求理解、用例生成、可选评测阶段；阶段进度 SHALL 经 SSE / parts 可观测。知识库集合配置来自 PostgreSQL `kb_collection_config`（或现行表名）。
-
-两阶段离线评测入口见 `offline-evals`，**SHALL NOT** 与在线 chat 路径混淆为同一进程职责。
-
-#### Scenario: 阶段可观测
-
-- **WHEN** 用例生成进入新 phase
-- **THEN** 客户端 SHALL 能区分阶段（SSE 事件或 message parts）
-
 ### Requirement: 共享工厂
 
-除 CaseCoordinator 外，场景 Agent SHALL 经 `create_noesis_agent`（或现行工厂）装配模型、中间件与 backend；**SHALL NOT** 在各 profile 内复制 divergent 的路径 canonicalize 逻辑。
+场景 Agent SHALL 经 `create_noesis_agent`（或现行工厂）装配模型、中间件与 backend；**SHALL NOT** 在各 profile 内复制 divergent 的路径 canonicalize 逻辑。
 
 #### Scenario: 统一 backend
 

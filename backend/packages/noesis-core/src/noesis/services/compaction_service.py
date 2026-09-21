@@ -9,7 +9,6 @@ from langchain.agents import create_agent
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from noesis.config.checkpointer import get_checkpointer
-from noesis.config.code_enum import IntentEnum
 from noesis.factory import build_compaction_middleware
 from noesis.llm import get_llm
 from noesis.repositories.agent_run_repository import AgentRunRepository
@@ -74,10 +73,6 @@ async def compact_session(
             active = await AgentRunRepository(db).get_active_for_session(user_id, session_id)
             if active is not None:
                 return ManualCompactionOutcome("busy")
-            session_extra = session.extra if isinstance(session.extra, dict) else {}
-            profile = str(session_extra.get("qa_type") or IntentEnum.COMMON_QA.value[0])
-            if profile == IntentEnum.TEST_CASE_QA.value[0]:
-                return ManualCompactionOutcome("disabled")
             model_id = await _resolve_model_id(session_id, user_id, db)
 
         middleware = build_compaction_middleware(

@@ -114,7 +114,6 @@ class PersistSink:
         if isinstance(event, WireFrame):
             semantic_boundary = event.event in {
                 "tool-output-available",
-                "phase-end",
                 "hitl-required",
                 "finish",
                 "error",

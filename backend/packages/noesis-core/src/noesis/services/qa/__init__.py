@@ -4,7 +4,6 @@
 """
 
 from noesis.services.qa.helpers import (
-    case_coordinator,
     common_agent,
     fault_agent,
     super_agent,
@@ -13,7 +12,6 @@ from noesis.services.qa.service import QaService
 
 __all__ = [
     "QaService",
-    "case_coordinator",
     "common_agent",
     "fault_agent",
     "super_agent",

@@ -14,6 +14,20 @@ from noesis.chat.event_mapping.langgraph_bridge import LangGraphSseBridge
 from noesis.services.qa.service import QaService
 
 
+
+from noesis.chat.delivery.sse import encode_run_event as _encode_run_event
+
+
+def _raw_sse_lines(bridge, item, builder, ctx):
+    """raw 运行时事件 → SSE 行（与生产主路径同形：map_item 后经统一编码器）。"""
+    return [line for event in bridge.map_item(item, builder, ctx) for line in _encode_run_event(event)]
+
+
+def _finalize_sse_lines(bridge, finish_reason=None):
+    """bridge 终态 → SSE 行（与生产主路径同形：finalize_events 后经统一编码器）。"""
+    return [line for event in bridge.finalize_events(finish_reason=finish_reason) for line in _encode_run_event(event)]
+
+
 def test_extract_interrupt_from_on_chain_stream() -> None:
     interrupt = SimpleNamespace(
         id="intr-1",
@@ -67,7 +81,7 @@ def test_bridge_emits_hitl_required_and_tool_parts() -> None:
         "review_configs": [],
         "expires_at": 1,
     }
-    lines = bridge.process_item(payload, builder, ctx)
+    lines = _raw_sse_lines(bridge, payload, builder, ctx)
     joined = "".join(lines)
     assert "hitl-required" in joined
     assert "tool-input-available" in joined
@@ -76,7 +90,7 @@ def test_bridge_emits_hitl_required_and_tool_parts() -> None:
     assert builder.to_dict()["parts"][0]["hitl"]["status"] == "pending"
     assert builder.to_dict()["parts"][0]["state"] == "approval_pending"
 
-    finish_lines = bridge.process_item(
+    finish_lines = _raw_sse_lines(bridge, 
         {"type": "__tw_finish__", "finish_reason": "hitl_pending"},
         builder,
         ctx,
@@ -89,7 +103,7 @@ def test_hitl_resume_callback_uuid_reuses_model_tool_call_id() -> None:
     bridge = LangGraphSseBridge("s-resume", assistant_message_id="aid-resume")
     builder = AssistantMessageBuilder(session_id="s-resume", message_id="aid-resume")
     ctx: dict = {}
-    bridge.process_item(
+    _raw_sse_lines(bridge, 
         {
             "type": "hitl-required",
             "interrupt_id": "interrupt-1",
@@ -106,7 +120,7 @@ def test_hitl_resume_callback_uuid_reuses_model_tool_call_id() -> None:
     )
     builder.update_tool_hitl("call-model-1", {"status": "approved"})
 
-    start_lines = bridge.process_item(
+    start_lines = _raw_sse_lines(bridge, 
         {
             "event": "on_tool_start",
             "name": "execute",
@@ -116,7 +130,7 @@ def test_hitl_resume_callback_uuid_reuses_model_tool_call_id() -> None:
         builder,
         ctx,
     )
-    end_lines = bridge.process_item(
+    end_lines = _raw_sse_lines(bridge, 
         {
             "event": "on_tool_end",
             "name": "execute",
@@ -140,7 +154,7 @@ def test_child_hitl_keeps_parent_task_after_task_stack_is_no_longer_active() -> 
     builder = AssistantMessageBuilder(session_id="s-child", message_id="aid-child")
     ctx: dict = {}
     task_run = "run-task"
-    task_lines = bridge.process_item(
+    task_lines = _raw_sse_lines(bridge, 
         {
             "event": "on_tool_start",
             "name": "task",
@@ -173,7 +187,7 @@ def test_child_hitl_keeps_parent_task_after_task_stack_is_no_longer_active() -> 
         ],
         "review_configs": [],
     }
-    lines = bridge.process_item(payload, builder, ctx)
+    lines = _raw_sse_lines(bridge, payload, builder, ctx)
     joined = "".join(lines)
     assert f'"parent_task_call_id": "{task_call_id}"' in joined
     execute_part = next(

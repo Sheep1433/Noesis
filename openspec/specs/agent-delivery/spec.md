@@ -373,7 +373,7 @@ completed、partial、error、interrupted SHALL 使用 run 与 assistant 同事�
 
 ### Requirement: SseDelivery 保持既有 SSE 契约
 
-SseDelivery SHALL 将 RunEvent 编码为现网 stream 事件形状，并在新订阅或无法连续补发时支持 `run-snapshot` 与带 `sequence` 的业务事件。既有 reasoning/text/tool/HITL 分支 SHALL 保持兼容；终态 typed 事件（RunCompleted / RunAborted / RunError）SHALL 统一编码为 `run.finished`，主路径 `finish` / `abort` / `error` 终态编码名 SHALL 退役（终态载荷 usage / model_calls / finish_reason 并入 `run.finished`；CaseCoordinator 兼容适配路径除外）；新增临时 run 状态 SHALL 使用 `run-status`，不得沿用会令旧客户端提前结束的终态 `error`。主会话 run 与子 Agent run 的 SSE 流 SHALL 使用同一事件词汇与同一编码实现，`GET /api/chat/runs/{run_id}/stream` SHALL 为单一端点实现，SHALL NOT 按 run origin 分叉事件方言。本能力 SHALL NOT 将替换 WebSocket 列为浏览器主通道必要条件。
+SseDelivery SHALL 将 RunEvent 编码为现网 stream 事件形状，并在新订阅或无法连续补发时支持 `run-snapshot` 与带 `sequence` 的业务事件。既有 reasoning/text/tool/HITL 分支 SHALL 保持兼容；终态 typed 事件（RunCompleted / RunAborted / RunError）SHALL 统一编码为 `run.finished`，主路径 `finish` / `abort` / `error` 终态编码名 SHALL 退役（终态载荷 usage / model_calls / finish_reason 并入 `run.finished`）；新增临时 run 状态 SHALL 使用 `run-status`，不得沿用会令旧客户端提前结束的终态 `error`。主会话 run 与子 Agent run 的 SSE 流 SHALL 使用同一事件词汇与同一编码实现，`GET /api/chat/runs/{run_id}/stream` SHALL 为单一端点实现，SHALL NOT 按 run origin 分叉事件方言。本能力 SHALL NOT 将替换 WebSocket 列为浏览器主通道必要条件。
 
 #### Scenario: text-delta 兼容
 

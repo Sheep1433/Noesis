@@ -10,7 +10,6 @@ from typing import Any, AsyncGenerator, Dict, List, Optional, Tuple
 
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from noesis.agents.case_generate.case_coordinator import CaseCoordinator
 from noesis.agents.common_qa import GeneralQAAgent
 from noesis.agents.fault_operation import FaultOperationAgent
 from noesis.agents.super_agent import SuperAgent
@@ -23,7 +22,6 @@ from noesis.config.mcp_config import (
 )
 from noesis.config.code_enum import IntentEnum
 from noesis.chat.delivery.events import RunEvent
-from noesis.chat.delivery.orchestrator import RunOrchestrator
 from noesis.services.persist_sink import PersistSink
 from noesis.chat.message_builder import AssistantMessageBuilder
 from noesis.chat.event_mapping.failure_notice import (
@@ -48,7 +46,6 @@ from noesis.services.chat_service import ChatService
 common_agent = GeneralQAAgent()
 fault_agent = FaultOperationAgent()
 super_agent = SuperAgent()
-case_coordinator = CaseCoordinator()
 
 
 def _normalize_kb_collections(raw: Any) -> List[str]:
@@ -560,8 +557,6 @@ async def _persist_stream_checkpoint(
         await _persist_session_context_snapshot(bridge, session_id, user_id)
     # persist_tick（part 边界）故意丢弃，避免中间态 assistant 落库
 
-_run_orchestrator = RunOrchestrator()
-
 
 def _langfuse_stream_context(
     session_id: str,
@@ -581,45 +576,6 @@ def _langfuse_stream_context(
         langfuse_trace_id=session_id,
     )
     return langfuse_workflow_context(lf_config)
-
-
-async def _yield_sse_from_agent_bridge(
-    agent_generator: AsyncGenerator[Any, None],
-    *,
-    bridge: LangGraphSseBridge,
-    builder: AssistantMessageBuilder,
-    ctx: Dict[str, Any],
-    session_id: str,
-    user_id: str,
-    qa_type: str,
-    keepalive_seconds: float,
-    langfuse_thread_id: Optional[str] = None,
-    persist_sink: Optional[PersistSink] = None,
-) -> AsyncGenerator[str, None]:
-    """经 RunOrchestrator Fan-out：RunEvent 总线 + SseDelivery（keepalive 仅在投递层）。"""
-    sink = persist_sink or PersistSink()
-    ctx["_persist_sink"] = sink
-    lf_ctx = _langfuse_stream_context(
-        session_id, qa_type, thread_id=langfuse_thread_id
-    )
-
-    async def on_events(events: List[RunEvent]) -> None:
-        for ev in events:
-            sink.on_event(ev)
-        await _persist_stream_checkpoint(bridge, session_id, user_id)
-
-    async for sse_line in _run_orchestrator.stream_sse(
-        agent_generator,
-        bridge=bridge,
-        builder=builder,
-        ctx=ctx,
-        session_id=session_id,
-        keepalive_seconds=keepalive_seconds,
-        origin="web",
-        langfuse_context=lf_ctx,
-        on_events=on_events,
-    ):
-        yield sse_line
 
 
 async def _yield_run_events_from_agent(
@@ -679,28 +635,6 @@ async def _finalize_run_events(
         if isinstance(sink, PersistSink):
             sink.on_event(event)
         yield event
-
-
-async def _finalize_sse_bridge_stream(
-    bridge: LangGraphSseBridge,
-    builder: AssistantMessageBuilder,
-    ctx: Dict[str, Any],
-    session_id: str,
-    user_id: str,
-) -> AsyncGenerator[str, None]:
-    lines = _run_orchestrator.finalize_sse(bridge)
-    sink = ctx.get("_persist_sink")
-    if isinstance(sink, PersistSink):
-        from noesis.chat.delivery.sse import parse_sse_line_to_event
-
-        for line in lines:
-            for ev in parse_sse_line_to_event(line):
-                sink.on_event(ev)
-    for sse_line in lines:
-        yield sse_line
-        await _persist_stream_checkpoint(bridge, session_id, user_id)
-
-
 
 
 def _flush_ctx_text_buffer(

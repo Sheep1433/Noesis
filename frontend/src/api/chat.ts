@@ -192,14 +192,6 @@ export interface ResumeAgentRunHitlParams {
   grant_scope?: 'once' | 'session' | null
 }
 
-/** 创建会话请求参数 */
-export interface CreateSessionParams {
-  title?: string
-  parent_id?: string
-  kind?: 'root' | 'subagent'
-  extra?: Record<string, unknown>
-}
-
 /** 更新会话标题参数 */
 export interface UpdateSessionTitleParams {
   title: string
@@ -309,15 +301,6 @@ export async function getChatSessions(status?: string): Promise<SessionListRespo
   }
   const req = makeRequest('GET', url.toString())
   return parseResponse<SessionListResponse>(await authFetch(req))
-}
-
-/**
- * 创建新会话
- * POST /api/chat/sessions
- */
-export async function createSession(params: CreateSessionParams = {}): Promise<ChatSessionResponse> {
-  const req = makeRequest('POST', `${location.origin}${BASE}/sessions`, params)
-  return parseResponse<ChatSessionResponse>(await authFetch(req))
 }
 
 export interface EnsureSessionParams {
@@ -465,18 +448,6 @@ export async function resumeAgentRunHitl(
     'POST',
     `${location.origin}${BASE}/runs/${encodeURIComponent(runId)}/hitl/resume`,
     params,
-  )
-  return parseResponse<AgentRunSnapshot>(await authFetch(req))
-}
-
-export async function resumeAgentRunTestCase(
-  runId: string,
-  selectedPointNames: string[],
-): Promise<AgentRunSnapshot> {
-  const req = makeRequest(
-    'POST',
-    `${location.origin}${BASE}/runs/${encodeURIComponent(runId)}/test-case/resume`,
-    { selected_point_names: selectedPointNames },
   )
   return parseResponse<AgentRunSnapshot>(await authFetch(req))
 }
@@ -750,56 +721,4 @@ export async function sendSubagentMessage(
 export async function getMessage(messageId: string): Promise<ChatMessageResponse> {
   const req = makeRequest('GET', `${location.origin}${BASE}/messages/${messageId}`)
   return parseResponse<ChatMessageResponse>(await authFetch(req))
-}
-
-/** 导出用例条目（与后端 TestCaseExportCaseItem 对齐） */
-export interface TestCaseExportCaseItem {
-  point_name: string
-  case_id?: string
-  point_level?: string
-  point_type?: string
-  scene_name?: string
-  preconditions?: string[]
-  test_steps?: string[]
-  expected_results?: string[]
-}
-
-export interface TestCaseExportParams {
-  test_cases?: TestCaseExportCaseItem[]
-  query?: string
-}
-
-/**
- * 导出测试用例 Markdown 并触发浏览器下载
- * POST /api/chat/sessions/{sessionId}/test-case/export
- */
-export async function exportTestCaseMarkdown(
-  sessionId: string,
-  params: TestCaseExportParams = {},
-): Promise<void> {
-  const req = makeRequest(
-    'POST',
-    `${location.origin}${BASE}/sessions/${sessionId}/test-case/export`,
-    params,
-  )
-  const res = await authFetch(req)
-  if (res.status === 404) {
-    throw new Error('暂无可导出的测试用例，请先生成用例')
-  }
-  if (!res.ok) {
-    let msg = `导出失败（${res.status}）`
-    try {
-      const json = await res.json()
-      if (json?.msg || json?.detail) {
-        msg = String(json.msg || json.detail)
-      }
-    } catch {
-      // ignore
-    }
-    throw new Error(msg)
-  }
-  const blob = await res.blob()
-  const filename = parseContentDispositionFilename(res.headers.get('content-disposition'))
-    || '测试用例报告.md'
-  downloadFile(blob, filename, 'text/markdown;charset=utf-8')
 }

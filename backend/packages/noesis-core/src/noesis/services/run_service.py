@@ -28,7 +28,6 @@ from noesis.chat.delivery.events import (
     RunError,
     RunEvent,
 )
-from noesis.chat.delivery.sse import parse_sse_line_to_event
 from noesis.services.persist_sink import PersistSink
 from noesis.chat.runs.skeleton import (
     build_assistant_skeleton_row,
@@ -53,7 +52,7 @@ from noesis.repositories.agent_run_repository import AgentRunRepository
 from noesis.storage.postgres.models.chat import TAgentRun, TChatSession
 from noesis.schemas.chat_vo import CreateRunRequest
 from noesis.schemas.login_vo import CurrentUser
-from noesis.schemas.qa_vo import HitlResumeRequest, TestCaseResumeRequest
+from noesis.schemas.qa_vo import HitlResumeRequest
 from noesis.services.qa import QaService
 from noesis.services.chat_service import ChatService
 from noesis.services.compaction_service import compact_session
@@ -282,17 +281,14 @@ class RunService:
             created_at=now,
         )
         # create 时冻结 model identity：排队期间会话默认模型变化不影响本 run
-        if qa_type == IntentEnum.TEST_CASE_QA.value[0]:
-            resolved_model: str | None = None
-        else:
-            from noesis.services.qa.helpers import _resolve_model_for_query
+        from noesis.services.qa.helpers import _resolve_model_for_query
 
-            resolved_model = await _resolve_model_for_query(
-                session_id=request.session_id,
-                user_id=user_id,
-                request_model_id=str(extra["model_id"]) if extra.get("model_id") else None,
-                db=db,
-            )
+        resolved_model = await _resolve_model_for_query(
+            session_id=request.session_id,
+            user_id=user_id,
+            request_model_id=str(extra["model_id"]) if extra.get("model_id") else None,
+            db=db,
+        )
         launch_payload = LaunchPayload.from_create_request(
             request,
             user_id=user_id,
@@ -461,26 +457,17 @@ class RunService:
                         assistant_message_id=run.assistant_message_id,
                         run_id=run.id,
                     )
-                    if run.qa_type == IntentEnum.TEST_CASE_QA.value[0]:
-                        # TEST_CASE_QA 不纳入本次 typed 主路径迁移；维持隔离的
-                        # CaseCoordinator SSE 边界，避免兼容 parser 污染目标 qa_type。
-                        async for line in stream:
-                            if not isinstance(line, str):
-                                raise TypeError("TEST_CASE_QA must emit SSE strings")
-                            for event in parse_sse_line_to_event(line):
-                                await publish(event, projection.attempt_id)
-                    else:
-                        async for event in stream:
-                            if isinstance(event, str):
-                                raise TypeError(
-                                    f"target Agent Run emitted SSE string qa_type={run.qa_type}"
-                                )
-                            # WireFrame.attempt_id 是单次模型调用的重试位次
-                            # （遥测字段，进 model_calls.attempt），不是 run 级
-                            # attempt——透传进 apply_event 会与其严格一致校验
-                            # 冲突，把迟到帧升级成 StaleAttemptEvent 杀死
-                            # producer（2026-09-03：重试后 run 误判 RUN_FAILED）。
-                            await publish(event, projection.attempt_id)
+                    async for event in stream:
+                        if isinstance(event, str):
+                            raise TypeError(
+                                f"target Agent Run emitted SSE string qa_type={run.qa_type}"
+                            )
+                        # WireFrame.attempt_id 是单次模型调用的重试位次
+                        # （遥测字段，进 model_calls.attempt），不是 run 级
+                        # attempt——透传进 apply_event 会与其严格一致校验
+                        # 冲突，把迟到帧升级成 StaleAttemptEvent 杀死
+                        # producer（2026-09-03：重试后 run 误判 RUN_FAILED）。
+                        await publish(event, projection.attempt_id)
                     await run_manager.drain_persistence(run.id)
                 except BaseException as exc:
                     if isinstance(exc, GeneratorExit):
@@ -994,74 +981,3 @@ class RunService:
             raise ServiceException(message="继续任务失败，请稍后重试")
         return handle.snapshot_provider(handle.last_sequence, handle.status, handle.attempt_id)
 
-    @classmethod
-    async def resume_test_case(
-        cls,
-        run_id: str,
-        request: TestCaseResumeRequest,
-        current_user: CurrentUser,
-        db: AsyncSession,
-    ) -> RunSnapshot:
-        row = await AgentRunRepository(db).get(run_id, str(current_user.user_id))
-        if row is None:
-            raise NotFoundException(message="任务不存在")
-        if row.qa_type != IntentEnum.TEST_CASE_QA.value[0]:
-            raise ConflictException(message="当前任务不是测试用例生成")
-        if row.status != RunStatus.HITL_PENDING.value:
-            raise ConflictException(message="任务当前不需要确认", data={"run_id": run_id})
-        try:
-            handle = run_manager.get(run_id)
-        except KeyError as exc:
-            raise ConflictException(message="本轮任务已中断，无法继续确认") from exc
-        if not isinstance(handle.state, RunProjection):
-            raise ConflictException(message="任务状态无法恢复")
-        projection = handle.state
-        async def producer(publish) -> None:
-            async with pg_manager.get_async_session_context() as run_db:
-                try:
-                    async for line in QaService.exec_test_case_resume(
-                        session_id=row.session_id,
-                        selected_point_names=request.selected_point_names,
-                        current_user=current_user,
-                        db=run_db,
-                        assistant_message_id=row.assistant_message_id,
-                    ):
-                        for event in parse_sse_line_to_event(line):
-                            envelope = await cls.publish_projected_event(
-                                run_id, projection, event, publish
-                            )
-                            if envelope is None:
-                                continue
-                    await run_manager.drain_delivery(run_id, "persist")
-                    await cls._persist_projection(run_id, projection)
-                except BaseException as exc:
-                    await cls._persist_cancel_or_error(run_id, projection, exc)
-
-        repository = AgentRunRepository(db)
-        won = await repository.compare_and_set_status(
-            run_id,
-            [RunStatus.HITL_PENDING],
-            RunStatus.RUNNING,
-            updated_at=_now_ms(),
-        )
-        if not won:
-            await db.rollback()
-            raise ConflictException(message="确认请求已被处理，请刷新后重试")
-        await db.commit()
-        try:
-            await run_manager.resume(
-                run_id,
-                producer,
-                prepare=lambda: setattr(projection, "status", RunStatus.RUNNING),
-            )
-        except Exception:
-            logger.exception("test case run resume start failed run_id={}", run_id)
-            await repository.compare_and_set_status(
-                run_id,
-                [RunStatus.RUNNING],
-                RunStatus.HITL_PENDING,
-                updated_at=_now_ms(),
-            )
-            await db.commit()
-            raise ServiceException(message="继续任务失败，请稍后重试")
-        return handle.snapshot_provider(handle.last_sequence, handle.status, handle.attempt_id)

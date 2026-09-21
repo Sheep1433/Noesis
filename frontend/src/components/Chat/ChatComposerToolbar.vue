@@ -36,8 +36,8 @@ const skillsAllEnabled = defineModel<boolean>('skillsAllEnabled', { default: tru
 
 const showKbScope = computed(() => props.qaType === 'COMMON_QA' || props.qaType === 'SUPER_AGENT_QA')
 const showSkillsMenu = computed(() => props.qaType === 'SUPER_AGENT_QA')
-// 推理档位：与 model/mcp 同门控（TEST_CASE_QA 排除）；组件自身再按模型声明降级
-const showReasoningEffort = computed(() => props.qaType !== 'TEST_CASE_QA')
+// 推理档位：与 model/mcp 同门控；组件自身再按模型声明降级
+const showReasoningEffort = computed(() => true)
 const showFileUpload = computed(() =>
   props.qaType === 'COMMON_QA'
   || props.qaType === 'SUPER_AGENT_QA'

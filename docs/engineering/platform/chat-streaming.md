@@ -7,7 +7,7 @@
 
 Noesis 的可靠性目标不是维持一条永不断开的 TCP 连接，而是让 Agent Run 独立于浏览器连接，并通过权威 snapshot、单调 sequence 和重新订阅恢复界面。
 
-本架构适用于 `COMMON_QA`、`FAULT_OPERATION_QA`、`SUPER_AGENT_QA` 的 Web、Channel 和 HITL 路径。`TEST_CASE_QA` 仍由独立 CaseCoordinator 处理，不进入本管线。
+本架构适用于 `COMMON_QA`、`FAULT_OPERATION_QA`、`SUPER_AGENT_QA` 的 Web、Channel 和 HITL 路径。
 
 ## 2. 核心约束
 
@@ -95,7 +95,6 @@ run 内容流（`GET /api/chat/runs/{run_id}/stream`，主会话与子 Agent run
 | 工具 | `tool-input-start`、`tool-input-available`、`tool-output-available` |
 | 检索与统计 | `retrieval-results-available`、`stats-update`、`context-update` |
 | HITL | `hitl-required` |
-| Phase（TEST_CASE 遗留） | `phase-start`、`phase-delta`、`phase-end`、`scenario-start`、`testpoints-confirm-required`、`scene-cases` |
 | 传输层哨兵 | `data: [DONE]`（流传输收尾，不表示业务终态；`chat/delivery/sse.py`） |
 
 **终态标记统一**：`run.finished` 是唯一流终止事件（载荷含 `status` / `finish_reason` / `usage` / `model_calls`），后随 `[DONE]`。主链路 typed 终态事件（RunCompleted / RunAborted / RunError）在 `sse.py` 统一编码为 `run.finished`；子 Agent run 由 executor 发布同词汇事件。bridge 内部仍有 `finish` / `abort` / `error` 帧名——它们经 `RuntimeEventMapper._normalize` 归一化为 typed 终态事件后才上 wire，**线上不出现**（保留在词表提取源中仅为 bridge 内部实现，新代码不得直发）。
@@ -168,7 +167,6 @@ SSE 注释 keepalive 不分配 sequence，也不触发 checkpoint。反向代理
 - 进程崩溃后只用最近 checkpoint 收口为 `interrupted/server_restart`，不重放模型或工具。
 - 当前不支持多 active backend、owner 转移或跨进程 command routing；未引入 Redis Pub/Sub。
 - Channel outbound 是进程内有界队列，不是 durable spool。
-- `TEST_CASE_QA` 仍保留自己的旧 SSE 边界，不属于本架构的验收范围。
 
 ## 11. 关联资料
 

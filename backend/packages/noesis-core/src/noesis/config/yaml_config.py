@@ -247,10 +247,6 @@ class QdrantYamlSection(BaseModel):
     grpc_port: int = 6334
     prefer_grpc: bool = False
     default_collection: str = "knowledge_base"
-    requirement_docs_collection: str = "requirement_docs"
-    test_case_docs_collection: str = "test_case_docs"
-    test_case_upload_collection: str = ""
-    case_rag_historical_requirements_enabled: bool = False
 
 
 class LangfuseYamlSection(BaseModel):

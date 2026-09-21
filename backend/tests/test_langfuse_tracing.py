@@ -59,7 +59,7 @@ def test_merge_langfuse_trace_id_passes_to_callback_handler():
     with patch("langfuse.langchain.CallbackHandler", mock_handler_cls):
         patch_result = langfuse_tracing._langfuse_config_patch(
             langfuse_session_id="sess-1",
-            qa_type="TEST_CASE_QA",
+            qa_type="COMMON_QA",
             enabled=True,
             langfuse_trace_id="workflow-trace-1",
         )
@@ -88,7 +88,7 @@ def test_langfuse_config_patch_normalizes_session_uuid_trace_id():
     with patch("langfuse.langchain.CallbackHandler", mock_handler_cls):
         patch_result = langfuse_tracing._langfuse_config_patch(
             langfuse_session_id=session_uuid,
-            qa_type="TEST_CASE_QA",
+            qa_type="COMMON_QA",
             enabled=True,
             langfuse_trace_id=session_uuid,
         )
@@ -128,7 +128,7 @@ def test_langfuse_workflow_context_propagates_from_run_config():
         "metadata": {
             "langfuse_session_id": "chat-1",
             "langfuse_trace_id": "chat-1",
-            "qa_type": "TEST_CASE_QA",
+            "qa_type": "COMMON_QA",
         }
     }
     mock_propagate = MagicMock()
@@ -141,7 +141,7 @@ def test_langfuse_workflow_context_propagates_from_run_config():
                 assert langfuse_tracing._lf_trace_context.get() == {"trace_id": "chat-1"}
     pa.assert_called_once_with(
         session_id="chat-1",
-        metadata={"qa_type": "TEST_CASE_QA"},
+        metadata={"qa_type": "COMMON_QA"},
     )
 
 

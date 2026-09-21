@@ -34,7 +34,6 @@
 - [Durable Agent Run 与断线恢复架构](engineering/platform/durable-agent-runs.md)
 - [聊天记录与持久化](engineering/platform/chat-persistence.md)
 - [设置控制面](engineering/platform/settings-control-plane.md)
-- [测试用例生成](engineering/agents/test-case-generation.md)
 - [Agent 评测运行指南](engineering/agents/agent-evaluation.md)
 - [Agent Runtime 设计（Proposed）](engineering/agents/agent-runtime-design.md)
 

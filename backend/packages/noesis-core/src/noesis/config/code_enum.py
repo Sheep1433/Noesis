@@ -10,7 +10,6 @@ class IntentEnum(Enum):
     COMMON_QA = ("COMMON_QA", "智能问答")
     SUPER_AGENT_QA = ("SUPER_AGENT_QA", "智能体")
     FAULT_OPERATION_QA = ("FAULT_OPERATION_QA", "故障运维")
-    TEST_CASE_QA = ("TEST_CASE_QA", "测试用例生成")
 
 
 class HttpStatusConstant:

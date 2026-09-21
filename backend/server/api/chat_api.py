@@ -20,7 +20,6 @@ from server.db import get_db, sse_prefetch_db
 
 from noesis.schemas.login_vo import CurrentUser
 from noesis.schemas.chat_vo import (
-    CreateSessionRequest,
     EnsureSessionRequest,
     UpdateSessionTitleRequest,
     UpdateSessionMetaRequest,
@@ -29,9 +28,7 @@ from noesis.schemas.chat_vo import (
     SessionListResponse,
     ChildSessionCatalogResponse,
     MessageListResponse,
-    SendMessageRequest,
     SubagentMessageRequest,
-    SendMessageResponse,
     CreateRunRequest,
 )
 from noesis.schemas.session_context_vo import (
@@ -41,7 +38,6 @@ from noesis.schemas.session_context_vo import (
 from noesis.services.session_context_service import SessionContextService
 from noesis.services.chat_service import ChatService
 from server.auth_dependencies import get_current_user, require_csrf
-from noesis.services.qa import QaService
 from noesis.services.run_service import RunService, run_manager
 from noesis.storage.postgres.manager import pg_manager
 from server.response import ResponseUtil
@@ -51,11 +47,7 @@ from noesis.chat.message_builder import (
 )
 from noesis.runtime.logging import logger
 from noesis.errors.exceptions import ServiceException
-from noesis.schemas.qa_vo import (
-    HitlResumeRequest,
-    TestCaseExportRequest,
-    TestCaseResumeRequest,
-)
+from noesis.schemas.qa_vo import HitlResumeRequest
 from noesis.chat.delivery.sse import (
     SSE_COMMENT_KEEPALIVE,
     encode_sequenced_event,
@@ -73,8 +65,6 @@ from noesis.chat.runs import SlowSubscriber, SubscriptionLimitExceeded
 
 
 chat_router = APIRouter(prefix="/api/chat")
-
-_EXPORT_FALLBACK_FILENAME = "test-cases-export.md"
 
 
 async def _deny_foreign_session(
@@ -202,37 +192,6 @@ async def get_sessions(
         data=SessionListResponse(
             sessions=session_responses, total=len(session_responses)
         ).model_dump(),
-    )
-
-
-@chat_router.post("/sessions", summary="创建会话")
-async def create_session(
-    request: CreateSessionRequest,
-    current_user: CurrentUser = Depends(get_current_user),
-    db: AsyncSession = Depends(get_db),
-):
-    """
-    创建新会话（可指定 parent_id 创建子会话）
-    """
-    if request.parent_id:
-        parent = await ChatService.get_session_by_id(
-            session_id=request.parent_id,
-            user_id=str(current_user.user_id),
-            db=db,
-        )
-        if not parent:
-            return ResponseUtil.not_found(msg="父会话不存在")
-
-    session = await ChatService.create_session(
-        user_id=str(current_user.user_id),
-        title=request.title,
-        parent_id=request.parent_id,
-        extra=request.extra,
-        db=db,
-    )
-
-    return ResponseUtil.success(
-        msg="创建会话成功", data=_session_to_response(session).model_dump()
     )
 
 
@@ -606,47 +565,6 @@ async def put_session_workspace_file(
         if exc.status_code == 400:
             return ResponseUtil.failure(msg=str(exc.detail))
         raise
-
-
-@chat_router.post("/sessions/{session_id}/messages", summary="发送消息")
-async def send_message(
-    session_id: str,
-    request: SendMessageRequest,
-    current_user: CurrentUser = Depends(get_current_user),
-    db: AsyncSession = Depends(get_db),
-):
-    """
-    发送消息（创建用户消息）
-    """
-    session = await ChatService.get_session_by_id(
-        session_id=session_id,
-        user_id=str(current_user.user_id),
-        db=db,
-    )
-    if not session:
-        return ResponseUtil.not_found(msg="会话不存在")
-
-    # 构建消息内容
-    builder = UserMessageBuilder(content=request.content)
-    content = builder.serialize()
-
-    message = await ChatService.save_message(
-        session_id=session_id,
-        user_id=str(current_user.user_id),
-        role="user",
-        content=content,
-        extra=request.extra,
-        parent_id=request.parent_id,
-        status="completed",
-        db=db,
-    )
-
-    return ResponseUtil.success(
-        msg="发送消息成功",
-        data=SendMessageResponse(
-            message_id=message.id, session_id=message.session_id, status=message.status
-        ).model_dump(),
-    )
 
 
 @chat_router.post(
@@ -1176,23 +1094,6 @@ async def stop_run(
     )
 
 
-@chat_router.post(
-    "/runs/{run_id}/test-case/resume", summary="采纳测试点后继续 Agent 任务"
-)
-async def resume_test_case_run(
-    run_id: str,
-    request: TestCaseResumeRequest,
-    http_request: Request,
-    current_user: CurrentUser = Depends(get_current_user),
-    db: AsyncSession = Depends(get_db),
-):
-    await require_csrf(http_request)
-    if not request.selected_point_names:
-        return ResponseUtil.failure(msg="请至少选择一个测试点")
-    snapshot = await RunService.resume_test_case(run_id, request, current_user, db)
-    return ResponseUtil.success(msg="任务已继续", data=snapshot.to_dict())
-
-
 @chat_router.post("/runs/{run_id}/hitl/resume", summary="审批后继续 Agent 任务")
 async def resume_hitl_run(
     run_id: str,
@@ -1219,46 +1120,6 @@ async def resume_hitl_run(
             **snapshot.to_dict(),
             "command_id": command["command_id"],
             "command_status": command["command_status"],
-        },
-    )
-
-
-@chat_router.post(
-    "/sessions/{session_id}/test-case/export", summary="测试用例：导出 Markdown"
-)
-async def export_test_case_markdown(
-    session_id: str,
-    request: TestCaseExportRequest = Body(default_factory=TestCaseExportRequest),
-    current_user: CurrentUser = Depends(get_current_user),
-    db: AsyncSession = Depends(get_db),
-):
-    """
-    将测试用例导出为 Markdown 文件下载。
-    请求体可携带 test_cases；省略时从协调器读取本会话最近一次生成结果。
-    """
-    test_cases = None
-    if request.test_cases:
-        test_cases = [item.model_dump(exclude_none=True) for item in request.test_cases]
-
-    try:
-        markdown, filename = await QaService.export_test_case_markdown(
-            session_id=session_id,
-            current_user=current_user,
-            db=db,
-            test_cases=test_cases,
-            query=request.query,
-        )
-    except HTTPException:
-        raise
-    except Exception as e:
-        logger.exception(e)
-        raise HTTPException(status_code=500, detail="导出失败") from e
-
-    return Response(
-        content=markdown.encode("utf-8"),
-        media_type="text/markdown; charset=utf-8",
-        headers={
-            "Content-Disposition": _attachment_content_disposition(filename),
         },
     )
 

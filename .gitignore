@@ -47,3 +47,6 @@ deploy/config.docker.yaml
 
 # ERB 评分器生成数据缓存（本地构建产物，不入库）
 backend/evals/agent/rag/erb_scorer/generated_data/
+
+# 仓库根临时目录（统一进 .tmp/）
+/tmp/

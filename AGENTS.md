@@ -52,12 +52,10 @@ Noesis/
 | GeneralQAAgent | `create_noesis_agent` | RAG hybrid 检索 | 智能问答 |
 | FaultOperationAgent | `create_noesis_agent` | MCP | 故障运维 |
 | SuperAgent | `create_noesis_agent` | 文件系统 + Skills + 子 Agent | 深度研究 / 通用复杂任务 |
-| CaseCoordinator | LangGraph `StateGraph` | 自定义 workflow | 测试用例生成 |
-| SimpleMCPAgent | `create_noesis_agent` | MCP | 本地调试 |
 
 ### 问答类型（`qa_type`）
 
-`COMMON_QA`、`FAULT_OPERATION_QA`、`TEST_CASE_QA`、`SUPER_AGENT_QA`
+`COMMON_QA`、`FAULT_OPERATION_QA`、`SUPER_AGENT_QA`
 
 ### SSE 事件
 
