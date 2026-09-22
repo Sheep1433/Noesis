@@ -148,12 +148,15 @@ class AgentRunRepository:
         owner_instance_id: str,
         owner_term: int,
         now_ms: int,
-    ) -> bool:
-        """CAS claim：仅当仍 queued 且未被认领时写入 owner 与 term。
+    ) -> int:
+        """CAS claim：仅当仍 queued 且未被认领时写入 owner，并递增认领代次。
 
-        leader 任期有效性由调用方（dispatcher 的 leadership token）在进程内
-        校验；owner_term 落库供重启 recovery 区分「本任期内 claim」与
-        「旧任期残留」。
+        返回认领后的 claim_epoch（>0 = 认领成功；0 = 未认领）。epoch 单调
+        递增永不归零——对账重置只清 owner/heartbeat，保留 epoch，跨多轮
+        重置后旧认领者的 epoch 永不等于当前值（worker-role-split fencing）。
+        ``owner_term`` 为审计字段（历史 leader term），不参与 fencing 判定。
+        heartbeat 超时判定只在对账（阶段化分流），claim 永远只见
+        ``queued AND owner IS NULL`` 的行。
         """
         result = await self.db.execute(
             update(TAgentRun)
@@ -166,8 +169,37 @@ class AgentRunRepository:
             .values(
                 owner_instance_id=owner_instance_id,
                 owner_term=owner_term,
+                claim_epoch=TAgentRun.claim_epoch + 1,
+                heartbeat_at=now_ms,
                 updated_at=now_ms,
             )
+            .returning(TAgentRun.claim_epoch)
+        )
+        row = result.fetchone()
+        return int(row[0]) if row else 0
+
+    async def heartbeat(
+        self,
+        *,
+        run_id: str,
+        owner_instance_id: str,
+        claim_epoch: int,
+        now_ms: int,
+    ) -> bool:
+        """持有期间的存活心跳：仅命中「本 worker + 本 epoch」的行。
+
+        返回 False = run 已被重置/再认领/终态（epoch 或 owner 不符），
+        调用方（worker 心跳协程）应视为失去持有、停掉本地执行。
+        """
+        result = await self.db.execute(
+            update(TAgentRun)
+            .where(
+                TAgentRun.id == run_id,
+                TAgentRun.owner_instance_id == owner_instance_id,
+                TAgentRun.claim_epoch == claim_epoch,
+                TAgentRun.status.in_([s.value for s in ACTIVE_RUN_STATUSES]),
+            )
+            .values(heartbeat_at=now_ms)
         )
         return result.rowcount == 1
 
@@ -183,16 +215,25 @@ class AgentRunRepository:
         status: RunStatus,
         finish_reason: str | None,
         updated_at: int,
+        claim_epoch: int | None = None,
     ) -> bool:
-        """原子写入 checkpoint；迟到 sequence 不得更新 run 或 assistant。"""
+        """原子写入 checkpoint；迟到 sequence 不得更新 run 或 assistant。
+
+        ``claim_epoch`` 非 None 时为 fencing 条件（worker-role-split）：epoch
+        不符（run 已被重置/再认领）的僵尸写在此被拒（rowcount=0 → False）。
+        None = 不设防（Phase 2 全调用方接线前的过渡默认）。
+        """
         active = [status.value for status in ACTIVE_RUN_STATUSES]
+        run_conditions = [
+            TAgentRun.id == run_id,
+            TAgentRun.status.in_(active),
+            TAgentRun.last_sequence <= sequence,
+        ]
+        if claim_epoch is not None:
+            run_conditions.append(TAgentRun.claim_epoch == claim_epoch)
         run_result = await self.db.execute(
             update(TAgentRun)
-            .where(
-                TAgentRun.id == run_id,
-                TAgentRun.status.in_(active),
-                TAgentRun.last_sequence <= sequence,
-            )
+            .where(*run_conditions)
             .values(
                 last_sequence=sequence,
                 snapshot=snapshot,

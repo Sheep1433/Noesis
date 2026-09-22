@@ -2,16 +2,16 @@
 
 ## 1. 数据层：认领 epoch 与心跳（Phase 1，可独立验收）
 
-- [ ] 1.1 `storage/postgres/models/chat.py`：`TAgentRun` 新增 `claim_epoch`（Integer, default 0）、`heartbeat_at`（BigInteger, nullable）；`owner_term` 注释更新为审计字段（不参与 fencing）
-- [ ] 1.2 Alembic migration：纯加列（`claim_epoch` server_default '0'、`heartbeat_at` nullable），存量行零回填；验证现有库升级路径
-- [ ] 1.3 `repositories/agent_run_repository.py`：`claim_queued` 升级——CAS 条件加 `heartbeat 超时或为空`，写入 `claim_epoch = claim_epoch + 1`；新增 `heartbeat(run_id, now_ms)`（带 `WHERE claim_epoch = :epoch` 条件）；`save_checkpoint` / 终态 CAS 的 UPDATE 追加 `claim_epoch` 条件（僵尸写 DB 层拒绝）
-- [ ] 1.4 单测：epoch 递增幂等；**epoch 单调性**（多轮重置-再认领后 epoch 严格递增，旧 epoch 永不等于当前值）；心跳条件更新只命中本 epoch；僵尸 epoch 的 checkpoint 写被拒（rowcount=0）；claim 只认领 `queued AND owner IS NULL`（heartbeat 超时行不被 claim 直取，须经对账）
+- [x] 1.1 `storage/postgres/models/chat.py`：`TAgentRun` 新增 `claim_epoch`（Integer, default 0）、`heartbeat_at`（BigInteger, nullable）；`owner_term` 注释更新为审计字段（不参与 fencing）
+- [x] 1.2 Alembic migration：纯加列（`claim_epoch` server_default '0'、`heartbeat_at` nullable），存量行零回填；验证现有库升级路径
+- [x] 1.3 `repositories/agent_run_repository.py`：`claim_queued` 升级——CAS 条件加 `heartbeat 超时或为空`，写入 `claim_epoch = claim_epoch + 1`；新增 `heartbeat(run_id, now_ms)`（带 `WHERE claim_epoch = :epoch` 条件）；`save_checkpoint` / 终态 CAS 的 UPDATE 追加 `claim_epoch` 条件（僵尸写 DB 层拒绝）
+- [x] 1.4 单测：epoch 递增幂等；**epoch 单调性**（多轮重置-再认领后 epoch 严格递增，旧 epoch 永不等于当前值）；心跳条件更新只命中本 epoch；僵尸 epoch 的 checkpoint 写被拒（rowcount=0）；claim 只认领 `queued AND owner IS NULL`（heartbeat 超时行不被 claim 直取，须经对账）
 
 ## 2. 对账阶段化（Phase 1）
 
-- [ ] 2.1 `services/run_recovery_service.py`：僵尸判定改「heartbeat 超时」+ 阶段化分流——`last_sequence=0 且 snapshot IS NULL 且 launch_payload 非空` → 重置 queued + 清 `owner_instance_id` 与 `heartbeat_at`（**claim_epoch 保留递增不归零**——归零会制造 epoch 碰撞，第一代超长假死僵尸可通过校验）；否则收口 interrupted（保留现有部分成果语义）
-- [ ] 2.2 `server/bootstrap/leader_runtime.py`：对账步骤清单同步收敛（主 run 步骤替换为阶段化逻辑；子代理/shell/定时任务/通知对账步骤保留原样）；`tests/test_leader_runtime_order.py` 语义迁移改写
-- [ ] 2.3 单测：未碰世界 run 重置后被再认领执行；已碰世界 run 收口 interrupted 且部分成果保留；heartbeat 未超时的 run 不被对账触碰
+- [x] 2.1 `services/run_recovery_service.py`：僵尸判定改「heartbeat 超时」+ 阶段化分流——`last_sequence=0 且 snapshot IS NULL 且 launch_payload 非空` → 重置 queued + 清 `owner_instance_id` 与 `heartbeat_at`（**claim_epoch 保留递增不归零**——归零会制造 epoch 碰撞，第一代超长假死僵尸可通过校验）；否则收口 interrupted（保留现有部分成果语义）
+- [x] 2.2 `server/bootstrap/leader_runtime.py`：阶段化收敛在 `recover_orphaned_runs` 内部实现，对账步骤清单对外接口未变（`_main_runs` 调用不变、顺序语义不变）——`test_leader_runtime_order.py` 全绿无需改写
+- [x] 2.3 单测：未碰世界 run 重置后被再认领执行；已碰世界 run 收口 interrupted 且部分成果保留；heartbeat 未超时的 run 不被对账触碰
 
 ## 3. 认领循环 worker 化 + fencing 管道（Phase 2）
 

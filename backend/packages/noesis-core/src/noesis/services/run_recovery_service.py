@@ -59,6 +59,43 @@ class RunRecoveryService:
             run_last_sequence = run.last_sequence
             run_snapshot = run.snapshot if isinstance(run.snapshot, dict) else {}
             now = int(time.time() * 1000)
+
+            # 阶段化重置（worker-role-split）：未碰世界的 run 优先重排队而非
+            # 收口。判据安全性——last_sequence=0 即连 message-start 都未发布，
+            # 而任何工具执行前必先发布 tool-input 事件，故该状态下工具不可
+            # 能执行过（模型调用幂等可重跑）；claim_epoch 保留递增不归零，
+            # 超长假死僵尸的旧 epoch 永不等于重置后再认领的新值。
+            if (
+                run_last_sequence == 0
+                and not run_snapshot
+                and isinstance(run.launch_payload, dict)
+                and run.launch_payload
+            ):
+                reset = await db.execute(
+                    update(TAgentRun)
+                    .where(
+                        TAgentRun.id == run_id,
+                        TAgentRun.status == run.status,
+                        TAgentRun.owner_instance_id == run.owner_instance_id,
+                    )
+                    .values(
+                        status=RunStatus.QUEUED.value,
+                        owner_instance_id=None,
+                        owner_term=0,
+                        heartbeat_at=None,
+                        started_at=None,
+                        updated_at=now,
+                    )
+                )
+                if reset.rowcount == 1:
+                    recovered += 1
+                    logger.warning(
+                        "启动恢复：run {} 未产出任何事件（{}），重置 queued 等待再认领",
+                        run_id,
+                        run.status,
+                    )
+                continue
+
             terminal = dict(
                 target=RunStatus.INTERRUPTED,
                 finished_at=now,

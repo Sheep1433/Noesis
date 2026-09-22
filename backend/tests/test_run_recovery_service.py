@@ -260,3 +260,143 @@ async def test_recovery_run_only_finalize_for_poisoned_message(monkeypatch) -> N
     assert call.kwargs["last_sequence"] == 4
     assert recovered == 1
     db.commit.assert_awaited_once()
+
+
+# ---------------------------------------------------------------------------
+# 阶段化重置（worker-role-split Phase 1）：未碰世界的 run 重排队，epoch 保留
+# ---------------------------------------------------------------------------
+
+
+def _reset_table_update_result():
+    """捕获 db.execute 收到的重置 UPDATE 语句，供断言 values。"""
+    return MagicMock()
+
+
+@pytest.mark.asyncio
+async def test_recovery_resets_unstarted_run_to_queued(monkeypatch) -> None:
+    """已 claim 但未产出任何事件的 run：重置 queued 等待再认领，不收口。"""
+    unstarted = SimpleNamespace(
+        id="run-unstarted",
+        origin="web",
+        assistant_message_id="assistant-unstarted",
+        snapshot=None,
+        last_sequence=0,
+        status="running",
+        owner_instance_id="dead-worker",
+        owner_term=4,
+        launch_payload={"run_id": "run-unstarted", "content": "hi"},
+        claim_epoch=2,
+    )
+    orphan_result = MagicMock()
+    orphan_result.scalars.return_value.all.return_value = []
+    reset_update = SimpleNamespace(rowcount=1)
+    db = MagicMock()
+    db.execute = AsyncMock(side_effect=[reset_update, orphan_result])
+    db.commit = AsyncMock()
+    repository = MagicMock()
+    repository.list_non_terminal = AsyncMock(return_value=[unstarted])
+    repository.finalize = AsyncMock()
+    monkeypatch.setattr(
+        "noesis.services.run_recovery_service.AgentRunRepository",
+        lambda _db: repository,
+    )
+
+    recovered = await RunRecoveryService.recover_orphaned_runs(
+        db, current_leader_term=5
+    )
+
+    assert recovered == 1
+    assert repository.finalize.await_count == 0
+    reset_stmt = db.execute.await_args_list[0].args[0]
+    compiled = reset_stmt.compile()
+    # 重置三件套：回 queued、清 owner/heartbeat；claim_epoch 不在 values（保留递增）
+    assert compiled.params["status"] == "queued"
+    assert compiled.params["owner_instance_id"] is None
+    assert compiled.params["heartbeat_at"] is None
+    assert "claim_epoch" not in compiled.params
+    assert "claim_epoch" not in str(resize := reset_stmt) or "claim_epoch=(" in resize  # 仅出现在自增/条件，不作为赋值
+
+
+@pytest.mark.asyncio
+async def test_recovery_does_not_reset_started_run(monkeypatch) -> None:
+    """已产出事件（last_sequence>0）的 run：不重置，走收口 interrupted。"""
+    started = SimpleNamespace(
+        id="run-started",
+        origin="web",
+        assistant_message_id="assistant-started",
+        snapshot={"parts": [{"type": "text", "content": "部分"}]},
+        last_sequence=7,
+        status="running",
+        owner_instance_id="dead-worker",
+        owner_term=4,
+        launch_payload={"run_id": "run-started", "content": "hi"},
+        claim_epoch=2,
+    )
+    message_result = MagicMock()
+    message_result.scalar_one_or_none.return_value = SimpleNamespace(
+        content={"parts": []}, status="streaming"
+    )
+    orphan_result = MagicMock()
+    orphan_result.scalars.return_value.all.return_value = []
+    delivery_update = SimpleNamespace(rowcount=1)
+    db = MagicMock()
+    db.execute = AsyncMock(side_effect=[message_result, delivery_update, orphan_result])
+    db.commit = AsyncMock()
+    repository = MagicMock()
+    repository.list_non_terminal = AsyncMock(return_value=[started])
+    repository.finalize = AsyncMock(return_value=True)
+    monkeypatch.setattr(
+        "noesis.services.run_recovery_service.AgentRunRepository",
+        lambda _db: repository,
+    )
+
+    recovered = await RunRecoveryService.recover_orphaned_runs(
+        db, current_leader_term=5
+    )
+
+    assert recovered == 1
+    repository.finalize.assert_awaited_once()
+    # 第一条 db.execute 是消息 SELECT 而非重置 UPDATE（重置分支未进入）
+    first_stmt = str(db.execute.await_args_list[0].args[0])
+    assert "t_agent_run" not in first_stmt.lower() or "SELECT" in first_stmt.upper()
+
+
+@pytest.mark.asyncio
+async def test_recovery_does_not_reset_without_launch_payload(monkeypatch) -> None:
+    """无 launch_payload 的未启动 run（无法重建 producer）：不重置，收口。"""
+    broken = SimpleNamespace(
+        id="run-broken",
+        origin="web",
+        assistant_message_id="assistant-broken",
+        snapshot=None,
+        last_sequence=0,
+        status="running",
+        owner_instance_id="dead-worker",
+        owner_term=4,
+        launch_payload=None,
+        claim_epoch=1,
+    )
+    message_result = MagicMock()
+    message_result.scalar_one_or_none.return_value = SimpleNamespace(
+        content={"parts": []}, status="streaming"
+    )
+    orphan_result = MagicMock()
+    orphan_result.scalars.return_value.all.return_value = []
+    delivery_update = SimpleNamespace(rowcount=1)
+    db = MagicMock()
+    db.execute = AsyncMock(side_effect=[message_result, delivery_update, orphan_result])
+    db.commit = AsyncMock()
+    repository = MagicMock()
+    repository.list_non_terminal = AsyncMock(return_value=[broken])
+    repository.finalize = AsyncMock(return_value=True)
+    monkeypatch.setattr(
+        "noesis.services.run_recovery_service.AgentRunRepository",
+        lambda _db: repository,
+    )
+
+    recovered = await RunRecoveryService.recover_orphaned_runs(
+        db, current_leader_term=5
+    )
+
+    assert recovered == 1
+    repository.finalize.assert_awaited_once()

@@ -120,7 +120,17 @@ class TAgentRun(Base):
     owner_instance_id: Mapped[Optional[str]] = mapped_column(VARCHAR(100), nullable=True)
     owner_term: Mapped[int] = mapped_column(
         Integer, nullable=False, default=0, server_default="0",
-        comment="claim 时的 leader term；0=未被任何 leader claim",
+        comment="审计字段：claim 时的历史 leader term（worker-role-split 后不再参与 fencing 判定）",
+    )
+    claim_epoch: Mapped[int] = mapped_column(
+        Integer, nullable=False, default=0, server_default="0",
+        comment="认领代次：每次认领 +1，单调递增永不归零——"
+                "checkpoint/终态写的 fencing 条件，拒绝僵尸 worker 的迟到写",
+    )
+    heartbeat_at: Mapped[Optional[int]] = mapped_column(
+        BigInteger, nullable=True,
+        comment="持有 worker 的业务心跳（间隔 lease_ttl/3）；僵尸判定依据。"
+                "不复用 updated_at——通用审计戳会被任何写碰",
     )
     launch_payload: Mapped[Optional[dict]] = mapped_column(
         JSON,

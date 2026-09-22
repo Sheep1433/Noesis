@@ -178,3 +178,99 @@ async def test_finalize_without_model_calls_leaves_key_absent() -> None:
     extra = assistant_update.compile().params["extra"]
     assert "model_calls" not in extra
     assert "usage" not in extra
+
+
+# ---------------------------------------------------------------------------
+# claim fencing（worker-role-split Phase 1）：claim_epoch 递增 / heartbeat / 僵尸写拒绝
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_claim_queued_returns_incrementing_epoch() -> None:
+    """claim 成功返回认领后的 epoch（>0）；同批第二次 claim 输家返回 0。"""
+    db = MagicMock()
+    db.execute = AsyncMock(
+        side_effect=[
+            SimpleNamespace(rowcount=1, fetchone=lambda: (1,)),
+            SimpleNamespace(rowcount=1, fetchone=lambda: (3,)),
+            SimpleNamespace(rowcount=0, fetchone=lambda: None),
+        ]
+    )
+    repository = AgentRunRepository(db)
+
+    assert await repository.claim_queued(
+        run_id="run-1", owner_instance_id="w-1", owner_term=5, now_ms=100
+    ) == 1
+    # 对账重置（epoch 保留）后再认领：epoch 从上次值继续递增
+    assert await repository.claim_queued(
+        run_id="run-1", owner_instance_id="w-2", owner_term=5, now_ms=200
+    ) == 3
+    # owner 已被占用：输家 0
+    assert await repository.claim_queued(
+        run_id="run-1", owner_instance_id="w-3", owner_term=5, now_ms=300
+    ) == 0
+
+
+@pytest.mark.asyncio
+async def test_claim_queued_writes_epoch_heartbeat_and_owner() -> None:
+    """claim 的 UPDATE 递增 claim_epoch、写 heartbeat 与 owner（fencing 三件套）。"""
+    db = MagicMock()
+    db.execute = AsyncMock(
+        return_value=SimpleNamespace(rowcount=1, fetchone=lambda: (2,))
+    )
+    repository = AgentRunRepository(db)
+
+    epoch = await repository.claim_queued(
+        run_id="run-1", owner_instance_id="w-1", owner_term=7, now_ms=1000
+    )
+    assert epoch == 2
+    stmt = db.execute.await_args.args[0]
+    compiled = stmt.compile()
+    assert compiled.params["owner_instance_id"] == "w-1"
+    assert compiled.params["heartbeat_at"] == 1000
+    # claim_epoch 为列自增表达式（参数化增量 claim_epoch_1=1），非字面量覆盖
+    rendered = str(stmt)
+    assert "claim_epoch=(t_agent_run.claim_epoch" in rendered
+    assert compiled.params["claim_epoch_1"] == 1
+
+
+@pytest.mark.asyncio
+async def test_heartbeat_only_matches_owner_and_epoch() -> None:
+    """心跳仅命中「本 worker + 本 epoch」；被重置/再认领后心跳失败。"""
+    db = MagicMock()
+    db.execute = AsyncMock(
+        side_effect=[SimpleNamespace(rowcount=1), SimpleNamespace(rowcount=0)]
+    )
+    repository = AgentRunRepository(db)
+
+    assert await repository.heartbeat(
+        run_id="run-1", owner_instance_id="w-1", claim_epoch=2, now_ms=100
+    ) is True
+    # run 已被对账重置/再认领（epoch 3）：旧 worker 心跳落空
+    assert await repository.heartbeat(
+        run_id="run-1", owner_instance_id="w-1", claim_epoch=2, now_ms=200
+    ) is False
+
+
+@pytest.mark.asyncio
+async def test_checkpoint_with_epoch_fencing_rejects_stale_writer() -> None:
+    """带 claim_epoch 的 checkpoint 写：epoch 不符（僵尸）时 run 更新 0 行 → False。"""
+    db = MagicMock()
+    # ①run UPDATE rowcount=0（epoch 不符被拒）——不应推进到 assistant UPDATE
+    db.execute = AsyncMock(return_value=SimpleNamespace(rowcount=0))
+    repository = AgentRunRepository(db)
+
+    ok = await repository.save_checkpoint(
+        run_id="run-1",
+        assistant_message_id="msg-1",
+        sequence=10,
+        snapshot={"parts": []},
+        content={"parts": []},
+        attempt_id=1,
+        status=RunStatus.RUNNING,
+        finish_reason=None,
+        updated_at=1,
+        claim_epoch=2,
+    )
+    assert ok is False
+    assert db.execute.await_count == 1  # 僵尸写止步于 run 行，未碰消息
