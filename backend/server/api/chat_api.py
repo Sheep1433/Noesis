@@ -7,7 +7,6 @@ Chat API (v2.1)
 """
 
 import asyncio
-import errno
 import json
 from typing import Optional
 from pydantic import BaseModel, Field
@@ -21,7 +20,6 @@ from server.db import get_db, sse_prefetch_db
 
 from noesis.schemas.login_vo import CurrentUser
 from noesis.schemas.chat_vo import (
-    CreateSessionRequest,
     EnsureSessionRequest,
     UpdateSessionTitleRequest,
     UpdateSessionMetaRequest,
@@ -30,9 +28,7 @@ from noesis.schemas.chat_vo import (
     SessionListResponse,
     ChildSessionCatalogResponse,
     MessageListResponse,
-    SendMessageRequest,
-    SubagentFollowupRequest,
-    SendMessageResponse,
+    SubagentMessageRequest,
     CreateRunRequest,
 )
 from noesis.schemas.session_context_vo import (
@@ -41,8 +37,7 @@ from noesis.schemas.session_context_vo import (
 )
 from noesis.services.session_context_service import SessionContextService
 from noesis.services.chat_service import ChatService
-from server.auth_dependencies import get_current_user, require_csrf
-from noesis.services.qa import QaService
+from server.auth_dependencies import get_current_user
 from noesis.services.run_service import RunService, run_manager
 from noesis.storage.postgres.manager import pg_manager
 from server.response import ResponseUtil
@@ -52,11 +47,7 @@ from noesis.chat.message_builder import (
 )
 from noesis.runtime.logging import logger
 from noesis.errors.exceptions import ServiceException
-from noesis.schemas.qa_vo import (
-    HitlResumeRequest,
-    TestCaseExportRequest,
-    TestCaseResumeRequest,
-)
+from noesis.schemas.qa_vo import HitlResumeRequest
 from noesis.chat.delivery.sse import (
     SSE_COMMENT_KEEPALIVE,
     encode_sequenced_event,
@@ -74,8 +65,6 @@ from noesis.chat.runs import SlowSubscriber, SubscriptionLimitExceeded
 
 
 chat_router = APIRouter(prefix="/api/chat")
-
-_EXPORT_FALLBACK_FILENAME = "test-cases-export.md"
 
 
 async def _deny_foreign_session(
@@ -206,37 +195,6 @@ async def get_sessions(
     )
 
 
-@chat_router.post("/sessions", summary="创建会话")
-async def create_session(
-    request: CreateSessionRequest,
-    current_user: CurrentUser = Depends(get_current_user),
-    db: AsyncSession = Depends(get_db),
-):
-    """
-    创建新会话（可指定 parent_id 创建子会话）
-    """
-    if request.parent_id:
-        parent = await ChatService.get_session_by_id(
-            session_id=request.parent_id,
-            user_id=str(current_user.user_id),
-            db=db,
-        )
-        if not parent:
-            return ResponseUtil.not_found(msg="父会话不存在")
-
-    session = await ChatService.create_session(
-        user_id=str(current_user.user_id),
-        title=request.title,
-        parent_id=request.parent_id,
-        extra=request.extra,
-        db=db,
-    )
-
-    return ResponseUtil.success(
-        msg="创建会话成功", data=_session_to_response(session).model_dump()
-    )
-
-
 class BatchDeleteRequest(BaseModel):
     session_ids: list[str] = Field(description="会话ID列表")
 
@@ -258,7 +216,7 @@ async def batch_delete_sessions(
     return ResponseUtil.success(msg=f"已删除 {deleted} 个会话")
 
 
-@chat_router.put("/sessions/{session_id}/ensure", summary="幂等物化会话")
+@chat_router.put("/sessions/{session_id}", summary="获取或创建会话（幂等 upsert）")
 async def ensure_session(
     session_id: str,
     request: EnsureSessionRequest = Body(default=EnsureSessionRequest()),
@@ -415,7 +373,7 @@ async def get_child_sessions(
         return ResponseUtil.not_found(msg="会话不存在")
 
     return ResponseUtil.success(
-        msg="获取子 Agent 目录成功",
+        msg="获取会话任务清单成功",
         data=ChildSessionCatalogResponse(
             sessions=catalog, total=len(catalog)
         ).model_dump(),
@@ -450,11 +408,7 @@ async def get_session_messages(
         session_id=session_id, db=db, limit=limit, before_id=before_id
     )
 
-    # 批量带出 run 生命周期时间（assistant 消息的"本轮起止"）——消息表 updated_at
-    # 是 checkpoint 落库时间会被刷新，不能当完成时间；run.finished_at 是终态专用。
-    from noesis.repositories.agent_run_repository import AgentRunRepository
-
-    run_times = await AgentRunRepository(db).get_run_times_for_session(session_id)
+    run_times = await RunService.run_times_for_session(session_id, db)
 
     message_responses = []
     for m in messages:
@@ -609,62 +563,20 @@ async def put_session_workspace_file(
         raise
 
 
-@chat_router.post("/sessions/{session_id}/messages", summary="发送消息")
-async def send_message(
-    session_id: str,
-    request: SendMessageRequest,
-    current_user: CurrentUser = Depends(get_current_user),
-    db: AsyncSession = Depends(get_db),
-):
-    """
-    发送消息（创建用户消息）
-    """
-    session = await ChatService.get_session_by_id(
-        session_id=session_id,
-        user_id=str(current_user.user_id),
-        db=db,
-    )
-    if not session:
-        return ResponseUtil.not_found(msg="会话不存在")
-
-    # 构建消息内容
-    builder = UserMessageBuilder(content=request.content)
-    content = builder.serialize()
-
-    message = await ChatService.save_message(
-        session_id=session_id,
-        user_id=str(current_user.user_id),
-        role="user",
-        content=content,
-        extra=request.extra,
-        parent_id=request.parent_id,
-        status="completed",
-        db=db,
-    )
-
-    return ResponseUtil.success(
-        msg="发送消息成功",
-        data=SendMessageResponse(
-            message_id=message.id, session_id=message.session_id, status=message.status
-        ).model_dump(),
-    )
-
-
 @chat_router.post(
-    "/sessions/{session_id}/subagent-followup", summary="继续子 Agent 会话"
+    "/sessions/{session_id}/subagent-messages", summary="向子 Agent 会话追加消息"
 )
-async def send_subagent_followup(
+async def send_subagent_message(
     session_id: str,
-    request: SubagentFollowupRequest,
+    request: SubagentMessageRequest,
     http_request: Request,
     current_user: CurrentUser = Depends(get_current_user),
 ):
     """向 child session 追加一轮 user message；详情和父卡片共用该入口。"""
     from noesis.services.subagent_session_service import SubagentSessionService
 
-    await require_csrf(http_request)
     # 类型化异常直接上抛：NotFoundException→404、ConflictException→409
-    task = await SubagentSessionService.send_followup(
+    task = await SubagentSessionService.send_message(
         session_id=session_id,
         user_id=str(current_user.user_id),
         message=request.message,
@@ -697,7 +609,6 @@ async def create_run(
     current_user: CurrentUser = Depends(get_current_user),
     db: AsyncSession = Depends(get_db),
 ):
-    await require_csrf(http_request)
     if pg_manager.advisory_lock_ready is False:
         return ResponseUtil.service_unavailable(
             msg="任务运行实例暂时不可用，请稍后重试",
@@ -781,120 +692,65 @@ async def get_active_run(
     return ResponseUtil.success(msg="获取活跃任务成功", data=snapshot.to_dict())
 
 
-@chat_router.get("/events/stream", summary="订阅用户级信令（会话列表实时刷新）")
-async def stream_user_events(
-    current_user: CurrentUser = Depends(get_current_user),
-):
-    """用户级信令流：该用户任意会话的 run 状态变化（run-started /
-    run-hitl-pending / run-terminal，携带 session_id）。
+_EMPTY_QUEUE: asyncio.Queue = asyncio.Queue()  # 终态快照流的占位（不消费）
 
-    会话列表据此 patch 行级 run_status；信令是 hint——行不在列表（如新
-    会话）或断线重连时前端全量刷新列表。连接建立先下发用户全部活跃 run
-    作为首帧对齐。流不主动结束，随页面关闭断开。
+
+async def _wire_sse_stream(*, snapshot, queue, aclose, after_sequence: int, replay=()):
+    """wire-dict SSE 消费循环（子代理本地/hub 与主 Run hub 共用，task 4.9 收敛）。
+
+    snapshot 须有 ``to_dict()`` 与 ``is_terminal``；queue 产出 wire dict
+    （transient 直发、durable 按 (type, sequence) 去重、``None`` 哨兵终止）；
+    aclose 在流结束时释放订阅（幂等）。
     """
-    from noesis.chat.runs import user_signal_bus
-
-    user_id = str(current_user.user_id)
-    queue = user_signal_bus.subscribe(user_id)
-    if queue is None:
-        return ResponseUtil.too_many_requests(
-            msg="用户信令订阅数超限，请关闭其它标签页后重试",
-            data={"error_code": "USER_SIGNAL_LIMIT"},
-        )
-
-    from noesis.repositories.agent_run_repository import AgentRunRepository
-
-    # 短命会话预取（物化成 plain dict，退出上下文后连接归还，
-    # 生成器闭包不得持有 ORM 实例——会话关闭后属性访问会失败）
-    async with sse_prefetch_db() as db:
-        active_runs = [
-            {
-                "session_id": run.session_id,
-                "run_id": run.id,
-                "status": run.status,
-            }
-            for run in await AgentRunRepository(db).get_active_runs_for_user(user_id)
-        ]
-
-    async def event_stream():
-        try:
-            for run in active_runs:
-                yield format_sse("user-signal", {"type": "run-started", **run})
-            while True:
-                try:
-                    signal = await asyncio.wait_for(queue.get(), timeout=15.0)
-                except asyncio.TimeoutError:
-                    yield SSE_COMMENT_KEEPALIVE
-                    continue
-                yield format_sse("user-signal", signal)
-        finally:
-            user_signal_bus.unsubscribe(user_id, queue)
-
-    return StreamingResponse(
-        event_stream(),
-        media_type="text/event-stream",
-        headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"},
-    )
-
-
-@chat_router.get(
-    "/sessions/{session_id}/events", summary="订阅会话级信令（跨窗口发现活跃任务）"
-)
-async def stream_session_events(
-    session_id: str,
-    current_user: CurrentUser = Depends(get_current_user),
-):
-    """轻量信令流：只推 run-started / run-hitl-pending / run-terminal 定位符。
-
-    同一会话的其它窗口（跨浏览器、跨设备）靠它实时发现活跃 run，收到后从
-    active-run / runs/{run_id} 取权威状态。连接建立时先下发当前 active run
-    作为首帧，覆盖「窗口先连、run 后建」之外的所有时序；信令是 hint，
-    丢失靠 active-run 自愈。流不主动结束，随页面关闭断开。
-    """
-    async with sse_prefetch_db() as db:
-        session = await ChatService.get_session_by_id(
-            session_id=session_id,
-            user_id=str(current_user.user_id),
-            db=db,
-        )
-        if not session:
-            return ResponseUtil.not_found(msg="会话不存在")
-
-        from noesis.chat.runs import session_signal_bus
-
-        user_id = str(current_user.user_id)
-        queue = session_signal_bus.subscribe(user_id, session_id)
-        if queue is None:
-            return ResponseUtil.too_many_requests(
-                msg="会话信令订阅数超限，请关闭其它标签页后重试",
-                data={"error_code": "SESSION_SIGNAL_LIMIT"},
+    sent_events: set[tuple[str, int]] = set()
+    try:
+        yield format_sse("run-snapshot", {"type": "run-snapshot", **snapshot.to_dict()})
+        if snapshot.is_terminal:
+            yield format_done()
+            return
+        for item in replay:
+            event_key = (
+                str(item.get("type") or "run.event"),
+                int(item.get("sequence") or 0),
             )
+            if event_key in sent_events:
+                continue
+            sent_events.add(event_key)
+            yield format_sse(str(item.get("type") or "run.event"), item)
+            if item.get("type") == "run.finished":
+                yield format_done()
+                return
+        while True:
+            try:
+                item = await asyncio.wait_for(queue.get(), timeout=15.0)
+            except asyncio.TimeoutError:
+                yield SSE_COMMENT_KEEPALIVE
+                continue
+            if item is None:
+                return  # hub 哨兵：交给浏览器重连重建
+            # 瞬态事件（流式 delta / 实时统计）：不进 history、不参与 sequence
+            # 去重——按到达顺序直发；重连由 run-snapshot 全量恢复
+            if item.get("transient"):
+                yield format_sse(str(item.get("type") or "run.event"), item)
+                continue
+            sequence = int(item.get("sequence") or 0)
+            if sequence <= max(0, after_sequence):
+                continue
+            event_key = (str(item.get("type") or "run.event"), sequence)
+            if event_key in sent_events:
+                continue
+            sent_events.add(event_key)
+            yield format_sse(str(item.get("type") or "run.event"), item)
+            if item.get("type") == "run.finished":
+                yield format_done()
+                return
+    finally:
+        await aclose()
 
-        active = await RunService.get_active_run(session_id, user_id, db)
 
-    async def event_stream():
-        try:
-            if active is not None:
-                yield format_sse(
-                    "session-signal",
-                    {
-                        "type": "run-started",
-                        "run_id": active.run_id,
-                        "assistant_message_id": active.assistant_message_id,
-                    },
-                )
-            while True:
-                try:
-                    signal = await asyncio.wait_for(queue.get(), timeout=15.0)
-                except asyncio.TimeoutError:
-                    yield SSE_COMMENT_KEEPALIVE
-                    continue
-                yield format_sse("session-signal", signal)
-        finally:
-            session_signal_bus.unsubscribe(user_id, session_id, queue)
-
+def _sse_response(gen):
     return StreamingResponse(
-        event_stream(),
+        gen,
         media_type="text/event-stream",
         headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"},
     )
@@ -946,6 +802,20 @@ async def stream_run(
     if snapshot.origin == "subagent":
         from noesis.services.subagent_session_service import SubagentSessionService
 
+        # redis 模式（task 4.9）：经 Run hub 订阅 bus 通道——follower 上
+        # 进程内投递内核不存在，恢复以 DB 投影 snapshot 为权威（hub 握手
+        # 对账）；消费循环与本地路径同形状（wire dict + transient 直发）。
+        from noesis.config.env import DistributedRunsConfig
+
+        if DistributedRunsConfig.backend == "redis":
+            hub_sub = await SubagentSessionService.subscribe_remote_run_events(
+                run_id, str(current_user.user_id)
+            )
+            return _sse_response(_wire_sse_stream(
+                snapshot=hub_sub.snapshot, queue=hub_sub.queue,
+                aclose=hub_sub.close, after_sequence=after_sequence,
+            ))
+
         # 先订阅、再重新读取权威快照，避免 GET 与 subscribe 之间丢掉终态事件。
         # 配额与主链路同语义：per-run 订阅上限超限 → 429。
         try:
@@ -972,61 +842,14 @@ async def stream_run(
             SubagentSessionService.unsubscribe_run_events(run_id, queue)
             queue = None
 
-        async def subagent_event_stream():
-            sent_events: set[tuple[str, int]] = set()
-            try:
-                yield format_sse(
-                    "run-snapshot", {"type": "run-snapshot", **snapshot.to_dict()}
-                )
-                if queue is None:
-                    yield format_done()
-                    return
-                for item in replay:
-                    event_key = (
-                        str(item.get("type") or "run.event"),
-                        int(item.get("sequence") or 0),
-                    )
-                    if event_key in sent_events:
-                        continue
-                    sent_events.add(event_key)
-                    yield format_sse(str(item.get("type") or "run.event"), item)
-                    if item.get("type") == "run.finished":
-                        yield format_done()
-                        return
-                while True:
-                    try:
-                        item = await asyncio.wait_for(queue.get(), timeout=15.0)
-                    except asyncio.TimeoutError:
-                        yield SSE_COMMENT_KEEPALIVE
-                        continue
-                    # 瞬态事件（流式 delta / 实时统计，executor 标记 transient）：
-                    # 不进 history、不参与 sequence 去重——同一 sequence 下多次
-                    # 发布各自独立，按到达顺序直发；重连由 run-snapshot 全量恢复
-                    if item.get("transient"):
-                        yield format_sse(
-                            str(item.get("type") or "run.event"), item,
-                        )
-                        continue
-                    sequence = int(item.get("sequence") or 0)
-                    if sequence <= max(0, after_sequence):
-                        continue
-                    event_key = (str(item.get("type") or "run.event"), sequence)
-                    if event_key in sent_events:
-                        continue
-                    sent_events.add(event_key)
-                    yield format_sse(str(item.get("type") or "run.event"), item)
-                    if item.get("type") == "run.finished":
-                        yield format_done()
-                        return
-            finally:
-                if queue is not None:
-                    SubagentSessionService.unsubscribe_run_events(run_id, queue)
+        async def _aclose() -> None:
+            if queue is not None:
+                SubagentSessionService.unsubscribe_run_events(run_id, queue)
 
-        return StreamingResponse(
-            subagent_event_stream(),
-            media_type="text/event-stream",
-            headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"},
-        )
+        return _sse_response(_wire_sse_stream(
+            snapshot=snapshot, queue=queue or _EMPTY_QUEUE,
+            aclose=_aclose, after_sequence=after_sequence, replay=replay,
+        ))
     try:
         async with sse_prefetch_db() as db:
             subscription = await _subscribe_with_queued_wait(
@@ -1050,6 +873,16 @@ async def stream_run(
                 "sequence": snapshot.sequence,
             },
         )
+
+    # 远端订阅（task 4.3，redis 模式）：queue 产出 wire dict——hub 已做握手
+    # 去重与 gap 对账，复用共用 wire 消费循环（与子代理流同一生成器）
+    from noesis.chat.runs.hub import HubSubscription
+
+    if isinstance(subscription, HubSubscription):
+        return _sse_response(_wire_sse_stream(
+            snapshot=subscription.snapshot, queue=subscription.queue,
+            aclose=subscription.close, after_sequence=after_sequence,
+        ))
 
     async def event_stream():
         if subscription is None:
@@ -1112,41 +945,27 @@ async def stop_run(
     current_user: CurrentUser = Depends(get_current_user),
     db: AsyncSession = Depends(get_db),
 ):
-    await require_csrf(http_request)
+    # durable command（task 5.2/5.4）：任意 worker 提交、leader 认领执行；
+    # 有界等待内完成返回 completed，超时返回 accepted（不伪装完成，前端
+    # 保持「正在停止」并继续订阅 Run 事件）
+    from noesis.services.run_command_service import RunCommandService
+
     existing = await RunService.get(run_id, str(current_user.user_id), db)
-    if existing.origin == "subagent":
-        from noesis.services.subagent_session_service import SubagentSessionService
-
-        # 协作停止：服务层返回受理快照（RunSnapshot 契约，status 覆写
-        # stopping / 即时终态映射 interrupted），不等待终态——终态经事件推送
-        snapshot = await SubagentSessionService.stop_run(
-            run_id=run_id,
-            user_id=str(current_user.user_id),
-            db=db,
-        )
-        return ResponseUtil.success(msg="已停止生成", data=snapshot.to_dict())
-    snapshot = await RunService.stop(run_id, str(current_user.user_id), db)
-    return ResponseUtil.success(
-        msg="已停止生成" if snapshot.status.value == "partial" else "任务已结束",
-        data=snapshot.to_dict(),
+    submit = (
+        RunCommandService.submit_subagent_stop(run_id, str(current_user.user_id), db)
+        if existing.origin == "subagent"
+        else RunCommandService.submit_stop(run_id, str(current_user.user_id), db)
     )
-
-
-@chat_router.post(
-    "/runs/{run_id}/test-case/resume", summary="采纳测试点后继续 Agent 任务"
-)
-async def resume_test_case_run(
-    run_id: str,
-    request: TestCaseResumeRequest,
-    http_request: Request,
-    current_user: CurrentUser = Depends(get_current_user),
-    db: AsyncSession = Depends(get_db),
-):
-    await require_csrf(http_request)
-    if not request.selected_point_names:
-        return ResponseUtil.failure(msg="请至少选择一个测试点")
-    snapshot = await RunService.resume_test_case(run_id, request, current_user, db)
-    return ResponseUtil.success(msg="任务已继续", data=snapshot.to_dict())
+    command = await RunCommandService.submit_and_wait(submit, db=db)
+    snapshot = await RunService.get(run_id, str(current_user.user_id), db)
+    return ResponseUtil.success(
+        msg="已停止生成" if command["command_status"] == "completed" else "停止请求已受理",
+        data={
+            **snapshot.to_dict(),
+            "command_id": command["command_id"],
+            "command_status": command["command_status"],
+        },
+    )
 
 
 @chat_router.post("/runs/{run_id}/hitl/resume", summary="审批后继续 Agent 任务")
@@ -1157,59 +976,23 @@ async def resume_hitl_run(
     current_user: CurrentUser = Depends(get_current_user),
     db: AsyncSession = Depends(get_db),
 ):
-    await require_csrf(http_request)
-    existing = await RunService.get(run_id, str(current_user.user_id), db)
-    if existing.origin == "subagent":
-        from noesis.services.subagent_session_service import SubagentSessionService
+    from noesis.services.run_command_service import RunCommandService
 
-        await SubagentSessionService.resume_hitl(
-            run_id=run_id,
-            user_id=str(current_user.user_id),
-            decisions=request.decisions,
-            db=db,
-        )
-        snapshot = await RunService.get(run_id, str(current_user.user_id), db)
-        return ResponseUtil.success(msg="任务已继续", data=snapshot.to_dict())
-    snapshot = await RunService.resume_hitl(run_id, request, current_user, db)
-    return ResponseUtil.success(msg="任务已继续", data=snapshot.to_dict())
-
-
-@chat_router.post(
-    "/sessions/{session_id}/test-case/export", summary="测试用例：导出 Markdown"
-)
-async def export_test_case_markdown(
-    session_id: str,
-    request: TestCaseExportRequest = Body(default_factory=TestCaseExportRequest),
-    current_user: CurrentUser = Depends(get_current_user),
-    db: AsyncSession = Depends(get_db),
-):
-    """
-    将测试用例导出为 Markdown 文件下载。
-    请求体可携带 test_cases；省略时从协调器读取本会话最近一次生成结果。
-    """
-    test_cases = None
-    if request.test_cases:
-        test_cases = [item.model_dump(exclude_none=True) for item in request.test_cases]
-
-    try:
-        markdown, filename = await QaService.export_test_case_markdown(
-            session_id=session_id,
-            current_user=current_user,
-            db=db,
-            test_cases=test_cases,
-            query=request.query,
-        )
-    except HTTPException:
-        raise
-    except Exception as e:
-        logger.exception(e)
-        raise HTTPException(status_code=500, detail="导出失败") from e
-
-    return Response(
-        content=markdown.encode("utf-8"),
-        media_type="text/markdown; charset=utf-8",
-        headers={
-            "Content-Disposition": _attachment_content_disposition(filename),
+    command = await RunCommandService.submit_and_wait(
+        RunCommandService.submit_hitl_resume(
+            run_id, str(current_user.user_id), request.interrupt_id,
+            {"interrupt_id": request.interrupt_id, "decisions": request.decisions},
+            db,
+        ),
+        db=db,
+    )
+    snapshot = await RunService.get(run_id, str(current_user.user_id), db)
+    return ResponseUtil.success(
+        msg="任务已继续" if command["command_status"] == "completed" else "继续请求已受理",
+        data={
+            **snapshot.to_dict(),
+            "command_id": command["command_id"],
+            "command_status": command["command_status"],
         },
     )
 
@@ -1223,26 +1006,11 @@ async def get_message(
     """
     获取单条消息详情
     """
-    # 先获取消息（需要查询 session 来验证权限）
-    # 这里简化处理，实际应该通过 ChatService 获取
-    from sqlalchemy import select
-    from noesis.storage.postgres.models.chat import TChatMessage, TChatSession
-
-    result = await db.execute(select(TChatMessage).where(TChatMessage.id == message_id))
-    message = result.scalar_one_or_none()
-
-    if not message:
-        return ResponseUtil.not_found(msg="消息不存在")
-
-    # 验证用户权限
-    session_result = await db.execute(
-        select(TChatSession).where(TChatSession.id == message.session_id)
+    message = await ChatService.get_message_detail(
+        message_id, str(current_user.user_id), db
     )
-    session = session_result.scalar_one_or_none()
-
-    if not session or session.user_id != str(current_user.user_id):
+    if message is None:
         return ResponseUtil.not_found(msg="消息不存在")
-
     return ResponseUtil.success(
         msg="获取消息详情成功", data=_message_to_response(message).model_dump()
     )
@@ -1254,18 +1022,18 @@ async def get_message(
 
 
 @chat_router.get(
-    "/sessions/{session_id}/children/catalog", summary="子 Agent 与后台命令目录"
+    "/sessions/{session_id}/tasks", summary="会话任务清单（子 Agent 与后台命令）"
 )
 async def list_bg_tasks(
     session_id: str,
     current_user: CurrentUser = Depends(get_current_user),
     db: AsyncSession = Depends(get_db),
 ):
-    """返回统一的 Agent 目录快照；正文不从目录事件读取。"""
-    from noesis.services.agent_catalog_service import AgentCatalogService
+    """返回会话任务清单快照；正文不从清单事件读取。"""
+    from noesis.services.session_task_service import SessionTaskService
 
     try:
-        catalog = await AgentCatalogService.list_for_session(
+        catalog = await SessionTaskService.list_for_session(
             session_id=session_id,
             user_id=str(current_user.user_id),
             db=db,
@@ -1279,7 +1047,7 @@ async def list_bg_tasks(
 
 
 @chat_router.get(
-    "/sessions/{session_id}/children/stream", summary="子 Agent 目录事件流"
+    "/sessions/{session_id}/tasks/stream", summary="任务清单实时更新流"
 )
 async def stream_child_catalog(
     session_id: str,
@@ -1289,15 +1057,15 @@ async def stream_child_catalog(
     import asyncio
     import json as _json
     from fastapi.responses import StreamingResponse
-    from noesis.services.agent_catalog_service import AgentCatalogService
+    from noesis.services.session_task_service import SessionTaskService
     from noesis.services.subagent_session_service import SubagentSessionService
 
     user_id = str(current_user.user_id)
     async with sse_prefetch_db() as db:
         if await ChatService.get_session_by_id(session_id, user_id, db) is None:
             return ResponseUtil.not_found(msg="会话不存在")
-        queue = AgentCatalogService.subscribe(session_id, user_id)
-        catalog = (await AgentCatalogService.list_for_session(session_id, user_id, db))[
+        queue = SessionTaskService.subscribe(session_id, user_id)
+        catalog = (await SessionTaskService.list_for_session(session_id, user_id, db))[
             "tasks"
         ]
 
@@ -1328,7 +1096,7 @@ async def stream_child_catalog(
                 elif isinstance(item, dict):
                     yield f"event: bg-continuation\ndata: {_json.dumps(item, ensure_ascii=False)}\n\n"
         finally:
-            AgentCatalogService.unsubscribe(session_id, queue)
+            SessionTaskService.unsubscribe(session_id, queue)
 
     return StreamingResponse(
         _gen(),
@@ -1345,14 +1113,25 @@ async def stop_shell_job(
     task_id: str,
     current_user: CurrentUser = Depends(get_current_user),
 ):
-    from noesis.services.agent_catalog_service import ShellJobService
+    from noesis.errors.exceptions import NotFoundException
+    from noesis.services.run_command_service import RunCommandService
 
     try:
-        task = ShellJobService.stop(
-            session_id=session_id,
+        command = await RunCommandService.stop_shell_job(
             task_id=task_id,
+            session_id=session_id,
             user_id=str(current_user.user_id),
         )
-    except ServiceException as exc:
-        return ResponseUtil.not_found(msg=exc.message or "后台命令不存在")
-    return ResponseUtil.success(msg="后台命令已停止", data=task)
+    except NotFoundException:
+        return ResponseUtil.not_found(msg="会话不存在")
+    from noesis.services.session_task_service import ShellJobService
+
+    task = await ShellJobService.get_task_status(session_id, task_id, str(current_user.user_id))
+    return ResponseUtil.success(
+        msg="后台命令已停止" if command["command_status"] == "completed" else "停止请求已受理",
+        data={
+            **(task or {"task_id": task_id}),
+            "command_id": command["command_id"],
+            "command_status": command["command_status"],
+        },
+    )

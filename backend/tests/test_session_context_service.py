@@ -8,6 +8,7 @@ import pytest
 from noesis.errors.exceptions import ServiceException, NotFoundException
 
 from noesis.config import user_data_paths as paths
+from noesis.memory.layout import ensure_user_memory_files
 from noesis.services.session_context_service import SessionContextService
 
 
@@ -42,7 +43,7 @@ async def test_read_workspace_file_rejects_traversal(tmp_path: Path, monkeypatch
 async def test_read_user_root_file(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setattr(paths, "_USERS_ROOT", tmp_path / "users")
     uid, sid = "u1", "s1"
-    paths.ensure_user_memory_files(uid)
+    ensure_user_memory_files(uid)
     db = AsyncMock()
     with patch(
         "noesis.services.session_context_service.ChatService.get_session_by_id",
@@ -60,7 +61,7 @@ async def test_read_user_root_file(tmp_path: Path, monkeypatch: pytest.MonkeyPat
 async def test_get_context_tree(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setattr(paths, "_USERS_ROOT", tmp_path / "users")
     uid, sid = "u1", "s1"
-    paths.ensure_user_memory_files(uid)
+    ensure_user_memory_files(uid)
     ws = paths.ensure_workspace_dir(uid, sid)
     (ws / "report.md").write_text("# hi", encoding="utf-8")
     skills = paths.ensure_user_skills_dir(uid)
@@ -129,7 +130,7 @@ async def test_get_context_not_owned() -> None:
 async def test_write_user_memory_files_via_panel(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setattr(paths, "_USERS_ROOT", tmp_path / "users")
     uid, sid = "u1", "s1"
-    paths.ensure_user_memory_files(uid)
+    ensure_user_memory_files(uid)
     db = AsyncMock()
     with patch(
         "noesis.services.session_context_service.ChatService.get_session_by_id",

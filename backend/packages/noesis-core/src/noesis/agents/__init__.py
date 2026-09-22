@@ -13,7 +13,6 @@ from typing import Any
 __all__ = [
     "FaultOperationAgent",
     "GeneralQAAgent",
-    "SimpleMCPAgent",
     "SuperAgent",
 ]
 
@@ -27,10 +26,6 @@ def __getattr__(name: str) -> Any:
         from noesis.agents.fault_operation import FaultOperationAgent
         globals()["FaultOperationAgent"] = FaultOperationAgent
         return FaultOperationAgent
-    if name == "SimpleMCPAgent":
-        from noesis.agents.simple_mcp import SimpleMCPAgent
-        globals()["SimpleMCPAgent"] = SimpleMCPAgent
-        return SimpleMCPAgent
     if name == "SuperAgent":
         from noesis.agents.super_agent import SuperAgent
         globals()["SuperAgent"] = SuperAgent

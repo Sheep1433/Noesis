@@ -1,6 +1,6 @@
 <script lang="ts" setup>
 import type { InputInst, UploadFileInfo } from 'naive-ui'
-import type { TaskCatalogEntry } from '@/api/chat'
+import type { SessionTaskEntry } from '@/api/chat'
 import type { ComposerMention, MentionCandidate } from '@/hooks/useMentionCatalog'
 import type { ChatAttachmentItem } from '@/store/business'
 import type { ChatModeQaType } from '@/utils/qaType'
@@ -9,19 +9,19 @@ import type { CitationIndex } from '@/views/chat/citationRendering'
 import type { MessageContentV1, RetrievalResultUi, UiPart } from '@/views/chat/messageParts'
 import type { StreamDelta } from '@/views/chat/streamDeltaBatcher'
 import { GitNetworkOutline } from '@vicons/ionicons-v5'
-import { createAgentRun, deleteSession, ensureSession, getSession, getSessionUsageSummary, listSessionTaskCatalog, markSessionRead, resumeAgentRunHitl, stopAgentRun, stopShellTask, updateSessionMeta, updateSessionTitle } from '@/api/chat'
+import { createAgentRun, deleteSession, ensureSession, getSession, getSessionUsageSummary, listSessionTasks, markSessionRead, resumeAgentRunHitl, stopAgentRun, stopShellTask, updateSessionMeta, updateSessionTitle } from '@/api/chat'
 import AssistantReplyToolbar from '@/components/AssistantReplyToolbar/index.vue'
 import ChatComposerToolbar from '@/components/Chat/ChatComposerToolbar.vue'
 import ChatModeSelector from '@/components/Chat/ChatModeSelector.vue'
 import MentionPicker from '@/components/Chat/MentionPicker.vue'
 import ContextWindowIndicator from '@/components/ContextWindowIndicator/index.vue'
 import ConversationPartsRenderer from '@/components/ConversationPartsRenderer/index.vue'
-import FollowupQueue from '@/components/FollowupQueue/index.vue'
 import HitlComposerPanel from '@/components/HitlComposerPanel/index.vue'
+import MessageQueue from '@/components/MessageQueue/index.vue'
 import ReasoningBlock from '@/components/ReasoningBlock/index.vue'
 import ResearchSourcesPanel from '@/components/ResearchSourcesPanel/index.vue'
 import ResizeDivider from '@/components/ResizeDivider.vue'
-import TaskCatalogPanel from '@/components/TaskCatalogPanel/index.vue'
+import TaskListPanel from '@/components/TaskListPanel/index.vue'
 import TodoList from '@/components/TodoList/index.vue'
 import { langfuseUiOrigin } from '@/config'
 import { buildFileDict } from '@/config/chat'
@@ -29,7 +29,6 @@ import { composerPlaceholder, supportsAtMentions, supportsSlashSkills } from '@/
 import { cssVar, themeColors, themeCssVar } from '@/config/theme'
 import { useBreakpoint } from '@/hooks/useBreakpoint'
 import { chatHistorySiderCollapsed } from '@/hooks/useChatHistorySider'
-import { useFollowupQueue } from '@/hooks/useFollowupQueue'
 import {
   candidateToMention,
   ensureMentionCatalog,
@@ -37,6 +36,7 @@ import {
   invalidateMentionContextCache,
   mentionToPayload,
 } from '@/hooks/useMentionCatalog'
+import { useMessageQueue } from '@/hooks/useMessageQueue'
 import { usePaneResize } from '@/hooks/usePaneResize'
 import { useResponsiveDrawerWidth } from '@/hooks/useResponsiveDrawerWidth'
 import { useTicker } from '@/hooks/useTicker'
@@ -53,7 +53,6 @@ import { formatStatsLine, STATS_TEMPLATE_VARIABLES } from '@/utils/statsFormat'
 import { taskNoticeMeta } from '@/utils/taskNotice'
 import { ensureVisionModelForImageUpload } from '@/utils/visionModel'
 import ChatHistoryPanel from '@/views/chat/ChatHistoryPanel.vue'
-import { activateChildCatalogSession, createChildCatalogEventSource } from '@/views/chat/childCatalogStream'
 import { buildCitationIndexFromNumbers } from '@/views/chat/citationRendering'
 import {
   pendingHitlForSession,
@@ -73,6 +72,7 @@ import {
   assistantPartsStillStreaming,
   completeReasoningPart,
   createRedactedThinkingStreamCtx,
+  dropStreamPartsById,
   emptyMessageContent,
   extractLastTopLevelText,
   flushRedactedThinkingStreamCtx,
@@ -81,7 +81,6 @@ import {
   markStreamingPartsComplete,
   normalizeApiContent,
   resolveLoadedContextSnapshot,
-  rollbackTrailingStreamParts,
   shortenChatErrorToast,
   shouldCollapseUserMessage,
   shouldShowAssistantToolFailureBlocker,
@@ -90,8 +89,8 @@ import {
 } from '@/views/chat/messageParts'
 import { arcMessageKey, computeArcPanels } from '@/views/chat/researchArcs'
 import SessionContextPanel from '@/views/chat/SessionContextPanel.vue'
+import { activateSessionTaskStream, createSessionTaskEventSource } from '@/views/chat/sessionTaskStream'
 import { createStreamDeltaBatcher } from '@/views/chat/streamDeltaBatcher'
-import { createUserSignalEventSource } from '@/views/chat/userSignalStream'
 import { useSSEStream } from '@/views/chat/useSSEStream'
 import DefaultPage from './DefaultPage.vue'
 import FileListItem from './FileListItem.vue'
@@ -277,11 +276,6 @@ async function restoreActiveSessionFromRoute(sessionId: string) {
   try {
     const session = await getSession(sessionId)
     const qt = String(session.extra?.qa_type ?? '').trim() || 'COMMON_QA'
-    if (qt === 'TEST_CASE_QA') {
-      await router.replace({ name: 'TestCaseGenerate' })
-      return
-    }
-
     showDefaultPage.value = false
     isInit.value = false
     isView.value = true
@@ -301,21 +295,15 @@ async function restoreActiveSessionFromRoute(sessionId: string) {
     uuids.value[qt] = sessionId
     sessionMaterialized.value = true
     // 会话切换即挂信令流：其它窗口发起 run 时本窗口实时加入
-    sseStream.watchSessionSignals(sessionId)
 
     const messagesReady = loadSessionMessages(
       sessionId,
       conversationItems,
       currentRenderIndex,
     )
-    // 信令触发的加入（run-started）须等历史就位再 apply snapshot，防止 patch 丢失
-    sessionHistoryReady.set(
-      sessionId,
-      messagesReady.catch(() => {}).finally(() => sessionHistoryReady.delete(sessionId)),
-    )
     const contextReady = loadSessionContext(sessionId)
-    openCatalogStream(sessionId)
-    void refreshCatalogTasks(sessionId)
+    openTaskStream(sessionId)
+    void refreshSessionTasks(sessionId)
     reloadSessionFilesPanel()
     // active-run 请求与历史、上下文并行；snapshot 等历史落入 store 后再 replace，
     // 防止慢历史响应覆盖新 Tab 已收到的实时内容。
@@ -346,7 +334,6 @@ async function restoreActiveSessionFromRoute(sessionId: string) {
 
 function resetComposingSurface() {
   sseStream.detachSubscription()
-  sseStream.stopSessionSignals()
   stopCatalogStream()
   stopProcessingClock()
   // 丢弃未 flush 的流式 delta：整个消息面即将清空，残留缓冲不得流入下一会话
@@ -379,9 +366,6 @@ function resetComposingSurface() {
 // 使用 onMounted 生命周期钩子加载历史对话
 onBeforeMount(async () => {
   try {
-    if (businessStore.qa_type === 'TEST_CASE_QA') {
-      businessStore.update_qa_type('COMMON_QA')
-    }
     applyWelcomeRouteQaType()
     isLoadingHistory.value = true
     isInit.value = true
@@ -650,8 +634,6 @@ function sessionQaIconClass(qt: string) {
       return 'i-hugeicons:search-01'
     case 'FAULT_OPERATION_QA':
       return 'i-hugeicons:settings-01'
-    case 'TEST_CASE_QA':
-      return 'i-hugeicons:note-edit'
     default:
       return 'i-hugeicons:ai-chat-02'
   }
@@ -695,8 +677,6 @@ function sessionQaIconColor(qt: string) {
   switch (qt) {
     case 'FAULT_OPERATION_QA':
       return themeColors.qaFault
-    case 'TEST_CASE_QA':
-      return themeColors.qaTest
     default:
       return naivePresetColors.value.primary
   }
@@ -1063,11 +1043,11 @@ function applyStreamDeltas(deltas: StreamDelta[]): void {
   }
   patchLastAssistantParts((parts) => deltas.reduce((acc, delta) => {
     if (delta.kind === 'reasoning') {
-      return appendReasoningDelta(acc, delta.data, delta.parentTaskCallId)
+      return appendReasoningDelta(acc, delta.data, delta.parentTaskCallId, delta.partId)
     }
     return delta.redactedThinking
-      ? appendTextDeltaWithRedactedThinking(acc, delta.data, redactedThinkingStreamCtx, delta.parentTaskCallId)
-      : appendTextDelta(acc, delta.data, delta.parentTaskCallId)
+      ? appendTextDeltaWithRedactedThinking(acc, delta.data, redactedThinkingStreamCtx, delta.parentTaskCallId, delta.partId)
+      : appendTextDelta(acc, delta.data, delta.parentTaskCallId, delta.partId)
   }, parts))
 }
 
@@ -1075,9 +1055,6 @@ const streamDeltaBatcher = createStreamDeltaBatcher(applyStreamDeltas)
 
 // 改为对象存储不同问答类型的uuid
 const uuids = ref<Record<string, string>>({})
-/** 各会话历史加载中的 promise（信令加入 run 时等待就位，见 restoreActiveSessionFromRoute） */
-const sessionHistoryReady = new Map<string, Promise<unknown>>()
-
 const sessionContext = ref<import('@/api/chat').ContextSnapshot | null>(null)
 const sessionContextSessionId = ref('')
 const sessionContextIsLive = ref(false)
@@ -1132,15 +1109,6 @@ function buildSessionConfigExtra(): Record<string, unknown> {
     extra.kb_collections = selectedKbCollections.value
     extra.kb_search_enabled = kbSearchEnabled.value
   }
-  if (qa_type.value !== 'TEST_CASE_QA' && selectedModelId.value) {
-    extra.model_id = selectedModelId.value
-  }
-  if (qa_type.value !== 'TEST_CASE_QA' && selectedReasoningEffort.value) {
-    extra.reasoning_effort = selectedReasoningEffort.value
-  }
-  if (qa_type.value !== 'TEST_CASE_QA') {
-    extra.mcp_servers = selectedMcpServers.value
-  }
   if (qa_type.value === 'SUPER_AGENT_QA' && !skillsAllEnabled.value) {
     extra.enabled_skills = selectedSkills.value
   }
@@ -1152,7 +1120,7 @@ function normalizeKbCollections(raw: unknown): string[] {
 }
 
 const showContextIndicator = computed(
-  () => qa_type.value !== 'TEST_CASE_QA' && hasValidContextWindow(sessionContext.value),
+  () => hasValidContextWindow(sessionContext.value),
 )
 
 function applySessionConfig(extra: Record<string, unknown>) {
@@ -1191,7 +1159,7 @@ function clearSessionConfig() {
 }
 
 // ---- 后台子 Agent：会话级 SSE 事件流 + 审批 ----
-const catalogTasks = ref<TaskCatalogEntry[]>([])
+const sessionTasks = ref<SessionTaskEntry[]>([])
 const taskPanelOpen = ref(false)
 const bgFocusTaskId = ref<string | null>(null)
 watch(taskPanelOpen, (open) => {
@@ -1200,41 +1168,41 @@ watch(taskPanelOpen, (open) => {
   }
 })
 const activeTaskCount = computed(() =>
-  catalogTasks.value.filter((t) => t.status === 'queued' || t.status === 'running' || t.status === 'awaiting_approval').length,
+  sessionTasks.value.filter((t) => t.status === 'queued' || t.status === 'running' || t.status === 'awaiting_approval').length,
 )
 const pendingTaskCount = computed(() =>
-  catalogTasks.value.filter((t) => t.status === 'awaiting_approval').length,
+  sessionTasks.value.filter((t) => t.status === 'awaiting_approval').length,
 )
-let catalogSource: EventSource | null = null
+let taskStreamSource: EventSource | null = null
 
-function applyCatalogTask(task: TaskCatalogEntry): void {
-  const idx = catalogTasks.value.findIndex((t) => t.task_id === task.task_id)
+function applySessionTask(task: SessionTaskEntry): void {
+  const idx = sessionTasks.value.findIndex((t) => t.task_id === task.task_id)
   if (idx >= 0) {
-    catalogTasks.value.splice(idx, 1, { ...catalogTasks.value[idx], ...task })
+    sessionTasks.value.splice(idx, 1, { ...sessionTasks.value[idx], ...task })
   } else {
-    catalogTasks.value.push(task)
+    sessionTasks.value.push(task)
   }
-  catalogTasks.value.sort((a, b) => (a.started_at ?? 0) - (b.started_at ?? 0))
+  sessionTasks.value.sort((a, b) => (a.started_at ?? 0) - (b.started_at ?? 0))
 }
 
-function backgroundTaskForToolPart(part: { name: string, output: string, child_session_id?: string, tool_call_id?: string }): TaskCatalogEntry | undefined {
-  return catalogTasks.value.find((task) =>
+function backgroundTaskForToolPart(part: { name: string, output: string, child_session_id?: string, tool_call_id?: string }): SessionTaskEntry | undefined {
+  return sessionTasks.value.find((task) =>
     (part.child_session_id && task.child_session_id === part.child_session_id)
     || (part.tool_call_id && task.created_by_tool_call_id === part.tool_call_id),
   )
 }
 
 /** 打开（或重开）会话级后台任务事件流：连接即收存量快照，此后实时推送 */
-function openCatalogStream(sessionId: string): void {
-  catalogSource?.close()
-  catalogSource = null
+function openTaskStream(sessionId: string): void {
+  taskStreamSource?.close()
+  taskStreamSource = null
   if (!sessionId || sessionId !== currentIndex.value) {
     return
   }
   // 会话切换即清旧目录：连接快照与全量刷新随后对齐，避免残留上一会话的任务
-  catalogTasks.value = []
-  const source = createChildCatalogEventSource(sessionId, {
-    onTask: applyCatalogTask,
+  sessionTasks.value = []
+  const source = createSessionTaskEventSource(sessionId, {
+    onTask: applySessionTask,
     onContinuation: (payload) => {
       if (payload?.run_id) {
         // 用闭包 sessionId 而非 currentIndex：事件可能在切会话的瞬间到达
@@ -1252,7 +1220,7 @@ function openCatalogStream(sessionId: string): void {
     onParseError: (err) => console.warn('[bg-task] parse event failed', err),
   })
   // onerror 不手动重连：EventSource 内建自动重连，重连由服务端快照对齐
-  catalogSource = source
+  taskStreamSource = source
 }
 
 /** 续跑通知条：插入会话时间线的系统状态条（run_id 去重） */
@@ -1282,84 +1250,27 @@ function openBackgroundNotice(childSessionIds: string[] = []): void {
 }
 
 function stopCatalogStream(): void {
-  catalogSource?.close()
-  catalogSource = null
-  catalogTasks.value = []
+  taskStreamSource?.close()
+  taskStreamSource = null
+  sessionTasks.value = []
 }
 
 // 用户级信令流：会话列表 run_status 实时刷新（一条连接覆盖全部会话；
 // 信令是 hint——行不在列表时全量刷新，断线重连后同样对齐）
-let userSignalSource: EventSource | null = null
-let userSignalConnectedOnce = false
-
-function applyUserSignal(signal: { type?: string, session_id?: string, status?: string, run_id?: string }): void {
-  const sessionId = signal.session_id
-  if (!sessionId) {
-    return
-  }
-  // 兜底加入：当前正在看的会话有新 run 启动（典型：后台任务终态触发的
-  // continuation run），会话信令流丢帧时经列表通道加入，避免刷新才可见
-  if (signal.type === 'run-started' && sessionId === currentIndex.value) {
-    sseStream.joinRunIfIdle(sessionId, signal.run_id)
-  }
-  // 终态：清徽章 + 会话有新活动（排序位置本地先行对齐，下次全量刷新校正）；
-  // 后端契约保证所有用户级信令与首帧都携带 status
-  const nextStatus = signal.type === 'run-terminal' ? undefined : signal.status
-  const lists = [tableData, archivedTableData]
-  let found = false
-  for (const list of lists) {
-    const row = list.value.find((item) => item.chat_id === sessionId || item.uuid === sessionId)
-    if (row) {
-      found = true
-      row.run_status = nextStatus
-      if (signal.type === 'run-terminal') {
-        row.update_time = Date.now()
-      }
-    }
-  }
-  // 行不在列表（他处新建会话触发的 run）：全量刷新
-  if (!found) {
-    void refreshHistoryLists(searchText.value)
-  }
-}
-
-function openUserSignalStream(): void {
-  userSignalSource?.close()
-  userSignalSource = null
-  const source = createUserSignalEventSource({
-    onSignal: applyUserSignal,
-    onOpen: () => {
-      // 首连只记录；重连后全量对齐（EventSource 内建自动重连）
-      if (userSignalConnectedOnce) {
-        void refreshHistoryLists(searchText.value)
-      }
-      userSignalConnectedOnce = true
-    },
-    onParseError: (err) => console.warn('[user-signal] parse failed', err),
-  })
-  userSignalSource = source
-}
-
-function stopUserSignalStream(): void {
-  userSignalSource?.close()
-  userSignalSource = null
-  userSignalConnectedOnce = false
-}
-
 /** 操作后主动拉一次全量（审批/取消/发消息后对齐，事件流兜底） */
-async function refreshCatalogTasks(sessionId: string): Promise<void> {
+async function refreshSessionTasks(sessionId: string): Promise<void> {
   if (!sessionId || sessionId !== currentIndex.value) {
     return
   }
   try {
-    const res = await listSessionTaskCatalog(sessionId)
-    catalogTasks.value = res.tasks ?? []
+    const res = await listSessionTasks(sessionId)
+    sessionTasks.value = res.tasks ?? []
   } catch {
     // 网络异常时事件流仍在，忽略
   }
 }
 
-async function onTaskDecide(payload: { task: TaskCatalogEntry, decisions: Array<{ type: 'approve' | 'reject', message?: string }> }): Promise<void> {
+async function onTaskDecide(payload: { task: SessionTaskEntry, decisions: Array<{ type: 'approve' | 'reject', message?: string }> }): Promise<void> {
   const { task, decisions } = payload
   try {
     if (!task.run_id) {
@@ -1376,26 +1287,33 @@ async function onTaskDecide(payload: { task: TaskCatalogEntry, decisions: Array<
     console.warn('[bg-task] submit decisions failed', err)
     window.$message?.error('审批提交失败')
   }
-  await refreshCatalogTasks(task.session_id)
+  await refreshSessionTasks(task.session_id)
 }
 
-async function onTaskCancel(task: TaskCatalogEntry): Promise<void> {
+async function onTaskCancel(task: SessionTaskEntry): Promise<void> {
   try {
+    // durable command：completed 即已停止；accepted 表示已受理、执行中
+    // （leader 认领执行），终态经目录流/任务详情刷新到达
+    let commandStatus = 'completed'
     if (task.kind === 'shell') {
-      await stopShellTask(task.session_id, task.task_id)
+      commandStatus = (await stopShellTask(task.session_id, task.task_id)).command_status ?? 'completed'
     } else if (task.run_id) {
-      await stopAgentRun(task.run_id)
+      commandStatus = (await stopAgentRun(task.run_id)).command_status ?? 'completed'
     }
-    window.$message?.success(task.kind === 'shell' ? '后台命令已停止' : '子 Agent 已停止')
+    if (commandStatus === 'accepted') {
+      window.$message?.info('停止请求已受理，正在停止…')
+    } else {
+      window.$message?.success(task.kind === 'shell' ? '后台命令已停止' : '子 Agent 已停止')
+    }
   } catch (err) {
     console.warn('[bg-task] cancel failed', err)
   }
-  await refreshCatalogTasks(task.session_id)
+  await refreshSessionTasks(task.session_id)
 }
 
 async function loadSessionContext(sessionId: string) {
   const loadId = ++sessionContextLoadId
-  if (!sessionId || qa_type.value === 'TEST_CASE_QA') {
+  if (!sessionId) {
     sessionContext.value = null
     sessionContextSessionId.value = ''
     sessionContextIsLive.value = false
@@ -1683,13 +1601,13 @@ const sseStream = useSSEStream({
       ...(lf ? { langfuse_session_id: lf } : {}),
     }
   },
-  onStreamRollback: () => {
-    // LLM 重试/降级：失败尝试的部分流式输出整体作废——先冲刷批处理缓冲
-    // （失败增量可能还挂在批处理里），再丢弃尾部 text/reasoning parts
+  onStreamRollback: (partIds) => {
+    // LLM 重试/降级：失败尝试的部分流式输出按帧点名的 part_ids 作废——
+    // 先冲刷批处理缓冲（失败增量可能还挂在批处理里），再按 id 丢弃
     streamDeltaBatcher.flush()
-    patchLastAssistantParts((parts) => rollbackTrailingStreamParts(parts))
+    patchLastAssistantParts((parts) => dropStreamPartsById(parts, partIds))
   },
-  onTextDelta: (text, parent_task_call_id) => {
+  onTextDelta: (text, parent_task_call_id, part_id) => {
     // 重试成功后后端不发 run-status:running，只有内容到达才标志恢复——清重试标记。
     if (retryingLabel.value && !parent_task_call_id) {
       retryingLabel.value = ''
@@ -1699,6 +1617,7 @@ const sseStream = useSSEStream({
       data: text,
       // 与 reducer 同口径归一（trim / 空串 → undefined），保证同语义 delta 落进同一桶
       parentTaskCallId: parent_task_call_id?.trim() || undefined,
+      partId: part_id?.trim() || undefined,
       // push 时捕获拆分开关：reasoning-start 之后到达的 text 不再走 <think> 拆分
       redactedThinking: !nativeReasoningSeen.value,
     })
@@ -1710,7 +1629,7 @@ const sseStream = useSSEStream({
   onReasoningStart: () => {
     nativeReasoningSeen.value = true
   },
-  onReasoningDelta: (delta, parent_task_call_id) => {
+  onReasoningDelta: (delta, parent_task_call_id, part_id) => {
     nativeReasoningSeen.value = true
     // 与 onTextDelta 同理：重试成功后内容到达即清重试标记。
     if (retryingLabel.value && !parent_task_call_id) {
@@ -1720,6 +1639,7 @@ const sseStream = useSSEStream({
       kind: 'reasoning',
       data: delta,
       parentTaskCallId: parent_task_call_id?.trim() || undefined,
+      partId: part_id?.trim() || undefined,
     })
   },
   onReasoningEnd: (data) => {
@@ -1864,7 +1784,6 @@ const sseStream = useSSEStream({
   onBusyConflict: () => {
     window.$ModalMessage.warning('当前会话正在生成回复，你的消息将在本轮结束后自动发送')
   },
-  historyReady: (sessionId) => sessionHistoryReady.get(sessionId) ?? null,
   onError: (msg) => {
     streamDeltaBatcher.flush()
     stylizingLoading.value = false
@@ -1915,6 +1834,9 @@ async function submitHitlFromPanel(payload: {
       decisions: payload.decisions,
       grant_scope: payload.grant_scope,
     })
+  } catch {
+    // useSSEStream 已复位 isLoading 并上报 disconnected（重连横幅可见）；
+    // 这里只拦截 rejection，避免模板事件处理器产生未处理 Promise
   } finally {
     const current = pendingHitlBySession.value[sessionId]
     if (current?.interrupt_id === pending.interrupt_id) {
@@ -1997,7 +1919,7 @@ const composerStopMode = computed(() => stylizingLoading.value && sendDisabled.v
 /* ---- 主 Agent 待发队列：运行中发送的消息排队，run 终态后逐条自动提交 ----
    CRUD 走共享 composable（与子 Agent 抽屉同一份实现）；提交/终态衔接为主链路域语义 */
 
-const composerQueue = useFollowupQueue({
+const composerQueue = useMessageQueue({
   get: () => queuedComposerMessages.value,
   set: (list) => (queuedComposerMessages.value = list),
 })
@@ -2167,9 +2089,6 @@ function appendConversationTurn(
 function buildStreamExtra(file_dict: Record<string, string> | undefined): Record<string, unknown> {
   const extra = buildSessionConfigExtra()
   extra.file_dict = file_dict
-  if (qa_type.value !== 'TEST_CASE_QA' && selectedMcpServers.value.length === 0) {
-    delete extra.mcp_servers
-  }
   if (composerMentions.value.length > 0) {
     extra.mentions = composerMentions.value.map(mentionToPayload)
   }
@@ -2233,17 +2152,15 @@ const handleCreateStylized = async (send_text = '', file_key = []) => {
   try {
     await ensureSession(sessionIdForSend, { extra: buildSessionConfigExtra() })
     sessionMaterialized.value = true
-    activateChildCatalogSession({
+    activateSessionTaskStream({
       sessionId: sessionIdForSend,
       currentSessionId: currentIndex.value,
-      hasStream: catalogSource !== null,
+      hasStream: taskStreamSource !== null,
       setCurrentSession: (sessionId) => {
         currentIndex.value = sessionId
       },
-      openStream: openCatalogStream,
+      openStream: openTaskStream,
     })
-    // 会话已物化：开启信令流，让其它窗口能发现本窗口发起的 run（已开启则 no-op）
-    sseStream.watchSessionSignals(sessionIdForSend)
     void replaceChatSessionUrl(sessionIdForSend)
   } catch (error) {
     const msg = error instanceof Error ? error.message : String(error)
@@ -2701,8 +2618,8 @@ const rowProps = (row: TableItem) => {
 
       // 历史会话点入与 URL 恢复是两条独立入口：这里同样要挂后台任务流，
       // 否则右下角任务目录永远为空（聊天里的子 Agent 卡片走 toolPart 不依赖目录）
-      openCatalogStream(row.chat_id)
-      void refreshCatalogTasks(row.chat_id)
+      openTaskStream(row.chat_id)
+      void refreshSessionTasks(row.chat_id)
 
       // 标记会话已读
       void markSessionRead(row.chat_id).then(() => {
@@ -2798,11 +2715,6 @@ const activateChatMode = (
     if (!fromHistorySelection) {
       void navigateToComposingUrl(true)
     }
-  }
-
-  // 测试用例生成在独立页面（TestAssistant），不在对话页内完成
-  if (targetQaType === 'TEST_CASE_QA' && route.name !== 'TestCaseGenerate') {
-    router.push({ name: 'TestCaseGenerate' })
   }
 }
 
@@ -2984,17 +2896,14 @@ onMounted(() => {
   if (messagesContainer.value) {
     messagesContainer.value.addEventListener('scroll', handleScroll)
   }
-  openUserSignalStream()
 })
 
 // 在组件卸载前移除事件监听
 onBeforeUnmount(() => {
   stopCatalogStream()
-  stopUserSignalStream()
   stopProcessingClock()
   streamDeltaBatcher.dispose()
   // 停止信令流：SPA 内路由切换不会断开 fetch 连接，必须显式中止
-  sseStream.stopSessionSignals()
   if (messagesContainer.value) {
     messagesContainer.value.removeEventListener('scroll', handleScroll)
   }
@@ -3580,7 +3489,7 @@ function onComposerPaste(e: ClipboardEvent) {
                       />
 
                       <!-- 待发队列：运行中发送的消息在此排队，当前 run 终态后逐条自动提交（与子 Agent 抽屉同构） -->
-                      <FollowupQueue
+                      <MessageQueue
                         :messages="queuedComposerMessages"
                         @remove="composerQueue.remove"
                         @edit="editQueuedComposerMessage"
@@ -3912,13 +3821,13 @@ function onComposerPaste(e: ClipboardEvent) {
     </n-modal>
 
     <!-- 后台子任务抽屉（SUPER_AGENT_QA） -->
-    <TaskCatalogPanel
+    <TaskListPanel
       v-model:show="taskPanelOpen"
-      :tasks="catalogTasks"
+      :tasks="sessionTasks"
       :focus-task-id="bgFocusTaskId"
       @decide="onTaskDecide"
       @cancel="onTaskCancel"
-      @changed="refreshCatalogTasks(currentIndex)"
+      @changed="refreshSessionTasks(currentIndex)"
     />
   </div>
 </template>

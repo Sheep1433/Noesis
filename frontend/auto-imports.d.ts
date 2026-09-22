@@ -228,6 +228,7 @@ declare global {
   const useMemory: typeof import('@vueuse/core')['useMemory']
   const useMermaidRender: typeof import('./src/hooks/useMermaidRender')['useMermaidRender']
   const useMessage: typeof import('naive-ui')['useMessage']
+  const useMessageQueue: typeof import('./src/hooks/useMessageQueue')['useMessageQueue']
   const useModel: typeof import('vue')['useModel']
   const useMounted: typeof import('@vueuse/core')['useMounted']
   const useMouse: typeof import('@vueuse/core')['useMouse']
@@ -344,11 +345,11 @@ declare global {
   export type { RouteRecordRaw, RouteLocationRaw } from 'vue-router'
   import('vue-router')
   // @ts-ignore
-  export type { FollowupQueueStore } from './src/hooks/useFollowupQueue'
-  import('./src/hooks/useFollowupQueue')
-  // @ts-ignore
   export type { MentionKind, MentionCandidate, ComposerMention } from './src/hooks/useMentionCatalog'
   import('./src/hooks/useMentionCatalog')
+  // @ts-ignore
+  export type { MessageQueueStore } from './src/hooks/useMessageQueue'
+  import('./src/hooks/useMessageQueue')
   // @ts-ignore
   export type { UsePaneResizeOptions } from './src/hooks/usePaneResize'
   import('./src/hooks/usePaneResize')
@@ -559,7 +560,6 @@ declare module 'vue' {
     readonly useFileSystemAccess: UnwrapRef<typeof import('@vueuse/core')['useFileSystemAccess']>
     readonly useFocus: UnwrapRef<typeof import('@vueuse/core')['useFocus']>
     readonly useFocusWithin: UnwrapRef<typeof import('@vueuse/core')['useFocusWithin']>
-    readonly useFollowupQueue: UnwrapRef<typeof import('./src/hooks/useFollowupQueue')['useFollowupQueue']>
     readonly useFps: UnwrapRef<typeof import('@vueuse/core')['useFps']>
     readonly useFullscreen: UnwrapRef<typeof import('@vueuse/core')['useFullscreen']>
     readonly useGamepad: UnwrapRef<typeof import('@vueuse/core')['useGamepad']>
@@ -585,6 +585,7 @@ declare module 'vue' {
     readonly useMemory: UnwrapRef<typeof import('@vueuse/core')['useMemory']>
     readonly useMermaidRender: UnwrapRef<typeof import('./src/hooks/useMermaidRender')['useMermaidRender']>
     readonly useMessage: UnwrapRef<typeof import('naive-ui')['useMessage']>
+    readonly useMessageQueue: UnwrapRef<typeof import('./src/hooks/useMessageQueue')['useMessageQueue']>
     readonly useModel: UnwrapRef<typeof import('vue')['useModel']>
     readonly useMounted: UnwrapRef<typeof import('@vueuse/core')['useMounted']>
     readonly useMouse: UnwrapRef<typeof import('@vueuse/core')['useMouse']>

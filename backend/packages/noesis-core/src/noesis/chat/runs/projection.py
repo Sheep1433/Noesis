@@ -22,6 +22,7 @@ from noesis.chat.delivery.events import (
     StreamDone,
     WireFrame,
 )
+from noesis.chat.event_mapping.retrieval import MAX_CROSS_BOUNDARY_SOURCES
 from noesis.chat.message_builder import AssistantMessageBuilder
 from noesis.chat.tool_state import ToolState
 from noesis.chat.runs.models import RunSnapshot, RunStatus
@@ -117,13 +118,14 @@ class RunProjection:
                 self.builder.append_reasoning_delta(
                     str(delta or ""),
                     parent_task_call_id=data.get("parent_task_call_id"),
+                    part_id=str(data.get("part_id") or "") or None,
                 )
             elif event.event == "stream-rollback":
-                # LLM 重试/降级：失败尝试的部分流式输出不进落库投影
-                self.builder.rollback_trailing_stream_parts()
-            elif event.event in {"tool-call-start", "tool-input-start"}:
-                if event.event == "tool-input-start":
-                    return True
+                # LLM 重试/降级：按帧点名的 part_ids 丢弃失败尝试的部分
+                # 流式输出（不按尾部弹回——会误伤同为 text 类型的前文）
+                part_ids = [str(x) for x in (data.get("part_ids") or []) if x]
+                self.builder.drop_parts(part_ids)
+            elif event.event == "tool-input-start":
                 self.builder.append_tool(
                     str(data.get("tool_name") or data.get("name") or "tool"),
                     data.get("input") if isinstance(data.get("input"), dict) else {},
@@ -180,12 +182,21 @@ class RunProjection:
                 if isinstance(results, list):
                     origin = data.get("origin")
                     tool_call_id = str(data.get("tool_call_id") or "")
+                    # 跨边界帧是子 Agent 多轮检索的去重汇总（登记侧按
+                    # MAX_CROSS_BOUNDARY_SOURCES 上界），重建必须沿用同一上界；
+                    # 缺省会落 max_results_per_call(30)，把任务级清单截成
+                    # 调用级上限（drb-0478 实测 290 条登记落库只剩 30/任务，
+                    # 报告引用因此大面积退化为无编号角标）
+                    is_cross_boundary = isinstance(origin, dict) and origin.get("kind") == "subagent"
                     part = self.builder.register_retrieval_results(
                         tool_call_id=tool_call_id,
                         query=str(data.get("query") or ""),
                         results=[item for item in results if isinstance(item, dict)],
                         truncated=bool(data.get("truncated")),
                         origin=origin if isinstance(origin, dict) else None,
+                        max_results=(
+                            MAX_CROSS_BOUNDARY_SOURCES if is_cross_boundary else None
+                        ),
                     )
                     # 与 register_tool_retrieval 的共享投影语义对齐：tool part
                     # 展示输出替换为「检索到 N 条来源」摘要，原始结果只持久化

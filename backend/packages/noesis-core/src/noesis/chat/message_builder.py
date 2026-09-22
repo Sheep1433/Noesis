@@ -97,12 +97,15 @@ class RetrievalPart(MessagePart):
 
 @dataclass
 class ReasoningPart(MessagePart):
+    id: str = ""
     content: str = ""
     parent_task_call_id: Optional[str] = None
     type: str = "reasoning"
 
     def to_dict(self) -> Dict[str, Any]:
         out: Dict[str, Any] = {"type": self.type, "content": self.content}
+        if self.id:
+            out["id"] = self.id
         out.update(_part_parent_fields(self.parent_task_call_id))
         return out
 
@@ -361,16 +364,30 @@ class AssistantMessageBuilder:
         *,
         part_id: Optional[str] = None,
     ) -> TextPart:
-        """流式正文增量：合并进同 parent 最近 text part（跳过其它 parent 交错）。"""
+        """流式正文增量。
+
+        带 ``part_id`` 时按 id 路由：同 id part 存在则追加，不存在则新开
+        （保证「一次模型尝试的输出 = 尝试期间铸造的 parts」，stream-rollback
+        才能按 id 点名丢弃而不误伤前文）；无 ``part_id`` 时合并进同 parent
+        最近 text part（跳过其它 parent 交错）。
+        """
         if not text:
             return
+        if part_id:
+            for part in reversed(self._content.parts):
+                if isinstance(part, TextPart) and part.id == part_id:
+                    part.content = (part.content or "") + text
+                    return part
+            return self.append_text(
+                text,
+                parent_task_call_id=parent_task_call_id,
+                part_id=part_id,
+            )
         for part in reversed(self._content.parts):
             if getattr(part, "parent_task_call_id", None) != parent_task_call_id:
                 continue
             if isinstance(part, TextPart):
                 part.content = (part.content or "") + text
-                if part_id and not part.id:
-                    part.id = part_id
                 return part
             break
         return self.append_text(
@@ -378,6 +395,17 @@ class AssistantMessageBuilder:
             parent_task_call_id=parent_task_call_id,
             part_id=part_id,
         )
+
+    def drop_parts(self, part_ids: List[str]) -> int:
+        """按 id 删除 parts（stream-rollback 点名丢弃失败尝试的 parts）。"""
+        wanted = {pid for pid in part_ids if pid}
+        if not wanted:
+            return 0
+        before = len(self._content.parts)
+        self._content.parts = type(self._content.parts)(
+            part for part in self._content.parts if getattr(part, "id", "") not in wanted
+        )
+        return before - len(self._content.parts)
 
     def register_retrieval_results(
         self,
@@ -499,9 +527,29 @@ class AssistantMessageBuilder:
         self,
         reasoning: str,
         parent_task_call_id: Optional[str] = None,
+        *,
+        part_id: Optional[str] = None,
     ) -> None:
-        """流式思考增量：合并进同 parent 最近 reasoning（跳过其它 parent 交错）。"""
+        """流式思考增量。
+
+        带 ``part_id`` 时按 id 路由（与 ``append_text_delta`` 同语义，供
+        stream-rollback 按 id 点名丢弃）；无 ``part_id`` 时合并进同 parent
+        最近 reasoning（跳过其它 parent 交错）。
+        """
         if not reasoning:
+            return
+        if part_id:
+            for part in reversed(self._content.parts):
+                if isinstance(part, ReasoningPart) and part.id == part_id:
+                    part.content = (part.content or "") + reasoning
+                    return
+            self._content.parts.append(
+                ReasoningPart(
+                    id=part_id,
+                    content=reasoning,
+                    parent_task_call_id=parent_task_call_id,
+                ),
+            )
             return
         for part in reversed(self._content.parts):
             if getattr(part, "parent_task_call_id", None) != parent_task_call_id:
@@ -513,23 +561,6 @@ class AssistantMessageBuilder:
         self._content.parts.append(
             ReasoningPart(content=reasoning, parent_task_call_id=parent_task_call_id),
         )
-
-    def rollback_trailing_stream_parts(self) -> int:
-        """丢弃末尾连续的 text/reasoning parts，返回丢弃数量。
-
-        用于 LLM 重试/降级：失败尝试在被断流前已流出的部分正文与思考
-        不应留在消息里（否则 N 次重试累积 N 份重复）。工具/检索等 part
-        是模型调用边界——模型流式阶段不产生它们，遇到即停。
-        """
-        dropped = 0
-        while self._content.parts:
-            last = self._content.parts[-1]
-            if isinstance(last, (TextPart, ReasoningPart)):
-                self._content.parts.pop()
-                dropped += 1
-                continue
-            break
-        return dropped
 
     def append_tool(
         self,

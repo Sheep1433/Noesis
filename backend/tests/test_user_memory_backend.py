@@ -1,4 +1,10 @@
-"""`/memory/` 虚拟路径与 UserMemoryBackend 回归。"""
+"""`/memory/` 路由与 MemoryWriteMiddleware 回归。
+
+布局（openspec: md-memory-layer）：/memory 路由 = 用户 memory/ 子树整目录
+（FilesystemBackend 全量复用）；写入策略（索引/journal 只读、条目白名单）
+与写后索引同步在 MemoryWriteMiddleware（见 test_memory_recall.py 的中间件
+用例），本文件钉路由层行为：挂载、隔离、迁移、grep 语义。
+"""
 
 from __future__ import annotations
 
@@ -6,11 +12,11 @@ from pathlib import Path
 
 import pytest
 
-from noesis.agents.backends.memory import UserMemoryBackend
 from noesis.agents.backends.factory import build_agent_filesystem_backend
-from noesis.agents.backends.paths import AGENT_MEMORY_AGENTS_FILE, AGENT_MEMORY_USER_FILE
+from noesis.paths import AGENT_MEMORY_AGENTS_FILE, AGENT_MEMORY_USER_FILE
 from noesis.config import user_data_paths as user_paths
-from noesis.services.memory.store import MemoryStore
+from noesis.memory.layout import ensure_user_memory_files
+from noesis.memory.store import MemoryStore
 
 
 @pytest.fixture()
@@ -20,36 +26,50 @@ def users_root(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Path:
     return root
 
 
-def test_user_memory_backend_agents_and_user_writable(tmp_path: Path) -> None:
-    agents = tmp_path / "AGENTS.md"
-    user = tmp_path / "USER.md"
-    agents.write_text("agents-v1", encoding="utf-8")
-    user.write_text("profile", encoding="utf-8")
-    backend = UserMemoryBackend(agents_path=agents, user_path=user)
+def _backend(users_root: Path, uid: str = "u1", **kwargs):
+    ensure_user_memory_files(uid)
+    return build_agent_filesystem_backend(
+        user_id=uid, session_id="test", sandbox=None, shell_timeout=30, **kwargs
+    )
 
-    read_agents = backend.read("/AGENTS.md")
+
+def test_memory_root_files_editable_via_route(users_root: Path) -> None:
+    """根文件走 deepagents 全域语义：write=新建（seed 已存在则拒绝），
+    edit=修改。Agent 的记忆更新指引本就是 edit_file，ReadBeforeWrite
+    门卫同样要求先读后改。"""
+    backend = _backend(users_root)
+    agents_disk = user_paths.get_user_agents_md_path("u1")
+
+    # seed 已存在：整文件 write 被拒（与 workspace/skills 路由一致）
+    write_agents = backend.write(AGENT_MEMORY_AGENTS_FILE, "agents-v2")
+    assert write_agents.error is not None
+
+    # read → edit 链路可用
+    read_agents = backend.read(AGENT_MEMORY_AGENTS_FILE)
     assert read_agents.error is None
-    assert "agents-v1" in read_agents.file_data["content"]  # type: ignore[index]
+    edit = backend.edit(AGENT_MEMORY_AGENTS_FILE, "## 关于我", "## 关于我\n\n- 新增一条")
+    assert edit.error is None, edit
+    on_disk = agents_disk.read_text(encoding="utf-8")
+    assert "新增一条" in on_disk
+    assert "工作偏好" in on_disk  # 其余内容未被覆盖
 
-    write_user = backend.write("/USER.md", "profile-v2")
-    assert write_user.error is None
-    assert user.read_text(encoding="utf-8") == "profile-v2"
-
-    write_agents = backend.write("/AGENTS.md", "agents-v2")
-    assert write_agents.error is None
-    assert agents.read_text(encoding="utf-8") == "agents-v2"
+    # 新条目文件：write 新建可用
+    write_entry = backend.write("/memory/preference/fresh.md", "正文")
+    assert write_entry.error is None, write_entry
 
 
-def test_user_memory_download_files(tmp_path: Path) -> None:
-    agents = tmp_path / "AGENTS.md"
-    user = tmp_path / "USER.md"
-    agents.write_text("x", encoding="utf-8")
-    user.write_text("y", encoding="utf-8")
-    backend = UserMemoryBackend(agents_path=agents, user_path=user)
-    responses = backend.download_files(["/AGENTS.md", "/USER.md"])
-    assert responses[0].error is None
-    assert responses[0].content == b"x"
-    assert responses[1].content == b"y"
+def test_legacy_root_files_migrated_into_memory(users_root: Path) -> None:
+    """老布局（根文件在用户数据根上）首次 ensure 时搬入 memory/ 子树。"""
+    u = users_root / "u1"
+    u.mkdir(parents=True)
+    (u / "AGENTS.md").write_text("老布局内容", encoding="utf-8")
+    (u / "USER.md").write_text("画像", encoding="utf-8")
+
+    ensure_user_memory_files("u1")
+    assert (u / "memory" / "AGENTS.md").read_text(encoding="utf-8") == "老布局内容"
+    assert (u / "memory" / "USER.md").read_text(encoding="utf-8") == "画像"
+    assert not (u / "AGENTS.md").exists()
+    assert not (u / "USER.md").exists()
 
 
 @pytest.mark.asyncio
@@ -81,7 +101,7 @@ async def test_composite_memory_route_isolated_from_workspace(
         lambda: platform,
     )
 
-    user_paths.ensure_user_memory_files("u1")
+    ensure_user_memory_files("u1")
     agents_disk = user_paths.get_user_agents_md_path("u1")
     agents_disk.write_text("memory-body", encoding="utf-8")
 
@@ -107,6 +127,22 @@ async def test_composite_memory_route_isolated_from_workspace(
     assert profile.error is None
 
 
+def test_upload_channel_whitelist_guard(users_root: Path) -> None:
+    """upload 不经工具层中间件，白名单门卫在 backend 层执行。"""
+    backend = _backend(users_root)
+    responses = backend.upload_files([
+        ("/memory/preference/via-upload.md", "正文".encode("utf-8")),
+        ("/memory/MEMORY.md", b"x"),
+        ("/memory/journal/2026-09-19.md", b"x"),
+        ("/memory/junk.md", b"x"),
+    ])
+    by_path = {r.path: r for r in responses}
+    assert by_path["/memory/preference/via-upload.md"].error is None
+    assert by_path["/memory/MEMORY.md"].error == "permission_denied"
+    assert by_path["/memory/journal/2026-09-19.md"].error == "permission_denied"
+    assert by_path["/memory/junk.md"].error == "permission_denied"
+
+
 def test_grep_covers_memory_entries_and_scoped_dirs(users_root: Path) -> None:
     """grep 候选集必须覆盖五类目录条目；目录路径要展开、不掺根文件。"""
     MemoryStore.upsert_entry(
@@ -115,17 +151,14 @@ def test_grep_covers_memory_entries_and_scoped_dirs(users_root: Path) -> None:
     MemoryStore.upsert_entry(
         "u1", memory_type="experience", label="无关",
         body="完全不相关的内容。", sources=[])
-    backend = build_agent_filesystem_backend(
-        user_id="u1", session_id="grep-test",
-        sandbox=None, shell_timeout=30,
-    )
+    backend = _backend(users_root)
 
     # 根路径：条目正文可命中（此前只有 MEMORY.md 索引行可见）
     g = backend.grep("表格化", path="/")
     entry_hits = [m for m in g.matches
                   if str(m.get("path", "")).startswith("/memory/preference/")]
     assert entry_hits, f"条目正文未命中: {g.matches}"
-    assert any("表格化" in str(m.get("content", "")) for m in entry_hits)
+    assert any("表格化" in str(m.get("text", "")) for m in entry_hits)
 
     # 类型目录 scoped：只搜该目录，不掺根文件
     g2 = backend.grep("表格化", path="/memory/preference")
@@ -142,11 +175,8 @@ def test_grep_supports_regex_alternation(users_root: Path) -> None:
     MemoryStore.upsert_entry(
         "u1", memory_type="experience", label="婚礼",
         body="Congratulations to Rachel on her upcoming wedding!", sources=[])
-    backend = build_agent_filesystem_backend(
-        user_id="u1", session_id="grep-regex-test",
-        sandbox=None, shell_timeout=30,
-    )
+    backend = _backend(users_root)
     g = backend.grep("wedding|marry|married|engaged", path="/")
-    assert any("upcoming wedding" in str(m.get("content", "")) for m in g.matches), (
+    assert any("upcoming wedding" in str(m.get("text", "")) for m in g.matches), (
         f"正则交替模式未命中: {g.matches}"
     )

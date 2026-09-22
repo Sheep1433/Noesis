@@ -17,6 +17,20 @@ from noesis.services.qa.helpers import (
 )
 
 
+
+from noesis.chat.delivery.sse import encode_run_event as _encode_run_event
+
+
+def _raw_sse_lines(bridge, item, builder, ctx):
+    """raw 运行时事件 → SSE 行（与生产主路径同形：map_item 后经统一编码器）。"""
+    return [line for event in bridge.map_item(item, builder, ctx) for line in _encode_run_event(event)]
+
+
+def _finalize_sse_lines(bridge, finish_reason=None):
+    """bridge 终态 → SSE 行（与生产主路径同形：finalize_events 后经统一编码器）。"""
+    return [line for event in bridge.finalize_events(finish_reason=finish_reason) for line in _encode_run_event(event)]
+
+
 @pytest.mark.asyncio
 async def test_persist_stream_checkpoint_does_not_flush_text_buffer() -> None:
     bridge = LangGraphSseBridge("sess-mid")
@@ -126,18 +140,18 @@ def test_streaming_finish_yields_one_text_part() -> None:
         content = "好"
         additional_kwargs = {}
 
-    bridge.process_item(
+    _raw_sse_lines(bridge, 
         {"event": "on_chat_model_stream", "run_id": "r1", "data": {"chunk": _Chunk()}},
         builder,
         ctx,
     )
-    bridge.process_item(
+    _raw_sse_lines(bridge, 
         {"event": "on_chat_model_stream", "run_id": "r1", "data": {"chunk": _Chunk2()}},
         builder,
         ctx,
     )
-    bridge.process_item({"type": "__tw_finish__", "usage": {}}, builder, ctx)
-    bridge.finalize()
+    _raw_sse_lines(bridge, {"type": "__tw_finish__", "usage": {}}, builder, ctx)
+    _finalize_sse_lines(bridge)
 
     text_parts = [p for p in builder.to_dict()["parts"] if p.get("type") == "text"]
     assert len(text_parts) == 1

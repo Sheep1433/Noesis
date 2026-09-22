@@ -44,7 +44,7 @@ def memory_write_when(req: Any) -> bool:
     的 /memory 写入 guard 必然拒绝，直接放行让模型收到拒绝反馈，不拿
     注定失败的写入打扰用户。
     """
-    from noesis.agents.backends.memory import is_memory_writable_path
+    from noesis.memory.policy import is_memory_writable_path
 
     args = (getattr(req, "tool_call", None) or {}).get("args") or {}
     path = args.get("path") or args.get("file_path") or ""

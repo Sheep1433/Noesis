@@ -52,16 +52,14 @@ Noesis/
 | GeneralQAAgent | `create_noesis_agent` | RAG hybrid 检索 | 智能问答 |
 | FaultOperationAgent | `create_noesis_agent` | MCP | 故障运维 |
 | SuperAgent | `create_noesis_agent` | 文件系统 + Skills + 子 Agent | 深度研究 / 通用复杂任务 |
-| CaseCoordinator | LangGraph `StateGraph` | 自定义 workflow | 测试用例生成 |
-| SimpleMCPAgent | `create_noesis_agent` | MCP | 本地调试 |
 
 ### 问答类型（`qa_type`）
 
-`COMMON_QA`、`FAULT_OPERATION_QA`、`TEST_CASE_QA`、`SUPER_AGENT_QA`
+`COMMON_QA`、`FAULT_OPERATION_QA`、`SUPER_AGENT_QA`
 
 ### SSE 事件
 
-run 内容流事件清单（message-start、reasoning/text/tool-input 系列、stats-update、hitl-required、finish、`[DONE]` 等）的**唯一权威**在 `docs/engineering/platform/chat-streaming.md` §4.2b，由契约测试钉住（漂移即 CI 红）。另有两条轻量信令流（hint 语义）：`session-signal`（`/sessions/{id}/events`，跨窗口发现活跃 run）与 `user-signal`（`/events/stream`，会话列表实时刷新），详见同文档 §4.2a。
+run 内容流事件清单（message-start、reasoning/text/tool-input 系列、stats-update、hitl-required、finish、`[DONE]` 等）的**唯一权威**在 `docs/engineering/platform/chat-streaming.md` §4.2b，由契约测试钉住（漂移即 CI 红）。另有任务清单流（`/sessions/{id}/tasks/stream`，hint 语义，只推子 Agent 与后台命令的清单条目），详见同文档 §4.2a。
 
 **assistant 落库（服务端 authoritative，不依赖客户端收到 `[DONE]`）**：同一轮 SSE 对应 DB **一行**（`message_id` = `assistant_message_id`），经骨架 → 检查点 → 终态 UPDATE；终态互斥见 `openspec/specs/platform-chat/spec.md`「流式 assistant 消息 SHALL 按骨架—检查点—终态单次落库」与 `docs/engineering/platform/chat-streaming.md` §3.3。
 

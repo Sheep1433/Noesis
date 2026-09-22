@@ -6,7 +6,6 @@ import asyncio
 import copy
 import json
 import time
-from collections import deque
 from collections.abc import Awaitable, Callable
 from dataclasses import dataclass, field
 from typing import Any, Optional
@@ -26,8 +25,7 @@ from noesis.chat.runs.models import (
     require_transition,
 )
 from noesis.chat.runs.delivery_bus import DeliveryCore
-from noesis.chat.runs.session_signals import session_signal_bus
-from noesis.chat.runs.user_signals import user_signal_bus
+from noesis.chat.runs.publisher import RunEventPublisher
 
 
 class RunNotFound(KeyError):
@@ -310,9 +308,11 @@ class RunHandle:
     persist_writer: PersistWriter | None = None
     pending_terminal: TerminalCandidate | None = None
     terminal_retry_task: asyncio.Task[None] | None = None
+    checkpoint_flush_task: asyncio.Task[None] | None = None
     authoritative_snapshot: RunSnapshot | None = None
     last_persisted_sequence: int = 0
     state: Any = None
+    publisher: RunEventPublisher | None = None
 
     @property
     def last_sequence(self) -> int:
@@ -340,6 +340,11 @@ class RunManager:
         terminal_persistence_budget_seconds: float = 5.0,
         terminal_retry_interval_seconds: float = 5.0,
         checkpoint_retry_interval_seconds: float = 0.25,
+        bus: Any | None = None,
+        token_provider: Any | None = None,
+        publisher_queue_max_events: int = 512,
+        publisher_queue_max_bytes: int = 1024 * 1024,
+        periodic_checkpoint_interval_seconds: float = 15.0,
     ) -> None:
         if (
             min(
@@ -375,6 +380,12 @@ class RunManager:
         self.terminal_persistence_budget_seconds = terminal_persistence_budget_seconds
         self.terminal_retry_interval_seconds = terminal_retry_interval_seconds
         self.checkpoint_retry_interval_seconds = checkpoint_retry_interval_seconds
+        # Run bus 发布面（task 4.2）：None = 未装配（单测），事件只走本地订阅
+        self._bus = bus
+        self._token_provider = token_provider
+        self.publisher_queue_max_events = publisher_queue_max_events
+        self.publisher_queue_max_bytes = publisher_queue_max_bytes
+        self.periodic_checkpoint_interval_seconds = periodic_checkpoint_interval_seconds
         self._metrics: dict[str, int | float] = {
             "published_events": 0,
             "published_bytes": 0,
@@ -395,7 +406,23 @@ class RunManager:
             "checkpoint_lag_events": 0,
             "event_loop_lag_last_ms": 0.0,
             "event_to_client_latency_last_ms": 0.0,
+            "bus_publisher_events": 0,
+            "bus_publisher_overflow": 0,
+            "bus_publisher_failures": 0,
+            "bus_publisher_stale_term": 0,
         }
+
+    def _bump_metric(self, name: str) -> None:
+        self._metrics[name] = self._metrics.get(name, 0) + 1
+
+    def attach_bus(self, bus: Any, token_provider: Any) -> None:
+        """装配 Run bus 发布面（main.py lifespan 在 leader 选举后调用）。
+
+        已在跑的 Run 不补建 publisher（重启后新 Run 才跨进程广播）；
+        memory 模式同样装配——两种模式共用同一发布路径。
+        """
+        self._bus = bus
+        self._token_provider = token_provider
 
     async def start(
         self,
@@ -439,6 +466,15 @@ class RunManager:
             max_buffer_events=self.max_buffer_events,
             max_buffer_bytes=self.max_buffer_bytes,
         )
+        if self._bus is not None and self._token_provider is not None:
+            handle.publisher = RunEventPublisher(
+                run_id=run_id,
+                bus=self._bus,
+                token_provider=self._token_provider,
+                max_events=self.publisher_queue_max_events,
+                max_bytes=self.publisher_queue_max_bytes,
+                on_metric=self._bump_metric,
+            )
         async with self._registry_lock:
             if run_id in self._runs:
                 raise ValueError(f"run already registered: {run_id}")
@@ -455,6 +491,8 @@ class RunManager:
             ):
                 raise RunCapacityExceeded("user active run limit exceeded")
             self._runs[run_id] = handle
+        if handle.publisher is not None:
+            handle.publisher.start()
         for name, handler in (deliveries or {}).items():
             await self.register_delivery(run_id, name, handler)
         if checkpoint_handler is not None:
@@ -478,6 +516,10 @@ class RunManager:
                     self._record_checkpoint_persisted(handle, request, latency_ms)
                 ),
             )
+            handle.checkpoint_flush_task = asyncio.create_task(
+                self._periodic_checkpoint_flush(handle),
+                name=f"agent-run-checkpoint-flush:{run_id}",
+            )
         logger.info(
             "agent_run_registered run_id={} session_id={} assistant_message_id={} attempt_id={} status=running",
             run_id,
@@ -488,7 +530,6 @@ class RunManager:
         async with handle.lock:
             handle.status = RunStatus.RUNNING
             generation = self._begin_producer_segment_locked(handle)
-            self._publish_session_signal(handle, RunStatus.RUNNING)
         handle.producer_task = asyncio.create_task(
             self._run_producer(handle, producer, generation), name=f"agent-run:{run_id}"
         )
@@ -496,40 +537,6 @@ class RunManager:
             self._expire_running_run(handle), name=f"agent-run-timeout:{run_id}"
         )
         return handle
-
-    def _publish_session_signal(self, handle: RunHandle, target: RunStatus) -> None:
-        """状态迁移后向 session / user 信令总线投递 hint（run-started / hitl-pending / terminal）。
-
-        start()/resume() 直接置 RUNNING 不走 transition()，须各自调用；
-        信令幂等，重复投递无害——客户端只据它去拉权威状态。session 总线
-        服务同一会话的其它窗口；user 总线服务会话列表（携带 session_id
-        与 status，前端据此 patch 列表行，hint 语义不变）。
-        """
-        if target == RunStatus.RUNNING:
-            signal = {
-                "type": "run-started",
-                "run_id": handle.run_id,
-                "assistant_message_id": handle.assistant_message_id,
-            }
-        elif target == RunStatus.HITL_PENDING:
-            signal = {"type": "run-hitl-pending", "run_id": handle.run_id}
-        elif target in TERMINAL_RUN_STATUSES:
-            signal = {
-                "type": "run-terminal",
-                "run_id": handle.run_id,
-                "status": target.value,
-            }
-        else:
-            return
-        session_signal_bus.publish(handle.user_id, handle.session_id, signal)
-        user_signal_bus.publish(
-            handle.user_id,
-            {
-                **signal,
-                "session_id": handle.session_id,
-                "status": target.value,
-            },
-        )
 
     def _sample_event_loop_lag(self) -> None:
         loop = asyncio.get_running_loop()
@@ -600,7 +607,6 @@ class RunManager:
             handle.limit_error = None
             handle.status = RunStatus.RUNNING
             generation = self._begin_producer_segment_locked(handle)
-            self._publish_session_signal(handle, RunStatus.RUNNING)
             handle.producer_task = asyncio.create_task(
                 self._run_producer(handle, producer, generation),
                 name=f"agent-run-resume:{run_id}",
@@ -737,6 +743,27 @@ class RunManager:
             task.cancel()
             await asyncio.gather(task, return_exceptions=True)
 
+    def _enter_hitl_pending_locked(self, handle: RunHandle) -> None:
+        """HITL 挂起的配套收口：挂 HITL 专属超时、停 run 时长看门狗。
+
+        审批等待不计入 run 时长——看门狗若在挂起期继续计时，等待超
+        max_run_duration 会被 RUN_TIMEOUT 误杀。生产路径（apply_event 的
+        状态迁移）与 transition() 共用本入口；2026-09 审查修复：此逻辑
+        曾只在 transition() 内，而生产路径不经 transition()。
+        """
+        if handle.hitl_timeout_task is not None:
+            handle.hitl_timeout_task.cancel()
+        handle.hitl_timeout_task = asyncio.create_task(
+            self._expire_hitl_pending(handle),
+            name=f"agent-run-hitl-timeout:{handle.run_id}",
+        )
+        if (
+            handle.watchdog_task is not None
+            and handle.watchdog_task is not asyncio.current_task()
+        ):
+            handle.watchdog_task.cancel()
+            handle.watchdog_task = None
+
     async def transition(self, run_id: str, target: RunStatus) -> bool:
         handle = self.get(run_id)
         async with handle.lock:
@@ -746,21 +773,9 @@ class RunManager:
                 return False
             handle.status = target
             if target == RunStatus.HITL_PENDING:
-                if handle.hitl_timeout_task is not None:
-                    handle.hitl_timeout_task.cancel()
-                handle.hitl_timeout_task = asyncio.create_task(
-                    self._expire_hitl_pending(handle),
-                    name=f"agent-run-hitl-timeout:{run_id}",
-                )
-                if (
-                    handle.watchdog_task is not None
-                    and handle.watchdog_task is not asyncio.current_task()
-                ):
-                    handle.watchdog_task.cancel()
-                    handle.watchdog_task = None
+                self._enter_hitl_pending_locked(handle)
             if target in TERMINAL_RUN_STATUSES and handle.terminal_future is not None:
                 self._mark_terminal_locked(handle, target)
-            self._publish_session_signal(handle, target)
             return True
 
     def _mark_terminal_locked(self, handle: RunHandle, target: RunStatus) -> None:
@@ -832,6 +847,8 @@ class RunManager:
                 queue.put_nowait(envelope)
             except asyncio.QueueFull:
                 overflowed.append(queue)
+        if handle.publisher is not None:
+            handle.publisher.submit(envelope)
         for queue in overflowed:
             self._metrics["subscriber_overflow"] += 1
             logger.warning(
@@ -969,11 +986,14 @@ class RunManager:
                     prev_status = handle.status
                     handle.status = projection.status
                     handle.attempt_id = projection.attempt_id
-                    # 生产路径的状态迁移不经 transition()（其唯一调用方是
-                    # 测试用例续跑的 _persist_projection）——hitl_pending 等
-                    # 迁移在此发布信令，transition() 的发布保留不冲突
-                    if prev_status != projection.status:
-                        self._publish_session_signal(handle, projection.status)
+                    # 生产路径的状态迁移不经 transition()（其调用方只剩测试
+                    # 续跑的 _persist_projection）——HITL 挂起的配套收口
+                    # （停看门狗/挂专属超时）在此与 transition() 共用同一入口
+                    if (
+                        prev_status != RunStatus.HITL_PENDING
+                        and projection.status == RunStatus.HITL_PENDING
+                    ):
+                        self._enter_hitl_pending_locked(handle)
             if terminal_candidate is not None:
                 envelope = terminal_candidate.envelope
             else:
@@ -1044,6 +1064,47 @@ class RunManager:
                 if handle.terminal_retry_task is asyncio.current_task():
                     handle.terminal_retry_task = None
 
+    async def _periodic_checkpoint_flush(self, handle: RunHandle) -> None:
+        """周期 checkpoint flush（task 4.4）：长静默时 DB snapshot 有界追上。
+
+        事件驱动的 checkpoint 只在 policy 命中时提交；非语义事件后长时间
+        无新事件时，远端 subscriber 的 snapshot 恢复只能等到下一个事件。
+        仅在 last_sequence > last_persisted_sequence 时提交；latest-wins
+        writer 与 DB sequence guard 保证重复/迟到提交无副作用。
+        """
+        while True:
+            await asyncio.sleep(self.periodic_checkpoint_interval_seconds)
+            try:
+                async with handle.lock:
+                    if handle.status in TERMINAL_RUN_STATUSES:
+                        return
+                    writer = handle.persist_writer
+                    if writer is None:
+                        return
+                    if handle.last_sequence <= handle.last_persisted_sequence:
+                        continue
+                    sequence = handle.last_sequence
+                    snapshot = copy.deepcopy(
+                        handle.snapshot_provider(
+                            sequence, handle.status, handle.attempt_id
+                        )
+                    )
+                writer.submit(
+                    CheckpointRequest(
+                        run_id=handle.run_id,
+                        assistant_message_id=handle.assistant_message_id,
+                        snapshot_sequence=sequence,
+                        snapshot=snapshot,
+                        kind="periodic",
+                    )
+                )
+            except asyncio.CancelledError:
+                raise
+            except Exception:  # noqa: BLE001
+                logger.opt(exception=True).warning(
+                    "agent_run_periodic_checkpoint_failed run_id={}", handle.run_id
+                )
+
     async def _commit_terminal_candidate(
         self, handle: RunHandle, candidate: TerminalCandidate
     ) -> TerminalCommitResult:
@@ -1082,7 +1143,6 @@ class RunManager:
                 self._fanout(handle, candidate.envelope)
                 handle.pending_terminal = None
                 self._mark_terminal_locked(handle, candidate.status)
-                self._publish_session_signal(handle, candidate.status)
             elif result.outcome == "already_finalized" and result.snapshot is not None:
                 self._metrics["terminal_cas_loser"] += 1
                 handle.authoritative_snapshot = copy.deepcopy(result.snapshot)
@@ -1098,7 +1158,6 @@ class RunManager:
                 )
                 self._fanout(handle, replacement)
                 self._mark_terminal_locked(handle, result.snapshot.status)
-                self._publish_session_signal(handle, result.snapshot.status)
         return result
 
     async def publish_attempt(
@@ -1239,10 +1298,13 @@ class RunManager:
             handle.limit_error = None
             handle.producer_task = None
             handle.terminal_future = None
+            publisher = handle.publisher
+            handle.publisher = None
             for task in (
                 handle.watchdog_task,
                 handle.hitl_timeout_task,
                 handle.terminal_retry_task,
+                handle.checkpoint_flush_task,
             ):
                 if task is not None and task is not asyncio.current_task():
                     task.cancel()
@@ -1267,6 +1329,8 @@ class RunManager:
             await asyncio.gather(*delivery_tasks, return_exceptions=True)
         if persist_writer is not None:
             await persist_writer.close()
+        if publisher is not None:
+            await publisher.stop()
         return True
 
     async def shutdown(self, *, drain_seconds: float = 10.0) -> None:
@@ -1301,6 +1365,15 @@ class RunManager:
         if writers:
             await asyncio.gather(
                 *(writer.close() for writer in writers), return_exceptions=True
+            )
+        publishers = [
+            handle.publisher
+            for handle in self._runs.values()
+            if handle.publisher is not None
+        ]
+        if publishers:
+            await asyncio.gather(
+                *(publisher.stop() for publisher in publishers), return_exceptions=True
             )
         retry_tasks = [
             handle.terminal_retry_task

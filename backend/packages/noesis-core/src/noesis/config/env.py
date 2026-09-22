@@ -184,6 +184,7 @@ class DistributedRunsSettings:
     redis_socket_timeout_seconds: float
     redis_connect_timeout_seconds: float
     redis_pool_max_connections: int
+    command_retention_days: float
 
 
 @dataclass(frozen=True)
@@ -210,6 +211,10 @@ class SubagentSettings:
     task_timeout_seconds: float
     shell_task_timeout_seconds: float
     auto_continue: bool
+    # 终态条目热集 retention（秒）：回收后查询走 DB 投影兜底
+    terminal_retention_seconds: float
+    # 热集终态条目上限：超出从最旧回收
+    terminal_reclaim_max: int
 
 
 @dataclass(frozen=True)
@@ -255,10 +260,6 @@ class QdrantSettings:
     qdrant_grpc_port: int
     qdrant_prefer_grpc: bool
     qdrant_default_collection: str
-    requirement_docs_collection: str
-    test_case_docs_collection: str
-    test_case_upload_collection: str
-    case_rag_historical_requirements_enabled: bool
 
 
 @dataclass(frozen=True)
@@ -484,6 +485,7 @@ def _build_distributed_runs(
         redis_socket_timeout_seconds=dr.redis_socket_timeout_seconds,
         redis_connect_timeout_seconds=dr.redis_connect_timeout_seconds,
         redis_pool_max_connections=dr.redis_pool_max_connections,
+        command_retention_days=dr.command_retention_days,
     )
 
 
@@ -548,6 +550,8 @@ def _build_subagents(yaml_cfg: AppYamlConfig) -> SubagentSettings:
         task_timeout_seconds=subagents.task_timeout_seconds,
         auto_continue=subagents.auto_continue,
         shell_task_timeout_seconds=subagents.shell_task_timeout_seconds,
+        terminal_retention_seconds=subagents.terminal_retention_seconds,
+        terminal_reclaim_max=subagents.terminal_reclaim_max,
     )
 
 
@@ -580,10 +584,6 @@ def _build_qdrant(secrets: EnvSecrets, yaml_cfg: AppYamlConfig) -> QdrantSetting
         qdrant_grpc_port=q.grpc_port,
         qdrant_prefer_grpc=q.prefer_grpc,
         qdrant_default_collection=q.default_collection,
-        requirement_docs_collection=q.requirement_docs_collection,
-        test_case_docs_collection=q.test_case_docs_collection,
-        test_case_upload_collection=q.test_case_upload_collection,
-        case_rag_historical_requirements_enabled=q.case_rag_historical_requirements_enabled,
     )
 
 

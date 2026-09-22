@@ -14,13 +14,14 @@ CORE_ROOT = BACKEND_ROOT / "packages" / "noesis-core" / "src" / "noesis"
 def test_explicit_context_files_do_not_create_memory_dir(
     tmp_path: Path, monkeypatch,
 ) -> None:
-    """显式 USER.md / AGENTS.md 能力不受删除影响，且不派生记忆目录。"""
+    """显式 USER.md / AGENTS.md 能力不受删除影响（seed 见 noesis.memory.layout）。"""
     monkeypatch.setattr(user_data_paths, "_USERS_ROOT", tmp_path / "users")
 
-    root = user_data_paths.ensure_user_memory_files("user-1")
+    from noesis.memory.layout import ensure_user_memory_files
+    root = ensure_user_memory_files("user-1")
 
-    assert (root / "USER.md").is_file()
-    assert (root / "AGENTS.md").is_file()
+    assert (root / "memory" / "USER.md").is_file()
+    assert (root / "memory" / "AGENTS.md").is_file()
 
 
 def test_old_cortex_modules_are_absent() -> None:

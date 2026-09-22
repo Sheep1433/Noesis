@@ -1,7 +1,6 @@
 """evals 包入口：列出各场景子模块，不直接执行评测。
 
 用法：
-  uv run python -m evals.case         # 测试用例 Agent
   uv run python -m evals.agent        # Agent 评测（DeepResearch / RAG / Memory）
   uv run python -m evals.compression  # 消息压缩
 """
@@ -11,7 +10,6 @@ from __future__ import annotations
 import sys
 
 MODULES = (
-    ("evals.case", "测试用例 Agent（promptfoo + L0/coverage/rag）"),
     ("evals.agent", "Agent 评测入口（DeepResearch / RAG / Memory）"),
     ("evals.compression", "SummarizationOffload 消息压缩评测"),
     ("evals.loadtest", "深度研究 HTTP 负载测试（Locust）"),

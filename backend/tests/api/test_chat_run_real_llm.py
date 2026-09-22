@@ -105,13 +105,13 @@ def test_run_snapshot_terminal(auth_client, create_session, create_run, consume_
 
 @pytest.mark.integration
 def test_session_ensure_idempotent(auth_client):
-    """PUT /sessions/{id}/ensure 同一 id 调两次应返回同一会话。"""
+    """PUT /sessions/{id} 同一 id 调两次应返回同一会话。"""
     session_id = str(uuid.uuid4())
     body = {"title": "api-test-ensure", "extra": {"qa_type": "COMMON_QA"}}
 
-    first = auth_client.put(f"/api/chat/sessions/{session_id}/ensure", json=body)
+    first = auth_client.put(f"/api/chat/sessions/{session_id}", json=body)
     first.raise_for_status()
-    second = auth_client.put(f"/api/chat/sessions/{session_id}/ensure", json=body)
+    second = auth_client.put(f"/api/chat/sessions/{session_id}", json=body)
     second.raise_for_status()
 
     assert first.json()["data"]["id"] == second.json()["data"]["id"] == session_id

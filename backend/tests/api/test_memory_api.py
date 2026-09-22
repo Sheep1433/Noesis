@@ -22,7 +22,7 @@ from datetime import date
 import pytest
 
 from noesis.config.user_data_paths import _USERS_ROOT  # noqa: F401  (确保模块可导入)
-from noesis.services.memory.store import MemoryStore
+from noesis.memory.store import MemoryStore
 
 pytestmark = [pytest.mark.integration]
 

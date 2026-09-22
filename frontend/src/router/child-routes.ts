@@ -36,12 +36,6 @@ const childrenRoutes: Array<RouteRecordRaw> = [
     component: () => import('@/views/extensions/Extensions.vue'),
     meta: { requiresAuth: true },
   },
-  {
-    path: 'testcase/generate',
-    name: 'TestCaseGenerate',
-    component: () => import('@/views/TestAssistant.vue'),
-    meta: { requiresAuth: true },
-  },
   // 知识库路由
   {
     path: 'knowledgeBase',

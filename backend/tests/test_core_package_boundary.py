@@ -149,7 +149,6 @@ def test_noesis_top_level_uses_stable_subsystems() -> None:
     for scattered_runtime_file in ("deps.py", "hitl.py", "logging.py", "stream.py"):
         assert not (NOESIS_ROOT / scattered_runtime_file).exists()
 
-    assert (NOESIS_ROOT / "agents" / "case_generate" / "case_graph.py").is_file()
     assert (NOESIS_ROOT / "runtime" / "attachments" / "resolver.py").is_file()
     assert (NOESIS_ROOT / "runtime" / "stream.py").is_file()
 
@@ -263,7 +262,6 @@ assert callable(create_noesis_agent)
 for module in (
     "noesis.agents.common_qa",
     "noesis.agents.fault_operation",
-    "noesis.agents.simple_mcp",
     "noesis.agents.super_agent",
 ):
     assert module not in sys.modules, module
@@ -286,7 +284,6 @@ for module in (
         "noesis.factory",
         "noesis.agents.common_qa",
         "noesis.agents.fault_operation",
-        "noesis.agents.simple_mcp",
         "noesis.agents.super_agent",
     )
     violations: list[str] = []

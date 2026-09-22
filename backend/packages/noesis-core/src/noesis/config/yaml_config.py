@@ -236,6 +236,8 @@ class DistributedRunsYamlSection(BaseModel):
     redis_socket_timeout_seconds: float = Field(default=5.0, gt=0)
     redis_connect_timeout_seconds: float = Field(default=3.0, gt=0)
     redis_pool_max_connections: int = Field(default=20, gt=0)
+    # durable command 保留天数：保留期=幂等去重窗口，超期终态命令由 leader 清理
+    command_retention_days: float = Field(default=7.0, gt=0)
 
 
 class QdrantYamlSection(BaseModel):
@@ -245,10 +247,6 @@ class QdrantYamlSection(BaseModel):
     grpc_port: int = 6334
     prefer_grpc: bool = False
     default_collection: str = "knowledge_base"
-    requirement_docs_collection: str = "requirement_docs"
-    test_case_docs_collection: str = "test_case_docs"
-    test_case_upload_collection: str = ""
-    case_rag_historical_requirements_enabled: bool = False
 
 
 class LangfuseYamlSection(BaseModel):
@@ -351,7 +349,7 @@ class HitlYamlSection(BaseModel):
 
 
 class SubagentsYamlSection(BaseModel):
-    """后台任务运行时配置：只收真实运维旋钮（5 个）。
+    """后台任务运行时配置：只收真实运维旋钮（7 个）。
 
     工程窗口值（停止宽限 30s、对账窗口 30s、前台等待 600s、续跑去抖
     60s）是机制内部参数，调定后无人再动，降为模块常量不进配置。
@@ -365,6 +363,10 @@ class SubagentsYamlSection(BaseModel):
     shell_task_timeout_seconds: float = Field(default=0, ge=0)
     # 后台任务终态后自动续跑主 Agent（无活跃 run 时创建 continuation run）
     auto_continue: bool = Field(default=True)
+    # 终态条目热集 retention（秒）：回收后查询走 DB 投影兜底
+    terminal_retention_seconds: float = Field(default=3600, ge=1)
+    # 热集终态条目上限：超出从最旧回收（长跑进程内存有界）
+    terminal_reclaim_max: int = Field(default=200, ge=1)
 
 
 class MessagingYamlSection(BaseModel):

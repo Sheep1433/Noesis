@@ -173,25 +173,24 @@ async def test_terminal_run_stream_skips_subscription(monkeypatch, subagent_stre
 
 
 # ---------------------------------------------------------------------------
-# 接口级：followup / children catalog
+# 接口级：追加消息 / children catalog
 # ---------------------------------------------------------------------------
 
 
 @pytest.mark.asyncio
-async def test_followup_endpoint_passes_through_and_maps_not_found(monkeypatch) -> None:
+async def test_追加消息_endpoint_passes_through_and_maps_not_found(monkeypatch) -> None:
     from noesis.errors.exceptions import ConflictException, NotFoundException
-    from noesis.schemas.chat_vo import SubagentFollowupRequest
+    from noesis.schemas.chat_vo import SubagentMessageRequest
     from noesis.services.subagent_session_service import SubagentSessionService
 
     monkeypatch.setattr(
         SubagentSessionService,
-        "send_followup",
+        "send_message",
         AsyncMock(return_value={"session_id": "child-1", "status": "running"}),
     )
-    monkeypatch.setattr(chat_api, "require_csrf", AsyncMock())
-    ok = await chat_api.send_subagent_followup(
+    ok = await chat_api.send_subagent_message(
         "child-1",
-        SubagentFollowupRequest(message="再查一下"),
+        SubagentMessageRequest(message="再查一下"),
         http_request=SimpleNamespace(),
         current_user=SimpleNamespace(user_id="u1"),
     )
@@ -201,13 +200,13 @@ async def test_followup_endpoint_passes_through_and_maps_not_found(monkeypatch) 
     # 子会话缺失抛 NotFoundException，交由全局异常处理器映射 404
     monkeypatch.setattr(
         SubagentSessionService,
-        "send_followup",
+        "send_message",
         AsyncMock(side_effect=NotFoundException(message="子会话不存在")),
     )
     with pytest.raises(NotFoundException):
-        await chat_api.send_subagent_followup(
+        await chat_api.send_subagent_message(
             "child-none",
-            SubagentFollowupRequest(message="再查一下"),
+            SubagentMessageRequest(message="再查一下"),
             http_request=SimpleNamespace(),
             current_user=SimpleNamespace(user_id="u1"),
         )
@@ -216,13 +215,13 @@ async def test_followup_endpoint_passes_through_and_maps_not_found(monkeypatch) 
     # 端点不再做字符串嗅探
     monkeypatch.setattr(
         SubagentSessionService,
-        "send_followup",
+        "send_message",
         AsyncMock(side_effect=ConflictException(message="任务已结束（failed），无法追加消息")),
     )
     with pytest.raises(ConflictException):
-        await chat_api.send_subagent_followup(
+        await chat_api.send_subagent_message(
             "root-none",
-            SubagentFollowupRequest(message="再查一下"),
+            SubagentMessageRequest(message="再查一下"),
             http_request=SimpleNamespace(),
             current_user=SimpleNamespace(user_id="u1"),
         )
@@ -231,7 +230,7 @@ async def test_followup_endpoint_passes_through_and_maps_not_found(monkeypatch) 
 @pytest.mark.asyncio
 async def test_child_catalog_endpoint_exposes_child_session_identity(monkeypatch) -> None:
     """目录对 UI 只暴露 child session 身份；executor 内部 task id 不外泄。"""
-    from noesis.services.agent_catalog_service import AgentCatalogService
+    from noesis.services.session_task_service import SessionTaskService
 
     payload = {
         "tasks": [
@@ -250,7 +249,7 @@ async def test_child_catalog_endpoint_exposes_child_session_identity(monkeypatch
         ]
     }
     monkeypatch.setattr(
-        AgentCatalogService,
+        SessionTaskService,
         "list_for_session",
         AsyncMock(return_value=payload),
     )
@@ -360,7 +359,7 @@ def _compile_sql(stmt: Any) -> str:
 @pytest.mark.asyncio
 async def test_parent_soft_delete_cascades_to_children(monkeypatch) -> None:
     """父会话软删：child session/消息级联软删 + 运行中任务与 run 取消。"""
-    from noesis.agents.subagents import executor as executor_module
+    from noesis.agents.background import executor as executor_module
     from noesis.services import chat_service
     from noesis.services.chat_service import ChatService
     from noesis.services.scheduled_task_service import ScheduledTaskService

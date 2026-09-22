@@ -13,6 +13,13 @@ _task: Optional[asyncio.Task] = None
 
 
 async def _tick_once() -> None:
+    """领到期任务、建 queued 记录后立即返回；执行 fire-and-forget。
+
+    agent 执行不 await 在 tick 里——调度器与 dispatcher/SSE 共享 leader
+    事件循环，一个 30 分钟的定时任务会拖垮同批到期任务与全部 Web 实时面
+    （Phase 3：tick 只领任务，执行甩出主循环等待路径）。执行体
+    _run_in_background 自带独立 db session 与交付链收口等待。
+    """
     async with pg_manager.get_async_session_context() as db:
         try:
             rows = await ScheduledTaskService.claim_due_tasks(db, limit=20)
@@ -20,20 +27,20 @@ async def _tick_once() -> None:
             logger.exception("scheduled task claim failed")
             return
         for row in rows:
-            from noesis.services.scheduled_task_service import _now_ms
-            run = await ScheduledTaskService.execute_with_record(
-                db,
-                row,
-                trigger_source="schedule",
-                idempotency_key=f"schedule:{row.id}:{row.next_run_at}",
+            try:
+                run = await ScheduledTaskService._create_run_record(
+                    db,
+                    row,
+                    trigger_source="schedule",
+                    idempotency_key=f"schedule:{row.id}:{row.next_run_at}",
+                )
+            except Exception:
+                logger.exception("scheduled task run record create failed task_id={}", row.id)
+                continue
+            asyncio.create_task(
+                ScheduledTaskService._run_in_background(row.id, row.user_id, run.id)
             )
-            row.last_status = run.status
-            row.last_error = run.error_message
-            row.last_run_at = _now_ms()
-            row.updated_at = row.last_run_at
             await ScheduledTaskService.cleanup_runs(db, row.user_id)
-        if rows:
-            await db.commit()
 
 
 async def _loop() -> None:

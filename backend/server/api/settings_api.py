@@ -9,7 +9,7 @@ from noesis.schemas.login_vo import CurrentUser
 from server.db import get_db
 
 from noesis.services.settings_service import SettingsService
-from server.auth_dependencies import get_current_user, require_csrf
+from server.auth_dependencies import get_current_user
 
 settings_router = APIRouter(prefix="/api/user/settings", tags=["用户设置"])
 
@@ -57,7 +57,6 @@ async def list_notifications(current_user: CurrentUser = Depends(get_current_use
 @settings_router.put("/notifications")
 async def update_notification(body: NotificationWrite, request: Request, current_user: CurrentUser = Depends(get_current_user), db: AsyncSession = Depends(get_db)):
     from noesis.services.notification_preference_service import NotificationPreferenceService
-    await require_csrf(request)
     try:
         item = await NotificationPreferenceService.set_preference(db, current_user.user_id, body.event_type, body.delivery_surface, body.enabled, body.version)
     except ValueError as exc:
@@ -82,7 +81,6 @@ async def export_settings(current_user: CurrentUser = Depends(get_current_user),
 @settings_router.post("/import/preview")
 async def preview_import(body: ImportPreviewBody, request: Request, current_user: CurrentUser = Depends(get_current_user), db: AsyncSession = Depends(get_db)):
     from noesis.services.settings_transfer_service import SettingsTransferService
-    await require_csrf(request)
     try:
         result = await SettingsTransferService.preview(db, current_user.user_id, body.manifest)
     except ValueError as exc:
@@ -93,7 +91,6 @@ async def preview_import(body: ImportPreviewBody, request: Request, current_user
 @settings_router.post("/import/apply")
 async def apply_import(body: ImportApplyBody, request: Request, current_user: CurrentUser = Depends(get_current_user), db: AsyncSession = Depends(get_db)):
     from noesis.services.settings_transfer_service import SettingsTransferService
-    await require_csrf(request)
     try:
         result = await SettingsTransferService.apply(db, current_user.user_id, body.manifest, body.preview_id)
     except ValueError as exc:
@@ -106,5 +103,4 @@ async def apply_import(body: ImportApplyBody, request: Request, current_user: Cu
 @settings_router.post("/reset")
 async def reset_settings(request: Request, current_user: CurrentUser = Depends(get_current_user), db: AsyncSession = Depends(get_db)):
     from noesis.services.settings_transfer_service import SettingsTransferService
-    await require_csrf(request)
     return ResponseUtil.success(msg="已恢复默认设置", data=await SettingsTransferService.reset(db, current_user.user_id))

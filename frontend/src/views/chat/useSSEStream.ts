@@ -11,21 +11,19 @@ import {
   getActiveRun,
   getAgentRun,
   resumeAgentRunHitl,
-  resumeAgentRunTestCase,
   stopAgentRun,
   subscribeAgentRun,
-  subscribeSessionEvents,
 } from '@/api/chat'
 import { consumeRunStream } from './useRunStreamClient'
 
 export interface SSEStreamOptions {
   onTitleUpdate?: (title: string) => void
   onContextUpdate?: (context: ContextSnapshot) => void
-  onTextDelta?: (text: string, parent_task_call_id?: string) => void
-  /** LLM 重试/降级：丢弃失败尝试已流出的尾部 text/reasoning parts */
-  onStreamRollback?: () => void
+  onTextDelta?: (text: string, parent_task_call_id?: string, part_id?: string) => void
+  /** LLM 重试/降级：按帧点名的 part_ids 丢弃失败尝试已流出的 parts */
+  onStreamRollback?: (partIds: string[]) => void
   onRetrievalResults?: (part: Record<string, unknown>) => void
-  onReasoningDelta?: (reasoning: string, parent_task_call_id?: string) => void
+  onReasoningDelta?: (reasoning: string, parent_task_call_id?: string, part_id?: string) => void
   onReasoningStart?: (data: Record<string, unknown>) => void
   onReasoningEnd?: (data: Record<string, unknown>) => void
   onToolCall?: (
@@ -63,7 +61,6 @@ export interface SSEStreamOptions {
   /** 发送撞上「会话仍在生成」（409 加入已有 run）时通知宿主：消息已排队，本轮结束后自动重发 */
   onBusyConflict?: () => void
   /** 取某会话历史加载中的 promise；信令触发的加入须等历史就位再 apply snapshot，防止 patch 丢失 */
-  historyReady?: (sessionId: string) => Promise<unknown> | null
 }
 
 
@@ -164,17 +161,22 @@ export function createFrameHandlerTable(handlers: SSEStreamOptions) {
       onRunStatus?.(String(data.status ?? 'running'), message)
     },
     'message-start': (data) => onMessageStart?.(data),
-    'stream-rollback': () => onStreamRollback?.(),
+    'stream-rollback': (data) => {
+      const raw = Array.isArray(data.part_ids) ? data.part_ids : []
+      onStreamRollback?.(raw.map(String).filter(Boolean))
+    },
     'text-delta': (data) => {
       if (typeof data.text_delta === 'string') {
-        onTextDelta?.(data.text_delta, parentTaskCallId(data))
+        const partId = typeof data.part_id === 'string' && data.part_id ? data.part_id : undefined
+        onTextDelta?.(data.text_delta, parentTaskCallId(data), partId)
       }
     },
     'retrieval-results-available': (data) => onRetrievalResults?.({ ...data, type: 'retrieval' }),
     'reasoning-start': (data) => onReasoningStart?.(data),
     'reasoning-delta': (data) => {
       if (typeof data.text_delta === 'string') {
-        onReasoningDelta?.(data.text_delta, parentTaskCallId(data))
+        const partId = typeof data.part_id === 'string' && data.part_id ? data.part_id : undefined
+        onReasoningDelta?.(data.text_delta, parentTaskCallId(data), partId)
       }
     },
     'reasoning-end': (data) => onReasoningEnd?.(data),
@@ -236,7 +238,6 @@ export function useSSEStream(options: SSEStreamOptions = {}) {
     onFinish,
     onError,
     onBusyConflict,
-    historyReady,
   } = options
 
   const isLoading = ref(false)
@@ -251,8 +252,6 @@ export function useSSEStream(options: SSEStreamOptions = {}) {
   let terminalObserved = false
   /** 409 撞上「会话仍在生成」时排队的消息：本轮终态后自动重发 */
   let queuedSend: { sessionId: string, content: string, extra?: Record<string, unknown> } | null = null
-  let signalSessionId: string | null = null
-  let signalAbort: AbortController | null = null
 
   const frameTable = createFrameHandlerTable(options)
 
@@ -312,12 +311,6 @@ export function useSSEStream(options: SSEStreamOptions = {}) {
   }
 
   const customEventTypes = new Set([
-    'scenario-start',
-    'testpoints-confirm-required',
-    'scene-cases',
-    'phase-start',
-    'phase-delta',
-    'phase-end',
     'hitl-required',
   ])
 
@@ -469,9 +462,14 @@ export function useSSEStream(options: SSEStreamOptions = {}) {
           extra: extra || {},
         })
       } catch (createErr) {
-        // 409 冲突：同 session 已有 active Run，加入它而非当失败
+        // 409 冲突：同 session 已有 active Run，加入它而非当失败。
+        // 先做代际校验再动共享状态——过期 409 若后写 currentRunId，
+        // 会把停止按钮指向别的会话的 run
         const conflictErr = createErr as Error & { conflictRunId?: string }
         if (conflictErr.conflictRunId) {
+          if (!isCurrentStream(generation)) {
+            return
+          }
           currentRunId = conflictErr.conflictRunId
           sessionStorage.setItem(`noesis:active-run:${sessionId}`, conflictErr.conflictRunId)
           // 本条消息不会进入本轮 run（服务端未落库）；排队待本轮终态后自动重发
@@ -479,9 +477,6 @@ export function useSSEStream(options: SSEStreamOptions = {}) {
           onBusyConflict?.()
           // 从服务端获取已有 Run 的 snapshot 并 replace
           const snapshot = await getAgentRun(conflictErr.conflictRunId)
-          if (!isCurrentStream(generation)) {
-            return
-          }
           dispatchFrame(
             'run-snapshot',
             JSON.stringify({ type: 'run-snapshot', ...snapshot }),
@@ -608,20 +603,6 @@ export function useSSEStream(options: SSEStreamOptions = {}) {
       finalizeSubscription(sessionId, generation)
     }
   }
-  async function resumeTestCase(sessionId: string, selectedPointNames: string[]) {
-    const runId = sessionStorage.getItem(`noesis:active-run:${sessionId}`)
-      || (activeSessionId === sessionId ? currentRunId : null)
-    if (!runId) {
-      throw new Error('当前任务已中断，无法继续生成')
-    }
-    currentRunId = runId
-    const snapshot = await resumeAgentRunTestCase(runId, selectedPointNames)
-    dispatchFrame('run-snapshot', JSON.stringify({ type: 'run-snapshot', ...snapshot }))
-    if ((!isLoading.value || activeSessionId !== sessionId) && !streamSettled) {
-      void resumeActiveRun(sessionId)
-    }
-  }
-
   async function resumeHitl(
     sessionId: string,
     body: {
@@ -639,12 +620,24 @@ export function useSSEStream(options: SSEStreamOptions = {}) {
     const needsNewSubscription = !isLoading.value || activeSessionId !== sessionId
     const generation = needsNewSubscription ? beginStream(sessionId) : streamGeneration
     currentRunId = runId
-    const snapshot = await resumeAgentRunHitl(runId, body)
-    dispatchFrame(
-      'run-snapshot',
-      JSON.stringify({ type: 'run-snapshot', ...snapshot }),
-      generation,
-    )
+    try {
+      const snapshot = await resumeAgentRunHitl(runId, body)
+      dispatchFrame(
+        'run-snapshot',
+        JSON.stringify({ type: 'run-snapshot', ...snapshot }),
+        generation,
+      )
+    } catch (err) {
+      // beginStream 已置 isLoading=true——POST 失败（网络断/审批 4xx）不复位，
+      // 该会话的发送与恢复会被防重守卫静默拦截，界面永久卡在生成中
+      if (isCurrentStream(generation)) {
+        const message = err instanceof Error ? err.message : '审批请求失败'
+        error.value = message
+        onRunStatus?.('disconnected', '连接已中断，可稍后重试')
+        finalizeSubscription(sessionId, generation)
+      }
+      throw err
+    }
     // 审批时原订阅可能已因网络中断而退出。POST 只恢复 producer，不会自动
     // 恢复浏览器订阅，因此此处在没有活跃 followRun 时重新订阅。
     if (needsNewSubscription && !streamSettled) {
@@ -710,88 +703,14 @@ export function useSSEStream(options: SSEStreamOptions = {}) {
    * 收到 run-started 后经 resumeActiveRun 从权威端点取状态，本窗口正在
    * 流式中（isLoading 守卫）或已是同一 run 时跳过，不会重复订阅。
    */
-  function watchSessionSignals(sessionId: string) {
-    if (sessionId === signalSessionId) {
-      return
-    }
-    stopSessionSignals()
-    signalSessionId = sessionId
-    void pumpSessionSignals(sessionId)
-  }
-
-  /**
-   * user-signal 兜底加入：会话信令流丢帧时（浏览器后台标签节流 / 单帧
-   * hint 丢失），会话列表通道收到当前会话的 run-started 仍能加入 run。
-   * 守卫与 session-signal 处理器一致：同 run 已在流、本窗口正在流式中
-   * 则跳过。 */
-  function joinRunIfIdle(sessionId: string, runId: string | undefined): void {
-    if (!runId || runId === currentRunId) {
-      return
-    }
-    if (isLoading.value && activeSessionId === sessionId) {
-      return
-    }
-    void resumeActiveRun(sessionId, historyReady?.(sessionId) ?? undefined)
-  }
-
-  function stopSessionSignals() {
-    // 无需清理重连 timer：传输内核的退避等待可被 abort 打断
-    signalAbort?.abort()
-    signalAbort = null
-    signalSessionId = null
-    queuedSend = null
-  }
-
-  async function pumpSessionSignals(sessionId: string) {
-    const controller = new AbortController()
-    signalAbort = controller
-    try {
-      await consumeRunStream({
-        subscribe: (signal) => subscribeSessionEvents(sessionId, signal),
-        onFrame: (event, data) => {
-          if (event !== 'session-signal' || !data) {
-            return
-          }
-          const signal = data as { type?: string, run_id?: string }
-          if (
-            signal.type === 'run-started'
-            && typeof signal.run_id === 'string'
-            && signal.run_id
-            && signal.run_id !== currentRunId
-            && !(isLoading.value && activeSessionId === sessionId)
-          ) {
-            // 该会话历史仍在加载时，等其就位再 apply snapshot（与刷新页路径一致），
-            // 否则 patchAssistantPartsAt 找不到目标行，整轮内容静默丢失
-            void resumeActiveRun(sessionId, historyReady?.(sessionId) ?? undefined)
-          }
-        },
-        isActive: () => signalSessionId === sessionId,
-        // 信令丢失靠 active-run 自愈，重连无限、退避放宽（封顶 30s）
-        maxAttempts: Infinity,
-        backoffMs: (attempt) => Math.min(30_000, 3_000 * 2 ** Math.min(attempt, 3)),
-        // 401/404：登录失效或会话已删，重连无意义，静默退出
-        fatalStatuses: [401, 404],
-        signal: controller.signal,
-      })
-    } finally {
-      if (signalAbort === controller) {
-        signalAbort = null
-      }
-    }
-  }
-
   return {
     isLoading,
     error,
     sendMessage,
-    resumeTestCase,
     resumeHitl,
     abortStream,
     stopCurrentRun,
     detachSubscription,
     resumeActiveRun,
-    joinRunIfIdle,
-    watchSessionSignals,
-    stopSessionSignals,
   }
 }

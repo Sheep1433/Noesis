@@ -258,6 +258,30 @@ def _eval_langfuse_context(*, tag: str, session_id: str):
             pass  # 观测尽力而为
 
 
+def _fixture_grouped_summaries(
+    payloads_by_arm: dict[str, list[dict[str, Any]]],
+    fixture_ids: list[str],
+    arms: list[str],
+) -> list[dict[str, Any]]:
+    """每 (fixture, arm) 一行摘要。
+
+    summarize_arm_runs 的契约是「同一 fixture×arm 的多次 run 取中位」——
+    多 fixture 混进一次调用会产出无语义的跨 fixture 中位数且 fixture
+    字段错标（终版 100 题曾因此绕开驱动手工合并；此函数是那个修正的
+    固化）。
+    """
+    from evals.compression.report import summarize_arm_runs
+
+    rows: list[dict[str, Any]] = []
+    for arm in arms:
+        for fixture_id in fixture_ids:
+            runs = [p for p in payloads_by_arm.get(arm, [])
+                    if p.get("fixture_id") == fixture_id]
+            if runs:
+                rows.append(summarize_arm_runs(runs))
+    return rows
+
+
 def _run_agent_flow(
     fixture: dict[str, Any],
     fixture_id: str,
@@ -300,10 +324,20 @@ def _judge_arm_probes(
     from evals.compression.grader import grade_probe
 
     arm_out = flow["arms"][arm]
-    compression = dict(flow["compression"])
+    # 免压缩模式（仅不压缩组）下 flow["compression"] 为 None——参照组的
+    # 指标本就由本分支重写为 pre=pre
+    compression = dict(flow["compression"] or {})
     compression["arm"] = arm
     if arm == UNCOMPACTED:
-        # 上限参照组：完整原文历史，无压缩动作
+        # 上限参照组：完整原文历史，无压缩动作；
+        # pre_tokens 缺席（免压缩模式无 _compression_metrics）时从
+        # fixture 原始消息现算
+        if "pre_tokens" not in compression:
+            from evals.compression.fixture_loader import _approx_token_counter, parse_fixture_messages
+            compression["pre_tokens"] = _approx_token_counter(
+                parse_fixture_messages(load_fixture(fixture_id)["messages"]))
+            compression["pre_message_count"] = len(
+                parse_fixture_messages(load_fixture(fixture_id)["messages"]))
         pre_tokens = compression["pre_tokens"]
         compression.update(
             compressed=False, compression_ratio=0.0,
@@ -543,10 +577,12 @@ def run_eval(args: argparse.Namespace) -> int:
                     u.get("input_tokens", 0) for u in arm_usage)
                 subject_usage["output_tokens"] += sum(
                     u.get("output_tokens", 0) for u in arm_usage)
-                summary = summarize_arm_runs(payloads_by_arm[arm])
-                all_arm_summaries.append(summary)
-                print(f"    [{arm}] recall%={summary.get('recall_pct')} "
-                      f"retained={summary.get('retained_tokens')}")
+                for summary in _fixture_grouped_summaries(
+                        payloads_by_arm, fixture_ids, [arm]):
+                    all_arm_summaries.append(summary)
+                    print(f"    [{summary.get('fixture_id')}/{arm}] "
+                          f"recall%={summary.get('recall_pct')} "
+                          f"retained={summary.get('retained_tokens')}")
 
     full_summary = build_summary(tag, all_arm_summaries, runs_per_arm=runs,
                                  compare_to=args.compare_to)

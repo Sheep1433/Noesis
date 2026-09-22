@@ -5,11 +5,11 @@ import type { ChatAttachmentItem } from '@/store/business'
 import { deleteSessionAttachment, uploadSessionAttachment } from '@/api/chat'
 import { uploadDocument } from '@/api/knowledgeBase'
 import { CHAT_MAX_FILES_PER_MESSAGE } from '@/config/chat'
-import { KB_FILE_DICT_REF, TEST_CASE_UPLOAD_COLLECTION } from '@/config/knowledge'
+import { KB_FILE_DICT_REF, KB_UPLOAD_COLLECTION } from '@/config/knowledge'
 import { getFileTypeIconClass, isImagePreviewPath, isImageUploadFile } from '@/utils/filePreview'
 
 const props = defineProps({
-  /** kb：测试用例等场景写入 requirement_docs；chat：会话附件 API */
+  /** kb：写入知识库上传集合（requirement_docs）；chat：会话附件 API */
   uploadMode: {
     type: String as PropType<'kb' | 'chat'>,
     default: 'kb',
@@ -139,7 +139,7 @@ const uploadKbDocument = async (fileInfo: ExtendedUploadFileInfo) => {
   if (!fileInfo.file) {
     throw new Error('文件无效')
   }
-  const result = await uploadDocument(TEST_CASE_UPLOAD_COLLECTION, fileInfo.file)
+  const result = await uploadDocument(KB_UPLOAD_COLLECTION, fileInfo.file)
   if (!result.success) {
     throw new Error(result.message || '上传失败')
   }

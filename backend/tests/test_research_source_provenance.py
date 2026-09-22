@@ -20,15 +20,15 @@ from langchain_core.tools import tool
 from langgraph.checkpoint.memory import MemorySaver
 from pydantic import PrivateAttr
 
-from noesis.agents.subagents import notifications
-from noesis.agents.subagents.executor import (
+from noesis.agents.background import notifications
+from noesis.agents.background.executor import (
     BackgroundTaskExecutor,
     BgTaskStatus,
     shutdown as bg_shutdown,
 )
-from noesis.agents.subagents.notify_middleware import BgNotifyMiddleware
-from noesis.agents.subagents.registry import SubagentRegistry, SubagentRole
-from noesis.agents.subagents.async_tools_middleware import AsyncSubagentToolsMiddleware
+from noesis.agents.background.notify_middleware import BgNotifyMiddleware
+from noesis.agents.background.subagent.roles import SubagentRegistry, SubagentRole
+from noesis.agents.background.subagent.tools import AsyncSubagentToolsMiddleware
 from noesis.chat.event_mapping.langgraph_bridge import LangGraphSseBridge
 from noesis.chat.event_mapping.mapper import RuntimeEventMapper, new_stream_ctx
 from noesis.chat.event_mapping.retrieval import (
@@ -56,6 +56,20 @@ CANONICAL_URL_CASES = [
     ("https://EXAMPLE.com:8443/Deep/path/", "https://example.com:8443/Deep/path"),
     ("", ""),
 ]
+
+
+
+from noesis.chat.delivery.sse import encode_run_event as _encode_run_event
+
+
+def _raw_sse_lines(bridge, item, builder, ctx):
+    """raw 运行时事件 → SSE 行（与生产主路径同形：map_item 后经统一编码器）。"""
+    return [line for event in bridge.map_item(item, builder, ctx) for line in _encode_run_event(event)]
+
+
+def _finalize_sse_lines(bridge, finish_reason=None):
+    """bridge 终态 → SSE 行（与生产主路径同形：finalize_events 后经统一编码器）。"""
+    return [line for event in bridge.finalize_events(finish_reason=finish_reason) for line in _encode_run_event(event)]
 
 
 @pytest.mark.parametrize("raw,expected", CANONICAL_URL_CASES)
@@ -151,7 +165,7 @@ def test_retrieval_results_available_sse_payload_has_no_origin_by_default() -> N
     bridge = LangGraphSseBridge("sess-sse")
     builder = AssistantMessageBuilder(session_id="sess-sse", message_id=bridge.assistant_message_id)
     ctx = new_stream_ctx()
-    bridge.process_item(
+    _raw_sse_lines(bridge, 
         {
             "event": "on_tool_start",
             "name": "web_search",
@@ -161,7 +175,7 @@ def test_retrieval_results_available_sse_payload_has_no_origin_by_default() -> N
         builder,
         ctx,
     )
-    lines = bridge.process_item(
+    lines = _raw_sse_lines(bridge, 
         _tool_end_event(
             "web_search", "call-sse",
             json.dumps({"results": [_web_search_result("https://example.com/a", "A")]}),
@@ -411,7 +425,7 @@ def test_bridge_finish_registers_cross_boundary_parts_with_origin() -> None:
     bridge = LangGraphSseBridge("sess-rsp-main")
     builder = AssistantMessageBuilder(session_id="sess-rsp-main", message_id=bridge.assistant_message_id)
     ctx = new_stream_ctx()
-    lines = bridge.process_item({"type": "__tw_finish__", "finish_reason": "stop"}, builder, ctx)
+    lines = _raw_sse_lines(bridge, {"type": "__tw_finish__", "finish_reason": "stop"}, builder, ctx)
 
     parts = [p for p in builder.to_dict()["parts"] if p["type"] == "retrieval"]
     assert len(parts) == 1
@@ -489,7 +503,7 @@ def test_multi_subagent_same_url_single_evidence_across_parts() -> None:
     bridge = LangGraphSseBridge("sess-rsp-main")
     builder = AssistantMessageBuilder(session_id="sess-rsp-main", message_id=bridge.assistant_message_id)
     ctx = new_stream_ctx()
-    bridge.process_item({"type": "__tw_finish__", "finish_reason": "stop"}, builder, ctx)
+    _raw_sse_lines(bridge, {"type": "__tw_finish__", "finish_reason": "stop"}, builder, ctx)
 
     parts = [p for p in builder.to_dict()["parts"] if p["type"] == "retrieval"]
     assert len(parts) == 2
@@ -508,7 +522,7 @@ def test_cross_boundary_registration_not_capped_by_per_call_limit() -> None:
     bridge = LangGraphSseBridge("sess-rsp-main")
     builder = AssistantMessageBuilder(session_id="sess-rsp-main", message_id=bridge.assistant_message_id)
     ctx = new_stream_ctx()
-    bridge.process_item({"type": "__tw_finish__", "finish_reason": "stop"}, builder, ctx)
+    _raw_sse_lines(bridge, {"type": "__tw_finish__", "finish_reason": "stop"}, builder, ctx)
     parts = [p for p in builder.to_dict()["parts"] if p["type"] == "retrieval"]
     assert len(parts) == 1
     assert len(parts[0]["results"]) == 45
@@ -522,7 +536,7 @@ def test_child_pipeline_drain_is_noop_for_subagent_sessions() -> None:
     bridge = LangGraphSseBridge("sess-child")
     builder = AssistantMessageBuilder(session_id="sess-child", message_id=bridge.assistant_message_id)
     ctx = new_stream_ctx()
-    bridge.process_item({"type": "__tw_finish__", "finish_reason": "stop"}, builder, ctx)
+    _raw_sse_lines(bridge, {"type": "__tw_finish__", "finish_reason": "stop"}, builder, ctx)
     assert builder.to_dict()["parts"] == []
     # 主会话的 pending 不被消费
     assert drain_pending_sources("sess-rsp-main") != []

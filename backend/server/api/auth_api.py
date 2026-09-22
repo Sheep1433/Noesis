@@ -65,18 +65,16 @@ async def current_session(request: Request, current: CurrentUser = Depends(get_c
     return response
 
 
-@auth_router.post("/logout")
+@auth_router.post("/logout", dependencies=[Depends(require_csrf)])
 async def logout(request: Request, current: CurrentUser = Depends(get_current_user), db: AsyncSession = Depends(get_db)):
-    await require_csrf(request)
     await SessionService.revoke(db, request.state.auth_session)
     response = ResponseUtil.success(msg="已退出登录")
     clear_session_cookie(request, response)
     return response
 
 
-@auth_router.post("/logout-all")
+@auth_router.post("/logout-all", dependencies=[Depends(require_csrf)])
 async def logout_all(request: Request, current: CurrentUser = Depends(get_current_user), db: AsyncSession = Depends(get_db)):
-    await require_csrf(request)
     await SessionService.revoke_all(db, current.user_id)
     response = ResponseUtil.success(msg="已退出全部设备")
     clear_session_cookie(request, response)
@@ -95,9 +93,8 @@ async def list_sessions(request: Request, current: CurrentUser = Depends(get_cur
     ]})
 
 
-@auth_router.delete("/sessions/{target_session_id}")
+@auth_router.delete("/sessions/{target_session_id}", dependencies=[Depends(require_csrf)])
 async def revoke_session(target_session_id: str, request: Request, current: CurrentUser = Depends(get_current_user), db: AsyncSession = Depends(get_db)):
-    await require_csrf(request)
     if not await SessionService.revoke_by_id(db, current.user_id, target_session_id):
         return ResponseUtil.not_found(msg="会话不存在")
     response = ResponseUtil.success(msg="会话已撤销")

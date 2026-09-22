@@ -314,7 +314,7 @@ describe('useSSEStream durable run recovery', () => {
     await stream.sendMessage('session-1', 'hello')
 
     expect(onTextDelta).toHaveBeenCalledTimes(1)
-    expect(onTextDelta).toHaveBeenCalledWith('A', undefined)
+    expect(onTextDelta).toHaveBeenCalledWith('A', undefined, undefined)
     expect(onSnapshot).toHaveBeenCalledWith(expect.objectContaining({ snapshot_sequence: 3 }))
   })
 
@@ -506,50 +506,75 @@ describe('useSSEStream durable run recovery', () => {
 })
 
 
-describe('joinRunIfIdle（user-signal 兜底加入）', () => {
+describe('409 与 HITL resume 的边界回归', () => {
   beforeEach(() => {
     vi.clearAllMocks()
-    globalThis.localStorage = new MemoryStorage() as Storage
-  })
-
-  it('新 run 启动信号触发 resumeActiveRun 加入权威流', async () => {
-    api.getActiveRun.mockResolvedValue(snapshot({ run_id: 'run-cont', status: 'running' }))
-    api.subscribeAgentRun.mockResolvedValue(sseResponse([
-      { event: 'run-snapshot', data: snapshot({ run_id: 'run-cont', status: 'completed', snapshot_sequence: 1, finish_reason: 'stop' }) },
-      { event: 'message', data: '[DONE]' },
-    ]))
-    const onFinish = vi.fn()
-    const stream = useSSEStream({ onFinish })
-
-    stream.joinRunIfIdle('session-1', 'run-cont')
-
-    await vi.waitFor(() => {
-      expect(api.getActiveRun).toHaveBeenCalledWith('session-1')
-      expect(onFinish).toHaveBeenCalledTimes(1)
+    Object.defineProperty(globalThis, 'sessionStorage', {
+      configurable: true,
+      value: new MemoryStorage(),
+    })
+    api.createAgentRun.mockResolvedValue({
+      run_id: 'run-1',
+      assistant_message_id: 'assistant-1',
+      session_id: 'session-1',
     })
   })
 
-  it('同 run 已在流 / 本窗口流式中：跳过（不重复订阅）', async () => {
-    const stream = useSSEStream({ onFinish: vi.fn() })
-    // 先经 joinRunIfIdle 加入 run-cont 并完成
-    api.getActiveRun.mockResolvedValue(snapshot({ run_id: 'run-cont', status: 'completed', finish_reason: 'stop', snapshot_sequence: 1 }))
-    api.subscribeAgentRun.mockResolvedValue(sseResponse([
-      { event: 'run-snapshot', data: snapshot({ run_id: 'run-cont', status: 'completed', snapshot_sequence: 1, finish_reason: 'stop' }) },
+  it('过期的 409 冲突响应不得污染新会话状态（代际校验先于副作用）', async () => {
+    let rejectA: (err: Error) => void = () => {}
+    const pendingA = new Promise((_resolve, reject) => {
+      rejectA = reject
+    })
+    api.createAgentRun.mockImplementation(({ session_id }) =>
+      session_id === 'session-1'
+        ? pendingA
+        : Promise.resolve({
+            run_id: 'run-B',
+            assistant_message_id: 'assistant-B',
+            session_id: 'session-2',
+          }))
+    const onBusyConflict = vi.fn()
+    const stream = useSSEStream({ onBusyConflict })
+
+    // 会话 A 发送（create 在途）
+    const sendA = stream.sendMessage('session-1', 'A-msg')
+    await Promise.resolve()
+    // 用户切到会话 B 并发送（代际 +1，流正常完成）
+    api.subscribeAgentRun.mockResolvedValueOnce(sseResponse([
+      { event: 'run-snapshot', data: snapshot({ run_id: 'run-B', status: 'completed', snapshot_sequence: 1, finish_reason: 'stop' }) },
       { event: 'message', data: '[DONE]' },
     ]))
-    stream.joinRunIfIdle('session-1', 'run-cont')
-    await vi.waitFor(() => expect(api.getActiveRun).toHaveBeenCalled())
+    await stream.sendMessage('session-2', 'B-msg')
 
-    vi.clearAllMocks()
-    // 流式刚结束 currentRunId 仍为 run-cont：重复信号不得再次触发订阅
-    stream.joinRunIfIdle('session-1', 'run-cont')
-    await new Promise((resolve) => setTimeout(resolve, 20))
-    expect(api.getActiveRun).not.toHaveBeenCalled()
+    // A 的过期 409 才到达：不得写 currentRunId / sessionStorage / 排队消息
+    const conflictErr = new Error('当前会话仍在生成') as Error & { conflictRunId?: string }
+    conflictErr.conflictRunId = 'run-existing'
+    rejectA(conflictErr)
+    await sendA
+
+    expect(onBusyConflict).not.toHaveBeenCalled()
+    expect(sessionStorage.getItem('noesis:active-run:session-1')).toBeNull()
   })
 
-  it('无 run_id 的信号不触发任何请求', () => {
-    const stream = useSSEStream({ onFinish: vi.fn() })
-    stream.joinRunIfIdle('session-1', undefined)
-    expect(api.getActiveRun).not.toHaveBeenCalled()
+  it('hITL 审批 POST 失败后 isLoading 必须复位，后续消息不被防重守卫吞掉', async () => {
+    api.getActiveRun.mockResolvedValue(snapshot({ run_id: 'run-1', status: 'hitl_pending' }))
+    api.resumeAgentRunHitl.mockRejectedValueOnce(new Error('网络断'))
+    const onRunStatus = vi.fn()
+    const stream = useSSEStream({ onRunStatus })
+
+    await expect(stream.resumeHitl('session-1', {
+      interrupt_id: 'i1',
+      decisions: [{ type: 'approve' }],
+    })).rejects.toThrow('网络断')
+
+    // 失败即复位：同会话再发消息不被 isLoading 守卫静默拦截
+    api.subscribeAgentRun.mockResolvedValueOnce(sseResponse([
+      { event: 'run-snapshot', data: snapshot({ run_id: 'run-2', status: 'completed', snapshot_sequence: 1, finish_reason: 'stop' }) },
+      { event: 'message', data: '[DONE]' },
+    ]))
+    await stream.sendMessage('session-1', 'next')
+
+    expect(api.createAgentRun).toHaveBeenCalledTimes(1)
+    expect(onRunStatus).toHaveBeenCalledWith('disconnected', expect.any(String))
   })
 })

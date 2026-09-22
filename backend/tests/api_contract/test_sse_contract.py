@@ -88,23 +88,4 @@ def test_nonterminal_run_owner_unavailable_returns_503(contract_client) -> None:
     assert body["data"]["status"] == "running"
 
 
-def test_session_events_unknown_session_returns_404(contract_client) -> None:
-    with patch.object(ChatService, "get_session_by_id", AsyncMock(return_value=None)):
-        resp = contract_client.get("/api/chat/sessions/sess-missing/events")
-    assert resp.status_code == 404
-    assert resp.json()["code"] == 404
 
-
-def test_session_events_signal_limit_returns_429(contract_client) -> None:
-    from noesis.chat.runs import session_signal_bus
-
-    session = MagicMock()
-    with (
-        patch.object(ChatService, "get_session_by_id", AsyncMock(return_value=session)),
-        patch.object(session_signal_bus, "subscribe", return_value=None),
-    ):
-        resp = contract_client.get("/api/chat/sessions/sess-1/events")
-    assert resp.status_code == 429
-    body = resp.json()
-    assert body["code"] == 429
-    assert body["data"]["error_code"] == "SESSION_SIGNAL_LIMIT"

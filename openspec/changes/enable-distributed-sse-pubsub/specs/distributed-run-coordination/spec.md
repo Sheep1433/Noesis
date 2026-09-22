@@ -245,3 +245,83 @@ Redis不可用而PostgreSQL和Web依赖正常时，实例 SHALL 保持可路由�
 - **WHEN** 同一 Run 的 stop command 已完成且超过保留期，再次提交 stop
 - **THEN** 系统 SHALL 按新 command 处理并重验 Run 当前状态
 - **AND** 已终态 Run SHALL 返回 rejected/no-op，SHALL NOT 产生第二次副作用
+
+### Requirement: 后台任务执行面 SHALL 仅驻留 execution leader
+
+后台任务子系统（任务注册表、隔离事件循环、kind 执行内核、followup 队列、定时任务调度器、continuation 唤醒与通知注入）SHALL 只在 execution leader 进程内存在并运行；follower SHALL NOT 启动上述任何组件，也 SHALL NOT 在本地维护后台任务的可变状态。后台任务的查询面（子 Agent 目录、任务详情、运行历史）SHALL 以 PostgreSQL 为权威，任一 worker SHALL 能用数据库数据应答；模型工具面（start/check/update/cancel/list）在主 Run producer 内调用，天然只发生于 leader。
+
+#### Scenario: follower 启动
+
+- **WHEN** 一个进程以 follower 角色进入 ready
+- **THEN** 该进程 SHALL NOT 启动后台任务执行器、隔离事件循环、定时任务调度器与通知注入
+- **AND** 其子 Agent 目录与任务详情查询 SHALL 照常以数据库权威应答
+
+#### Scenario: follower 收到模型工具调用后台任务
+
+- **WHEN** Agent producer 之外的路径（如测试或误装配）在 follower 上直接调用后台任务启动
+- **THEN** 该调用 SHALL 失败并明确报告执行面不在本进程
+- **AND** SHALL NOT 在 follower 内创建局部注册表或伪装执行
+
+### Requirement: 子代理会话 RunEvent SHALL 复用 Run bus 跨 worker 广播
+
+子代理（后台任务 kind=subagent）会话的实时 RunEvent SHALL 经 Run bus 的 Run channel 发布，复用同一版本化 envelope：`run_id` 为子会话 Run，`sequence` 为该 Run 的投影 sequence，`owner_term` 为当前 leader term。follower SHALL 为子会话 SSE 订阅建立与主 Run 相同的 Run hub（共享 bus subscription、向多 Tab fan-out）。进程内投递内核（缓冲与重放）仅存在于 leader；follower 的恢复 SHALL 以 PostgreSQL 中的子会话投影与终态为 snapshot 权威，按 sequence 去重后连续 apply，断档时 SHALL 经 snapshot 或客户端拉取消息接口自愈，SHALL NOT 依赖 leader 进程内缓冲跨进程重放。
+
+#### Scenario: follower 上打开子代理会话页
+
+- **WHEN** 用户浏览器连接 follower 并订阅一个执行中子代理会话的事件流
+- **THEN** follower SHALL 经 Redis 收到该子会话 RunEvent 并实时输出 SSE
+- **AND** 表现 SHALL 与直连 leader 一致（同 sequence、同终态）
+
+#### Scenario: 子会话事件断档
+
+- **WHEN** follower 错过子会话的若干 Pub/Sub 消息
+- **THEN** hub SHALL 以数据库投影 snapshot 对齐后继续
+- **AND** SHALL NOT 出现依赖 leader 进程内缓冲的跨进程重放
+
+### Requirement: 后台任务面板事件 SHALL 并入跨 worker 信令广播
+
+后台任务面板与目录流事件（task started/progress/terminal、child-session 目录刷新、continuation 提示）在 `redis` 模式下 SHALL 经 Run bus 信令 topic 广播到所有 worker，payload 构造 SHALL 复用统一的 child session / task 摘要纯函数。信令 SHALL 保持 hint 语义（at-most-once、订阅满则丢），目录与任务的初始快照 SHALL 继续从 PostgreSQL 读取，丢失的增量 SHALL 由前端经既有 GET 目录/详情端点自愈。`memory` 模式进程内行为不变，端点代码 SHALL NOT 感知运行模式。
+
+#### Scenario: follower 上任务面板实时刷新
+
+- **WHEN** leader 上的后台任务到达终态，用户任务面板 SSE 连接在 follower
+- **THEN** follower SHALL 投递对应的 terminal/目录刷新信令
+- **AND** 表现 SHALL 与直连 leader 一致
+
+#### Scenario: 面板信令丢失
+
+- **WHEN** 任务面板的信令广播丢失
+- **THEN** 前端 SHALL 经目录 GET 与任务详情拉取自愈
+- **AND** 系统 SHALL NOT 因信令丢失改变任务状态或通知投递
+
+### Requirement: 后台任务停止 SHALL 跨 worker 提交并由 leader 执行
+
+后台命令与子代理任务的用户停止入口（任务面板 stop、后台命令 stop 端点）SHALL 复用 durable command 机制跨 worker 提交：follower 上的 stop 请求 SHALL 持久化 command 并唤醒 leader，由 leader 的 command consumer 调用本地执行器完成取消；follower SHALL NOT 因本地无注册表而将存在的任务报告为不存在。command 的幂等、去重与保留语义 SHALL 与 Run stop 一致（重复 stop 至多触发一次取消副作用）。
+
+#### Scenario: follower 上停止后台命令
+
+- **WHEN** 用户在 follower 上停止一个执行中的后台命令或子代理任务
+- **THEN** stop SHALL 以 durable command 提交并由 leader 执行取消
+- **AND** API 返回语义（command_id/command_status/最新状态）SHALL 与 Run stop 一致
+
+#### Scenario: 重复停止后台任务
+
+- **WHEN** 同一后台任务的 stop command 被重复提交
+- **THEN** leader SHALL 至多执行一次取消副作用
+- **AND** 已终态任务 SHALL 返回幂等的当前状态
+
+### Requirement: 新 leader 晋升 SHALL 先执行完整 recovery 序列
+
+每次 execution leader 晋升（含进程启动这一首例）SHALL 在开始 dispatch 新工作前依次完成：收口旧 term 非终态主 Run（interrupted/server_restart）、收口遗留子代理 Run、收口遗留定时任务运行记录（interrupted）、装载 PostgreSQL 中未送达的后台任务通知。recovery SHALL 由晋升回调触发而不仅限进程启动；装载的通知在 leader 任期内经既有注入链消费。未被 claim 的 queued Run SHALL 在 recovery 完成后继续 dispatch。
+
+#### Scenario: 运行中 leader 切换
+
+- **WHEN** leader 失锁且另一 worker 晋升为新 leader
+- **THEN** 新 leader SHALL 先完成全部 recovery 收口与通知装载再 dispatch
+- **AND** 旧 leader 的迟到写入 SHALL 无法覆盖 recovery 终态
+
+#### Scenario: 晋升后未送达通知可注入
+
+- **WHEN** 新 leader 晋升时数据库中存在未送达的后台任务通知
+- **THEN** 该通知 SHALL 被装载回内存注册表并经下一轮注入链消费
+- **AND** 已在本进程送达的通知 SHALL NOT 经恢复重复注入

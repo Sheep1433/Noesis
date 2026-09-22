@@ -5,9 +5,8 @@ from pathlib import Path
 
 import pytest
 
-from noesis.agents.backends.memory import UserMemoryBackend
+from noesis.memory.layout import ensure_user_memory_files
 from noesis.config.user_data_paths import (
-    ensure_user_memory_files,
     get_user_channels_path,
 )
 from noesis.services.messaging_channel_service import MessagingChannelService
@@ -31,18 +30,30 @@ def test_user_memory_rejects_illegal_file(tmp_path: Path, monkeypatch: pytest.Mo
         UserMemoryService.read_file("u1", "channels.json")
 
 
-def test_agent_memory_backend_cannot_write_channels(
+def test_agent_memory_middleware_cannot_write_channels(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
+    """/memory 白名单外写入（channels.json 非根文件、非条目）被门卫拒绝。"""
+    from noesis.agents.backends.factory import build_agent_filesystem_backend
+    from noesis.agents.middlewares.memory_write_middleware import (
+        MemoryWriteMiddleware,
+        MemoryWriteRejected,
+    )
+    from types import SimpleNamespace
+
     monkeypatch.setattr("noesis.config.user_data_paths._USERS_ROOT", tmp_path / "users")
     uid = "u-ch"
     ensure_user_memory_files(uid)
-    agents = tmp_path / "users" / uid / "AGENTS.md"
-    user = tmp_path / "users" / uid / "USER.md"
-    backend = UserMemoryBackend(agents_path=agents, user_path=user)
-    result = backend.write("channels.json", '{"x":1}')
-    assert result.error
-    # 通道文件本身也不在 memory 白名单路径下
+    backend = build_agent_filesystem_backend(
+        user_id=uid, session_id="ch-test", sandbox=None, shell_timeout=30,
+    )
+    mw = MemoryWriteMiddleware(user_id=uid)
+    request = SimpleNamespace(
+        tool_call={"name": "write_file", "args": {"file_path": "/memory/channels.json"}}
+    )
+    with pytest.raises(MemoryWriteRejected):
+        mw.wrap_tool_call(request, lambda _req: backend.write("/memory/channels.json", '{"x":1}'))
+    # 通道文件本身不在 memory 子树下
     ch_path = get_user_channels_path(uid)
     assert not ch_path.is_file() or "channels" in str(ch_path)
 

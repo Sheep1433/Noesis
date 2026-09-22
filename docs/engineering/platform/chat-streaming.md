@@ -7,7 +7,7 @@
 
 Noesis 的可靠性目标不是维持一条永不断开的 TCP 连接，而是让 Agent Run 独立于浏览器连接，并通过权威 snapshot、单调 sequence 和重新订阅恢复界面。
 
-本架构适用于 `COMMON_QA`、`FAULT_OPERATION_QA`、`SUPER_AGENT_QA` 的 Web、Channel 和 HITL 路径。`TEST_CASE_QA` 仍由独立 CaseCoordinator 处理，不进入本管线。
+本架构适用于 `COMMON_QA`、`FAULT_OPERATION_QA`、`SUPER_AGENT_QA` 的 Web、Channel 和 HITL 路径。
 
 ## 2. 核心约束
 
@@ -68,8 +68,9 @@ GET /api/chat/runs/{run_id}/stream?after_sequence=N
 
 run 内容流之外有两条**轻量信令流**，只推定位符（`run-started | run-hitl-pending | run-terminal`），不推内容：
 
-- `GET /api/chat/sessions/{session_id}/events`（event: `session-signal`）——同一会话的其它窗口（跨浏览器、跨设备）实时发现活跃 run，收到后经 `active-run` / `runs/{run_id}` 取权威状态并加入订阅。建连先下发当前 active run 作为首帧，覆盖「窗口先连、run 后建」之外的所有时序；超订阅数 429/`SESSION_SIGNAL_LIMIT`。
-- `GET /api/chat/events/stream`（event: `user-signal`）——该用户**任意**会话的 run 状态变化（携带 `session_id`/`status`），会话列表据此 patch 行级 run_status；建连先下发用户全部活跃 run。超订阅数 429/`USER_SIGNAL_LIMIT`。
+- 任务清单流 `GET /api/chat/sessions/{session_id}/tasks/stream`——该会话任务清单（子 Agent 摘要 `child-session`、后台命令条目 `bg-task`、续跑通知 `bg-continuation`）的实时更新；只推清单条目不推正文，正文由 child run 的内容流按需订阅。快照经同前缀的 `GET /sessions/{id}/tasks` 获取。
+
+> **已退役**（2026-09-21 下线，原「两条轻量信令流」）：`session-signal`（`/sessions/{id}/events`，跨窗口发现活跃 run）与 `user-signal`（`/events/stream`，会话列表实时刷新）。下线动机：浏览器 HTTP/1.1 同域 6 连接上限下，多标签页的信令流叠加 run 内容流直接挤占普通 API 请求配额（页面卡死的根因）；其职责由既有拉取路径承接——会话列表在进入/切换时全量刷新，活跃 run 经 `active-run` 端点发现。
 
 信令由 `RunManager` 在状态迁移点发布（`start()`/`resume()` 直接置 RUNNING 处，及 `transition()` 到 HITL_PENDING / 终态处；`chat/runs/{session_signals,user_signals}.py` 进程内总线，有界队列慢订阅丢帧）。**信令是 hint**：丢失或断线靠 `active-run` 自愈，不参与权威状态；流不主动结束，随页面关闭断开，15s 注释 keepalive。
 
@@ -89,20 +90,19 @@ run 内容流（`GET /api/chat/runs/{run_id}/stream`，主会话与子 Agent run
 
 | 分组 | 事件 |
 |---|---|
-| 消息与生命周期 | `message-start`、`run-status`（`retrying` / `hitl_pending` 等非终态）、`stream-rollback`（LLM 重试/降级：失败尝试的部分流式输出作废，消费方回滚末尾 text/reasoning parts）、`run.started`、`run.finished`、`approval.required`、`approval.resumed` |
+| 消息与生命周期 | `message-start`、`run-status`（`retrying` / `hitl_pending` 等非终态）、`stream-rollback`（LLM 重试/降级：失败尝试的部分流式输出作废。帧携带 `part_ids` 点名本尝试铸造的 parts，消费方按 id 丢弃；零输出失败不发音。每次模型尝试经 `text-start`/`reasoning-start` 铸新 part id，失败尝试的输出恰好是尝试期间铸造的 parts——前文与压缩分割线不受回滚影响）、`run.started`、`run.finished`、`approval.required`、`approval.resumed` |
 | reasoning | `reasoning-start`、`reasoning-delta`、`reasoning-end` |
 | 正文 | `text-start`、`text-delta`、`text-end` |
 | 工具 | `tool-input-start`、`tool-input-available`、`tool-output-available` |
 | 检索与统计 | `retrieval-results-available`、`stats-update`、`context-update` |
 | HITL | `hitl-required` |
-| Phase（TEST_CASE 遗留） | `phase-start`、`phase-delta`、`phase-end`、`scenario-start`、`testpoints-confirm-required`、`scene-cases` |
 | 传输层哨兵 | `data: [DONE]`（流传输收尾，不表示业务终态；`chat/delivery/sse.py`） |
 
 **终态标记统一**：`run.finished` 是唯一流终止事件（载荷含 `status` / `finish_reason` / `usage` / `model_calls`），后随 `[DONE]`。主链路 typed 终态事件（RunCompleted / RunAborted / RunError）在 `sse.py` 统一编码为 `run.finished`；子 Agent run 由 executor 发布同词汇事件。bridge 内部仍有 `finish` / `abort` / `error` 帧名——它们经 `RuntimeEventMapper._normalize` 归一化为 typed 终态事件后才上 wire，**线上不出现**（保留在词表提取源中仅为 bridge 内部实现，新代码不得直发）。
 
 **durable / transient**：durable 事件占 sequence、进有界重放缓存、按连续性校验重放；transient 事件（流式 `text-delta` / `reasoning-delta` / `stats-update`，载荷带 `transient: true`）不占号、只投在线订阅者，重连方由 `run-snapshot` 快照恢复。恢复模型一份：重连 = `getAgentRun` 快照 replace + durable 重放 + live 接收。
 
-历史兼容：`tool-call-start` 是 `tool-input-start` 的旧名，仅在 `runs/projection.py` 的重放路径中作为别名接受，新代码不得发射；`token-details`、`finish-step` 已不存在；`message.updated`（子会话旧全量投影事件）已退役——子会话内容投影由前端 `messageParts` appenders 从帧事件组装，与主聊天同一实现。
+退役事件名：`token-details`、`finish-step` 已不存在；`message.updated`（子会话旧全量投影事件）已退役——子会话内容投影由前端 `messageParts` appenders 从帧事件组装，与主聊天同一实现。
 
 ### 4.3 HITL 与停止
 
@@ -136,7 +136,9 @@ RunManager 指标包含 active/retained Run、subscriber/event/replay bytes、ov
 
 ## 7. 部署约束
 
-lifespan 在 migration、recovery、scheduler 和 channel runtime 之前，通过专用 PostgreSQL 连接获取固定 advisory lock。第二个 worker/容器 fail-fast。lock 连接丢失后实例变为 not-ready、拒绝新 Run，并停止 live producer。
+lifespan 在 migration、recovery、scheduler 和 channel runtime 之前，通过专用 PostgreSQL 连接获取固定 advisory lock。lock 连接丢失后实例变为 not-ready、拒绝新 Run，并停止 live producer。
+
+**运行模式（enable-distributed-sse-pubsub）**：`NOESIS_RUN_BUS_BACKEND=memory|redis` 显式选择。memory 单实例（第二实例 fail-fast）；redis 模式单 execution leader + 多 Web worker——leader 由 PostgreSQL 选举（`t_runtime_leader` 全局 term），follower ready 服务 API/SSE，重竞选晋升时回调执行四段 recovery（主 Run / 子代理 Run / 定时任务 / 通知装载）后才 dispatch。Run 事件经 Redis Pub/Sub 广播（at-most-once：subscribe-first 握手 + sequence gap 检测 + 周期 checkpoint/snapshot 对账恢复，PostgreSQL 始终是权威）；stop/HITL/后台任务停止走 `t_agent_run_command` durable command（幂等去重 + leader consumer 补扫，API 返回 command_id/command_status，accepted 不伪装完成）。会话/用户信令与后台任务面板事件经信令通道跨 worker 广播（hint 语义）；子会话 RunEvent 复用 Run bus。多实例部署：`docker compose up -d --scale backend=2`（compose 含 redis 服务，nginx 经 Docker DNS 轮询）。详见 `openspec/specs/distributed-run-coordination/`（变更归档后）。
 
 SSE 注释 keepalive 不分配 sequence，也不触发 checkpoint。反向代理 read timeout 必须大于 keepalive 间隔并关闭响应缓冲。
 
@@ -166,7 +168,6 @@ SSE 注释 keepalive 不分配 sequence，也不触发 checkpoint。反向代理
 - 进程崩溃后只用最近 checkpoint 收口为 `interrupted/server_restart`，不重放模型或工具。
 - 当前不支持多 active backend、owner 转移或跨进程 command routing；未引入 Redis Pub/Sub。
 - Channel outbound 是进程内有界队列，不是 durable spool。
-- `TEST_CASE_QA` 仍保留自己的旧 SSE 边界，不属于本架构的验收范围。
 
 ## 11. 关联资料
 

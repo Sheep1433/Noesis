@@ -85,7 +85,7 @@ async def test_create_agent_backend_docker(docker_backend: None) -> None:
 
 def test_skill_sources_use_public_and_personal_routes() -> None:
     from noesis.agents.skills import SKILL_SOURCES
-    from noesis.agents.backends.paths import (
+    from noesis.paths import (
         AGENT_PERSONAL_SKILLS_ROUTE,
         AGENT_PUBLIC_SKILLS_ROUTE,
     )

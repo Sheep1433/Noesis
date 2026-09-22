@@ -1,7 +1,7 @@
 """run / 消息骨架行的单一构造点。
 
 主链路 `RunService.create`、子 Agent `SubagentSessionService.launch` 与
-`create_followup_run` 共用：user 消息行、streaming assistant 骨架行、
+`create_追加消息_run` 共用：user 消息行、streaming assistant 骨架行、
 queued run 行的字段与默认值（状态、last_sequence、snapshot 形状）在此
 单点维护。只构造 ORM 行，不做 add/flush/commit——事务边界与 FK 插入
 顺序由调用方持有。

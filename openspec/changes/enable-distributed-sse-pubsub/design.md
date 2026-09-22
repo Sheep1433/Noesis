@@ -37,7 +37,7 @@ Noesis 当前由 `RunService` 创建数据库 Run，进程内 `RunManager` 持�
 - `memory`模式下，未获锁者启动失败；进程内bus无法跨进程传播事件或命令，不能伪装成可横向扩展。
 - follower持续等待 leader变更；leader使用专用连接的短周期heartbeat检测失锁，并为每次任期创建不可复用的本地leadership token。token失效后，dispatcher、publisher、command consumer和persistence callback都必须停止接受新工作。
 
-只有execution leader可以把queued Run claim为running并调用 `RunManager.start()`。claim在同一SQL条件中验证 `t_runtime_leader.leader_term`仍等于当前term，并将Run的 `owner_instance_id` 与新增 `owner_term` 写为当前任期。所有checkpoint、状态推进和terminal CAS均验证active状态与 `(owner_instance_id, owner_term)`；新term建立后旧leader不能claim新Run。新leader获得lock并提交新term后先执行recovery：以新term作为recovery writer，将旧term已进入running/retrying/hitl_pending的Run统一收口为 `interrupted/server_restart`，并更新权威snapshot的owner term；未被claim且 `owner_instance_id IS NULL` 的queued Run保留并正常dispatch。
+只有execution leader可以把queued Run claim为running并调用 `RunManager.start()`。claim在同一SQL条件中验证 `t_runtime_leader.leader_term`仍等于当前term，并将Run的 `owner_instance_id` 与新增 `owner_term` 写为当前任期。所有checkpoint、状态推进和terminal CAS均验证active状态与 `(owner_instance_id, owner_term)`；新term建立后旧leader不能claim新Run。新leader获得lock并提交新term后先执行recovery，以新term作为recovery writer，按固定顺序收口与装载：旧term已进入running/retrying/hitl_pending的Run统一收口为 `interrupted/server_restart`；遗留子代理Run收口（ERROR/SUBAGENT_PROCESS_RESTARTED）；遗留定时任务运行记录收口（interrupted，任务行last_status同步）；未送达后台任务通知装载回内存注册表。未被claim且 `owner_instance_id IS NULL` 的queued Run保留并正常dispatch。recovery由leader晋升回调触发——进程启动只是晋升的首例，redis模式下运行中的leader切换同样必须重跑完整recovery后才开始dispatch。
 
 这里的全局term不是按Run lease：它不允许运行中迁移，也不需要定时更新每个Run，只负责在advisory lock连接丢失而旧进程尚未察觉的窗口中拒绝旧任期的新claim和迟到数据库写入。
 
@@ -154,6 +154,16 @@ checkpointer、知识库读服务等每个HTTP进程需要的依赖可以各自�
 - worker 内每 user/session 一个 fan-out hub（与 Run hub 同模式：共享远端订阅、多 Tab fan-out、最后一个订阅者离开后释放）；
 - `memory` 模式进程内总线行为不变；信令端点与 Service 代码不感知运行模式（与 Run 事件同一「双模式共享状态机」原则）。
 
+### 10. 子会话与后台任务面复用既有分布式机制（2026-09-19 落定）
+
+后台任务子系统（subagent/shell 双 kind）在单 execution leader 架构下整体 leader-resident：注册表、隔离事件循环、kind 执行内核、followup 队列、调度器、continuation 唤醒与通知注入都不外置；follower 只以 PostgreSQL 权威应答查询面（目录、详情、运行历史）。跨 worker 的只有三件事，全部复用既有机制而非新发明：
+
+- **子会话实时流复用 Run bus 的 Run channel**：子会话 RunEvent 与主 Run 事件天然同构（run_id、投影 sequence、owner term），follower 的 Run hub 以数据库投影/终态为 snapshot 做去重与连续 apply；leader 进程内投递缓冲不跨进程重放。被否方案：子会话端点 leader-only + 网关亲和——实现最小，但 leader 故障期子代理页面不可用，且网关需维护路径级路由规则，削弱多实例的可用性收益。
+- **任务面板与目录事件并入信令广播（决策 9 扩展）**：bg 任务 started/progress/terminal、child-session 目录刷新与 continuation 提示走 `signal:bg-tasks:{session_id}` 通道，hint 语义（at-most-once、满则丢），初始快照本就从数据库读取，丢失增量由前端 GET 自愈。
+- **后台任务停止复用 durable command（决策 5 扩展）**：`bg_task_stop` 按任务幂等去重，leader command consumer 调用本地 executor 取消；模型工具面（start/check/update/cancel）在主 Run producer 内调用，天然只发生于 leader，不经 command 通道。
+
+后台通知的持久化（`bg_task_notifications`，2026-09-19 Phase 2）使通知面跨重启/跨进程以 PostgreSQL 为权威：装载发生在 leader 晋升回调（见决策 1 的 recovery 序列），注入只发生在 leader 的 producer。
+
 ## Risks / Trade-offs
 
 - [Pub/Sub at-most-once会丢消息] → subscribe-first握手、sequence gap检测、周期checkpoint和PostgreSQL snapshot恢复。
@@ -167,9 +177,11 @@ checkpointer、知识库读服务等每个HTTP进程需要的依赖可以各自�
 - [Redis payload包含聊天增量] → 私网、认证/TLS、payload限制和日志脱敏，不持久化Pub/Sub内容。
 - [memory/redis分支演变成两套业务实现] → adapter只实现最小Run bus port；共享契约测试覆盖相同envelope、顺序、关闭和错误语义，dispatcher、durable command、checkpoint、reconciliation及SSE协议不分叉。
 - [memory模式被误用于多实例] → exclusive advisory lock获取失败即启动失败，健康信息明确报告`run_bus_backend=memory`与`multi_worker_supported=false`。
+- [调度器tick串行阻塞leader事件循环] → 定时任务调度器在leader上await整个agent执行，redis模式下与dispatcher补扫、SSE publisher、信令广播共享同一loop，一个慢定时任务会拖累全部Web实时面。前置要求：调度器异步化（tick只领任务、执行甩出主loop，子代理设计文档§8.5 Phase 3）先于或同批于P4落地。
 
 ## Migration Plan
 
+0. 前置：定时任务调度器异步化（设计文档 §8.5 Phase 3）——消除 leader loop 上的整段 agent await，为 redis 模式下的 dispatcher/publisher/信令腾出循环容量。
 1. 增加Run bus port及memory/Redis adapter、显式模式配置、runtime leader term、Run launch payload、durable command migration和独立migration lock；先以memory单进程验证共享状态机。
 2. 将Run创建改为只写queued Run，由当前leader dispatcher启动；完成创建幂等和wake-up丢失测试。
 3. 将全局lock改为leader角色，followers保持Web ready；singleton runtime绑定leader生命周期。

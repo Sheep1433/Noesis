@@ -81,10 +81,10 @@ class DeepResearchUser(HttpUser):
         }
 
         ensured = self.client.put(
-            f"/api/chat/sessions/{session_id}/ensure",
+            f"/api/chat/sessions/{session_id}",
             headers=self.auth_headers,
             json={"title": query[:100], "extra": {"qa_type": QA_TYPE}},
-            name="ensure_session",
+            name="upsert_session",
         )
         if ensured.status_code != 200:
             return

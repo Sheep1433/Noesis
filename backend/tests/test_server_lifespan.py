@@ -39,6 +39,10 @@ class _FakeLeaderElector:
     def token(self) -> _FakeLeadershipToken | None:
         return self._token
 
+    @property
+    def is_leader(self) -> bool:
+        return self._token is not None and getattr(self._token, "valid", True)
+
     async def acquire(self) -> _FakeLeadershipToken:
         await pg_manager_for_tests.acquire_advisory_lock()
         self._token = _FakeLeadershipToken()
@@ -93,9 +97,26 @@ def _patch_lifespan_resources(monkeypatch: pytest.MonkeyPatch) -> dict[str, obje
         "stop_memory_consolidator",
     )
     patched: dict[str, object] = {"pg_manager": pg_manager}
+    # 调度器族已下沉 server/bootstrap/leader_runtime（其函数体内局部 import，
+    # patch 挂在各真实来源模块）
+    import noesis.memory.consolidation as memory_consolidation
+    import noesis.memory.extraction as memory_extraction
+    import noesis.services.channels.telegram_runtime as telegram_runtime
+    import noesis.services.scheduled_task_scheduler as task_scheduler
+
+    _MODULE_OF = {
+        "start_memory_sweeper": memory_extraction,
+        "stop_memory_sweeper": memory_extraction,
+        "start_memory_consolidator": memory_consolidation,
+        "stop_memory_consolidator": memory_consolidation,
+        "stop_scheduled_task_scheduler": task_scheduler,
+        "stop_telegram_runtime": telegram_runtime,
+    }
+
     for name in async_names:
+        target = _MODULE_OF.get(name, server_main)
         mock = AsyncMock(return_value=True)
-        monkeypatch.setattr(server_main, name, mock)
+        monkeypatch.setattr(target, name, mock)
         patched[name] = mock
 
     for name in (
@@ -103,15 +124,45 @@ def _patch_lifespan_resources(monkeypatch: pytest.MonkeyPatch) -> dict[str, obje
         "start_telegram_runtime",
     ):
         mock = MagicMock()
-        monkeypatch.setattr(server_main, name, mock)
+        monkeypatch.setattr(_MODULE_OF.get(name, None) or {
+            "start_scheduled_task_scheduler": task_scheduler,
+            "start_telegram_runtime": telegram_runtime,
+        }[name], name, mock)
         patched[name] = mock
 
+    from noesis.services.run_recovery_service import RunRecoveryService
+
     recover = AsyncMock()
-    monkeypatch.setattr(server_main.RunRecoveryService, "recover_orphaned_runs", recover)
+    monkeypatch.setattr(RunRecoveryService, "recover_orphaned_runs", recover)
     patched["recover"] = recover
     reconcile_subagents = AsyncMock(return_value=0)
     monkeypatch.setattr(SubagentSessionService, "reconcile_orphaned_runs", reconcile_subagents)
     patched["reconcile_subagents"] = reconcile_subagents
+    from noesis.services.bg_shell_job_service import BgShellJobService
+
+    reconcile_shell = AsyncMock(return_value=0)
+    monkeypatch.setattr(BgShellJobService, "reconcile_orphaned", reconcile_shell)
+    patched["reconcile_shell"] = reconcile_shell
+    list_queued = AsyncMock(return_value=[])
+    monkeypatch.setattr(SubagentSessionService, "list_queued_subagent_runs", list_queued)
+    patched["list_queued"] = list_queued
+    from noesis.repositories.agent_run_command_repository import AgentRunCommandRepository
+
+    reset_claimed = AsyncMock(return_value=0)
+    monkeypatch.setattr(AgentRunCommandRepository, "reset_all_claimed", reset_claimed)
+    patched["reset_claimed"] = reset_claimed
+    from noesis.services.scheduled_task_service import ScheduledTaskService
+
+    reconcile_scheduled = AsyncMock(return_value=0)
+    monkeypatch.setattr(ScheduledTaskService, "reconcile_interrupted_runs", reconcile_scheduled)
+    patched["reconcile_scheduled"] = reconcile_scheduled
+    import noesis.services.bg_notification_store as bg_notification_store
+
+    restore_notices = AsyncMock(return_value=0)
+    monkeypatch.setattr(
+        bg_notification_store, "restore_undelivered_notifications", restore_notices
+    )
+    patched["restore_notices"] = restore_notices
     shutdown_run_manager = AsyncMock()
     monkeypatch.setattr(server_main.run_manager, "shutdown", shutdown_run_manager)
     patched["shutdown_run_manager"] = shutdown_run_manager

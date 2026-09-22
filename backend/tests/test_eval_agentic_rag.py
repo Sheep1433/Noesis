@@ -2,6 +2,7 @@ import json
 
 import pytest
 
+import evals.agent.rag.runner as runner_mod
 from evals.agent.rag.__main__ import load_dataset
 from evals.agent.rag.runner import run_agentic_rag_sample
 from evals.agent.rag.to_erb import collected_files, records_to_erb
@@ -59,43 +60,106 @@ def test_agentic_rag_dataset_loads_scope_and_sources(tmp_path):
     assert load_dataset(dataset)[0]["collection_names"] == ["kb"]
 
 
+class _FakeStream:
+    """SSE 流桩：aiter_lines 产出 event/data 行。"""
+
+    def __init__(self, lines):
+        self._lines = lines
+
+    async def aiter_lines(self):
+        for line in self._lines:
+            yield line
+
+    async def __aenter__(self):
+        return self
+
+    async def __aexit__(self, *exc):
+        return False
+
+
+class _FakeHttp:
+    """httpx 客户端桩：覆盖 runner 用到的三个调用。"""
+
+    def __init__(self, messages):
+        self.created_session = None
+        self.created_run = None
+        self._messages = messages
+
+    async def post(self, url, json=None, data=None, headers=None):
+        if url == "/api/chat/sessions":
+            self.created_session = json
+            return _resp(200, {"code": 200, "data": {"id": "eval-agentic-rag-x"}})
+        if url == "/api/chat/runs":
+            self.created_run = json
+            return _resp(200, {"code": 200, "data": {"run_id": "run-1"}})
+        raise AssertionError(f"unexpected post {url}")
+
+    async def get(self, url):
+        if url.endswith("/messages"):
+            return _resp(200, {"code": 200, "data": self._messages})
+        raise AssertionError(f"unexpected get {url}")
+
+    def stream(self, method, url, params=None):
+        lines = [
+            "event: run-started",
+            'data: {"type": "run-started"}',
+            "",
+            "event: tool-output-available",
+            'data: {"type": "tool-output-available", "tool_call_id": "t1", '
+            '"name": "search_knowledge_base", "output": "{}"}',
+            "",
+            "event: run-completed",
+            'data: {"type": "run-completed", "usage": {"input_tokens": 99, "output_tokens": 7}}',
+            "",
+        ]
+        return _FakeStream(lines)
+
+
+class _Resp:
+    def __init__(self, code, body):
+        self.status_code = 200
+        self._body = body
+
+    def json(self):
+        return self._body
+
+
+def _resp(code, body):
+    return _Resp(code, body)
+
+
 @pytest.mark.asyncio
-async def test_agentic_rag_runner_drives_cli_agent(monkeypatch):
-    calls: dict = {}
+async def test_agentic_rag_runner_drives_production_http(monkeypatch):
+    messages = [
+        {"role": "user", "content": {"parts": [{"type": "text", "content": "问题"}]}},
+        {"role": "assistant", "content": {"parts": [
+            {"type": "text", "content": "回答全文"},
+            {"type": "tool", "name": "search_knowledge_base",
+             "input": {}, "output": json.dumps(
+                 {"results": [{"file_name": "guide.md"}]}, ensure_ascii=False)},
+        ]},
+         "extra": {"usage": {"input_tokens": 99, "output_tokens": 7}}},
+    ]
+    fake = _FakeHttp(messages)
 
-    async def fake_run_cli_agent(**kwargs):
-        calls.update(kwargs)
-        return {
-            "completed": True,
-            "error": None,
-            "final_text": "回答全文",
-            "tool_stats": {"search_knowledge_base": 1},
-            "tool_outputs": [
-                {"name": "search_knowledge_base", "input": {},
-                 "output": json.dumps({"results": [{"file_name": "guide.md"}]},
-                                      ensure_ascii=False)},
-            ],
-            "session_usage": {"input_tokens": 1200, "output_tokens": 300},
-            "latency_ms": 1500,
-        }
+    async def fake_get_http():
+        return fake
 
-    monkeypatch.setattr("evals.agent.rag.runner.run_cli_agent", fake_run_cli_agent)
+    monkeypatch.setattr(runner_mod, "_get_http", fake_get_http)
     result = await run_agentic_rag_sample(
         {"id": "one", "query": "问题", "collection_names": ["kb"]},
+        model_id="glm-5.3-flash",
         eval_user="test",
     )
 
-    # CLI 契约：common 场景限定 KB 集合、关闭联网、落在评测账号
-    assert calls["query"] == "问题"
-    assert calls["qa_type"] == "common"
-    assert calls["kb_collections"] == ["kb"]
-    assert calls["web_search"] is False
-    assert calls["user_id"] == "test"
-    assert calls["session_id"].startswith("eval-agentic-rag-one-")
+    # 生产契约：common run 携带 KB 限定与关联网标记
+    assert fake.created_run["extra"]["qa_type"] == "COMMON_QA"
+    assert fake.created_run["extra"]["kb_collections"] == ["kb"]
+    assert fake.created_run["extra"]["kb_search_enabled"] is True
 
-    # 记录映射：token 取自 session_usage，工具轨迹保留供 to_erb 导出
+    # 终值读 DB 权威 assistant 消息；工具轨迹从消息 parts 重建供 to_erb 导出
     assert result["completed"] is True
-    assert result["input_tokens"] == 1200
-    assert result["output_tokens"] == 300
+    assert result["final_text"] == "回答全文"
+    assert result["input_tokens"] == 99
     assert result["tool_outputs"][0]["name"] == "search_knowledge_base"
-    assert result["session_id"] == calls["session_id"]
+    assert "guide.md" in result["tool_outputs"][0]["output"]

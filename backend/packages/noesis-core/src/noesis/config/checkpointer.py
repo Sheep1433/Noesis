@@ -111,7 +111,7 @@ def close_isolated_checkpointer_on_loop() -> None:
     _isolated_saver = None
     if pool is None:
         return
-    from noesis.agents.subagents.executor import _ensure_loop
+    from noesis.agents.background.jobs.loop import _ensure_loop
 
     loop = _ensure_loop()
 
@@ -135,11 +135,12 @@ async def close_checkpointer() -> None:
     _saver = None
     if _isolated_pool is not None:
         try:
-            # 隔离池绑定隔离 loop，需切到该 loop 关闭
-            from noesis.agents.subagents.executor import _loop
+            # 隔离池绑定隔离 loop，需切到该 loop 关闭。_loop 会被 jobs.loop
+            # 重绑定（shutdown 后重建），经模块属性取当前值
+            from noesis.agents.background.jobs import loop as bg_loop
 
-            if _loop is not None and not _loop.is_closed():
-                fut = asyncio.run_coroutine_threadsafe(_isolated_pool.close(), _loop)
+            if bg_loop._loop is not None and not bg_loop._loop.is_closed():
+                fut = asyncio.run_coroutine_threadsafe(_isolated_pool.close(), bg_loop._loop)
                 fut.result(timeout=5)
             else:
                 await _isolated_pool.close()

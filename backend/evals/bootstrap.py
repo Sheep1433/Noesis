@@ -43,6 +43,9 @@ async def agentic_rag_runtime() -> AsyncIterator[None]:
     ensures Qdrant is connected and the Postgres engine is ready for the
     synchronous collection-config reads performed inside Agent tool threads.
     """
+    from noesis.services.runtime_ports import register_runtime_ports
+
+    register_runtime_ports()
     from noesis.knowledge.runtime import close_knowledge_base, init_knowledge_base
     from noesis.storage.postgres.manager import pg_manager
 

@@ -345,27 +345,12 @@ async def run_fixture_arms(
         for arm in arms
     }
 
-    # 触发 = 线上 /compact 宿主路径：build_compaction_middleware +
-    # acompact_state，经 checkpoint 适配图写状态（与 compact_session 服务
-    # 同构，仅模型绑定来自评测快照而非会话配置）。显式命令语义：无合成
-    # 消息、不依赖阈值、失败返回 None 不留半态
-    trigger_agent = agents.get(RECOVERY) or agents.get(CLOSED_BOOK)
-    if trigger_agent is None:
-        raise ValueError("压缩评测需要 current 或 recovery 组来参与压缩")
-    from noesis.factory import build_compaction_middleware
-    middleware = build_compaction_middleware(model_id=model_id, session_id=session_id)
-    if middleware is None:
-        raise RuntimeError("压缩评测需要 summarization 可用（中间件构造为空）")
-    from langchain.agents import create_agent as _create_adapter
-    from noesis.llm import get_llm
-    # 适配图仅作 checkpoint 写入载体，模型节点不会被调用（无模型轮次）
-    adapter = _create_adapter(
-        model=get_llm(model_id=model_id), tools=[], system_prompt="",
-        middleware=[middleware], checkpointer=trigger_agent.checkpointer,
-    )
-    saver = trigger_agent.checkpointer
+    # 播种与 fork 源在压缩与否两条路径下都需要；三组共享同一
+    # eval_runtime MemorySaver，用任一 agent 的 checkpointer 等价
+    seed_agent = agents.get(RECOVERY) or agents.get(CLOSED_BOOK) or agents[arms[0]]
+    saver = seed_agent.checkpointer
     seed_thread = f"{session_id}:seedbase"
-    await trigger_agent.aupdate_state(
+    await seed_agent.aupdate_state(
         {"configurable": {"thread_id": seed_thread}},
         {"messages": list(normalized)},
     )
@@ -374,44 +359,67 @@ async def run_fixture_arms(
     await _fork_checkpoint(
         saver, src_thread=seed_thread, dst_thread=pre_compact_thread)
     seed_config = {"configurable": {"thread_id": seed_thread}}
-    print(f"  {fixture_id} /compact 宿主路径触发压缩（pre_tokens≈"
-          f"{_approx_token_counter(normalized):,}）...", flush=True)
 
-    # 压缩重试：摘要网关对超大输入偶发返回空响应（实测 9 秒空内容 vs
-    # 正常 84 秒真摘要）——失败不留半态，同线程直接重试；current/recovery
-    # 在场时全部失败即硬错（未压缩继续跑会产出貌似合理实为无效的对照数据）
-    from noesis.agents.middlewares.compaction_middleware import _summary_is_invalid
-    max_compact_attempts = 3
+    # 触发 = 线上 /compact 宿主路径：build_compaction_middleware +
+    # acompact_state，经 checkpoint 适配图写状态（与 compact_session 服务
+    # 同构，仅模型绑定来自评测快照而非会话配置）。显式命令语义：无合成
+    # 消息、不依赖阈值、失败返回 None 不留半态。
+    # 只有不压缩组时跳过：参照组不经过压缩链路，触发一次 fixture 体量的
+    # 大输入摘要纯浪费
+    trigger_agent = agents.get(RECOVERY) or agents.get(CLOSED_BOOK)
     compression = None
-    for attempt in range(1, max_compact_attempts + 1):
-        snapshot = await adapter.aget_state(seed_config)
+    if trigger_agent is None:
+        # 只有不压缩组：跳过压缩触发（参照组不经过压缩链路）
+        print(f"  {fixture_id} 仅不压缩组在场，跳过压缩触发", flush=True)
+    else:
+        from noesis.factory import build_compaction_middleware
+        middleware = build_compaction_middleware(model_id=model_id, session_id=session_id)
+        if middleware is None:
+            raise RuntimeError("压缩评测需要 summarization 可用（中间件构造为空）")
+        from langchain.agents import create_agent as _create_adapter
+        from noesis.llm import get_llm
+        # 适配图仅作 checkpoint 写入载体，模型节点不会被调用（无模型轮次）
+        adapter = _create_adapter(
+            model=get_llm(model_id=model_id), tools=[], system_prompt="",
+            middleware=[middleware], checkpointer=trigger_agent.checkpointer,
+        )
+        print(f"  {fixture_id} /compact 宿主路径触发压缩（pre_tokens≈"
+              f"{_approx_token_counter(normalized):,}）...", flush=True)
 
-        async def _checkpoint(update: dict) -> None:
-            await adapter.aupdate_state(seed_config, update, as_node="model")
+        # 压缩重试：摘要网关对超大输入偶发返回空响应（实测 9 秒空内容 vs
+        # 正常 84 秒真摘要）——失败不留半态，同线程直接重试；current/recovery
+        # 在场时全部失败即硬错（未压缩继续跑会产出貌似合理实为无效的对照数据）
+        from noesis.agents.middlewares.compaction_middleware import _summary_is_invalid
+        max_compact_attempts = 3
+        for attempt in range(1, max_compact_attempts + 1):
+            snapshot = await adapter.aget_state(seed_config)
 
-        # thread_id 传 session_id：acompact_state 用它写 t_chat_session 压缩
-        # 边界（before_compaction 检索语义依赖），状态写入走 checkpoint 闭包
-        compacted = await middleware.acompact_state(
-            snapshot.values, session_id, checkpoint=_checkpoint)
-        candidate = None
-        if compacted is not None:
-            post_values = dict((await adapter.aget_state(seed_config)).values or {})
-            candidate = _compression_metrics(normalized, post_values)
-            # 双保险：acompact_state 内部已过 _summary_is_invalid，此处再核
-            # 结构指标（曾实测退化摘要骗过结构判定）
-            if not candidate["compressed"] or _summary_is_invalid(candidate["summary_text"]):
-                candidate = None
-        if candidate is not None:
-            compression = candidate
-            break
-        print(
-            f"  压缩未成功（尝试 {attempt}/{max_compact_attempts}，"
-            "常见原因：摘要网关空响应），重试...", file=sys.stderr, flush=True)
-    if compression is None:
-        raise RuntimeError(
-            f"压缩失败（pre_tokens≈{_approx_token_counter(normalized):,}，"
-            f"{max_compact_attempts} 次尝试均失败，常见原因：摘要网关对超大"
-            "输入返回空响应）。稍后重跑，或换更小的 fixture")
+            async def _checkpoint(update: dict) -> None:
+                await adapter.aupdate_state(seed_config, update, as_node="model")
+
+            # thread_id 传 session_id：acompact_state 用它写 t_chat_session 压缩
+            # 边界（before_compaction 检索语义依赖），状态写入走 checkpoint 闭包
+            compacted = await middleware.acompact_state(
+                snapshot.values, session_id, checkpoint=_checkpoint)
+            candidate = None
+            if compacted is not None:
+                post_values = dict((await adapter.aget_state(seed_config)).values or {})
+                candidate = _compression_metrics(normalized, post_values)
+                # 双保险：acompact_state 内部已过 _summary_is_invalid，此处再核
+                # 结构指标（曾实测退化摘要骗过结构判定）
+                if not candidate["compressed"] or _summary_is_invalid(candidate["summary_text"]):
+                    candidate = None
+            if candidate is not None:
+                compression = candidate
+                break
+            print(
+                f"  压缩未成功（尝试 {attempt}/{max_compact_attempts}，"
+                "常见原因：摘要网关空响应），重试...", file=sys.stderr, flush=True)
+        if compression is None:
+            raise RuntimeError(
+                f"压缩失败（pre_tokens≈{_approx_token_counter(normalized):,}，"
+                f"{max_compact_attempts} 次尝试均失败，常见原因：摘要网关对超大"
+                "输入返回空响应）。稍后重跑，或换更小的 fixture")
 
     try:
         arm_outputs: Dict[str, Any] = {}

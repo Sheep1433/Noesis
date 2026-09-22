@@ -57,7 +57,7 @@ describe('searchBlock 渲染 retrieval part 检索结果', () => {
   it('compact 模式展开渲染全部结果条目', async () => {
     const wrapper = await mountAndExpandWebSearchCard({ content: fixture, compactTools: true })
     expect(wrapper.find('.search-block').exists()).toBe(true)
-    expect(wrapper.find('.search-block').text()).toContain('共 3 条结果')
+    expect(wrapper.find('.search-block').text()).toContain('来源（3 条）')
     expect(wrapper.find('.search-block').text()).toContain(WEB_RESULT_TITLE)
     expect(wrapper.findAll('.result-item').length).toBe(3)
   })
@@ -102,5 +102,43 @@ describe('searchBlock 渲染 retrieval part 检索结果', () => {
   it('无 score 的 web 结果不渲染分数（null 不触发分数位）', async () => {
     const wrapper = await mountAndExpandWebSearchCard({ content: fixture, compactTools: true })
     expect(wrapper.find('.search-block').find('.result-item__score').exists()).toBe(false)
+  })
+
+  it('长 excerpt 折叠为预览，可展开/收起；短 excerpt 不出现展开按钮', async () => {
+    const long = '长'.repeat(400)
+    const content = JSON.stringify({
+      version: 1,
+      parts: [{
+        type: 'tool',
+        tool_call_id: 'call-web',
+        name: 'web_search',
+        input: { query: 'q' },
+        output: '检索到 2 条来源',
+        status: 'success',
+        state: 'succeeded',
+      }, {
+        type: 'retrieval',
+        tool_call_id: 'call-web',
+        query: 'q',
+        results: [
+          { evidence_id: 'w0', source_type: 'web', url: 'https://example.com/a', title: '长条目', excerpt: long },
+          { evidence_id: 'w1', source_type: 'web', url: 'https://example.com/b', title: '短条目', excerpt: '很短的摘要' },
+        ],
+      }],
+    })
+    const wrapper = await mountAndExpandWebSearchCard({ content, compactTools: true })
+    const block = wrapper.find('.search-block')
+    expect(block.find('.result-item__excerpt.is-clamped').exists()).toBe(true)
+    expect(block.findAll('.result-item__toggle').length).toBe(1)
+
+    await block.find('.result-item__toggle').trigger('click')
+    await wrapper.vm.$nextTick()
+    expect(block.find('.result-item__excerpt.is-clamped').exists()).toBe(false)
+    expect(block.find('.result-item__toggle').text()).toBe('收起')
+
+    await block.find('.result-item__toggle').trigger('click')
+    await wrapper.vm.$nextTick()
+    expect(block.find('.result-item__excerpt.is-clamped').exists()).toBe(true)
+    expect(block.find('.result-item__toggle').text()).toBe('展开全文')
   })
 })

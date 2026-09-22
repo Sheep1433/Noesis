@@ -35,7 +35,7 @@ from noesis.chat.tool_state import (
     ToolState,
     derive_tool_state,
 )
-from noesis.chat.event_mapping.bridge import END_SENTINEL, HEARTBEAT_SENTINEL, StreamBridgeError
+
 from noesis.chat.event_mapping.failure_notice import sanitize_stream_error, sanitize_tool_error
 from noesis.chat.event_mapping.tool_run_tracker import ToolRunTracker
 from noesis.chat.event_mapping.tool_payload import (
@@ -139,6 +139,9 @@ class LangGraphSseBridge:
         self._model_first_token_seen: set[str] = set()
         self._current_attempt_id = 1
         self._model_attempt_ids: Dict[str, int] = {}
+        # 当前模型尝试（自上次 on_chat_model_start 起）铸造的 text/reasoning
+        # part ids——stream-rollback 按 id 点名丢弃，不碰更早的 parts
+        self._attempt_part_ids: set[str] = set()
         self.last_context_snapshot: Dict[str, int] = {}
         self._session_context_tick = False
         self.last_hitl_payload: Optional[Dict[str, Any]] = None
@@ -272,13 +275,13 @@ class LangGraphSseBridge:
     ) -> None:
         """回滚失败模型尝试的部分流式输出（重试/降级共用）。
 
-        被断流前已流出的正文与思考从 builder 丢弃、流式缓冲清零、开放
-        part 状态复位（不发 close 帧——内容整体作废），并下发
-        ``stream-rollback`` 帧让 projection 与前端做同样回滚。不回滚则
-        N 次重试在同一消息里累积 N 份重复的正文/思考。
+        失败尝试的输出只存在于 ctx 缓冲（bridge builder 要到工具/收尾等
+        flush 点才落盘，而 flush 点意味着本次调用已成功）——所以 builder
+        无需弹回，清缓冲即可。wire 侧发 ``stream-rollback`` 帧点名本尝试
+        铸造的 ``part_ids``，projection 与前端按 id 丢弃；零输出失败无
+        part 可弃，不发音（旧实现按「末尾连续文本 part」弹回，会把压缩
+        分割线等前文一起吃掉）。
         """
-        if builder is not None:
-            builder.rollback_trailing_stream_parts()
         ctx["text_buffer"] = ""
         ctx["reasoning_buffer"] = ""
         self._text_open = False
@@ -287,10 +290,15 @@ class LangGraphSseBridge:
         self._reasoning_open = False
         self._current_reasoning_part_id = None
         self._current_reasoning_parent_task_call_id = None
+        dropped = sorted(self._attempt_part_ids)
+        self._attempt_part_ids.clear()
+        if not dropped:
+            return
         out.append(_format_sse("stream-rollback", {
             "type": "stream-rollback",
             "message_id": self.assistant_message_id,
             "scope": "model_attempt",
+            "part_ids": dropped,
         }))
 
     def _close_reasoning(self, out: List[str]) -> None:
@@ -346,6 +354,7 @@ class LangGraphSseBridge:
             self._close_reasoning(out)
         if not self._reasoning_open:
             self._current_reasoning_part_id = new_id("part-reasoning")
+            self._attempt_part_ids.add(self._current_reasoning_part_id)
             self._current_reasoning_parent_task_call_id = parent_task_call_id
             out.append(_format_sse("reasoning-start", {
                 "type": "reasoning-start",
@@ -377,6 +386,7 @@ class LangGraphSseBridge:
             self._close_text(out)
         if not self._text_open:
             self._current_text_part_id = part_id or new_id("part-text")
+            self._attempt_part_ids.add(self._current_text_part_id)
             self._current_text_parent_task_call_id = parent_task_call_id
             out.append(_format_sse("text-start", {
                 "type": "text-start",
@@ -480,7 +490,9 @@ class LangGraphSseBridge:
         buf = ctx.get("text_buffer") or ""
         parent = ctx.get("text_buffer_parent_task_call_id")
         if builder and buf:
-            builder.append_text_delta(buf, parent_task_call_id=parent)
+            builder.append_text_delta(
+                buf, parent, part_id=self._current_text_part_id,
+            )
         ctx["text_buffer"] = ""
         ctx["text_buffer_parent_task_call_id"] = None
 
@@ -610,23 +622,6 @@ class LangGraphSseBridge:
             f"synthesized_finish={not had_finish_before}"
         )
         return out
-
-    def process_item(self, item: Dict[str, Any], builder: Optional[AssistantMessageBuilder],
-                     ctx: Dict[str, Any]) -> List[str]:
-        """仅供独立 TEST_CASE_QA 旧 SSE 边界使用。"""
-        from noesis.chat.delivery.sse import encode_run_event
-
-        return [line for event in self.map_item(item, builder, ctx) for line in encode_run_event(event)]
-
-    def finalize(self, *, finish_reason: Optional[str] = None) -> List[str]:
-        """仅供独立 TEST_CASE_QA 旧 SSE 边界使用。"""
-        from noesis.chat.delivery.sse import encode_run_event
-
-        return [
-            line
-            for event in self.finalize_events(finish_reason=finish_reason)
-            for line in encode_run_event(event)
-        ]
 
     # ---------- Noesis / 业务事件 ----------
 
@@ -788,24 +783,6 @@ class LangGraphSseBridge:
             out.append(_format_sse("hitl-required", payload))
             return
 
-        if t in ("phase-start", "phase-delta", "phase-end"):
-            self._ensure_started(out)
-            payload = dict(item)
-            payload.setdefault("type", str(t))
-            payload.setdefault("message_id", self.assistant_message_id)
-            if t == "phase-end":
-                payload.setdefault("ok", True)
-            out.append(_format_sse(str(t), payload))
-            return
-
-        if t in {"scenario-start", "testpoints-confirm-required", "scene-cases"}:
-            # 仅供未迁移的 TEST_CASE_QA / CaseCoordinator 独立边界使用。
-            self._ensure_started(out)
-            payload = dict(item)
-            payload.setdefault("message_id", self.assistant_message_id)
-            out.append(_format_sse(str(t), payload))
-            return
-
         if t and t not in ("ai", "tool"):
             logger.warning(
                 "丢弃未知 runtime event session_id={} assistant_message_id={} type={}",
@@ -888,6 +865,8 @@ class LangGraphSseBridge:
         if lc_kind == "on_chat_model_start":
             self._close_reasoning(out)
             self._close_text(out)
+            # 新模型调用 = 新尝试边界：此前铸造的 parts 属于已完成调用，受保护
+            self._attempt_part_ids.clear()
             run_id = str(item.get("run_id") or "")
             if run_id:
                 self._model_call_starts[run_id] = time.perf_counter()
@@ -949,13 +928,14 @@ class LangGraphSseBridge:
                         str(ctx.get("reasoning_buffer") or ""),
                     )
                     if reasoning_delta:
+                        self._emit_reasoning_delta(reasoning_delta, out, parent_task_call_id)
                         if builder is not None:
                             builder.append_reasoning_delta(
                                 reasoning_delta,
                                 parent_task_call_id=parent_task_call_id,
+                                part_id=self._current_reasoning_part_id,
                             )
                         ctx["reasoning_buffer"] = (ctx.get("reasoning_buffer") or "") + reasoning_delta
-                        self._emit_reasoning_delta(reasoning_delta, out, parent_task_call_id)
                 final_text = extract_text_content(output)
                 text_delta = unsent_text_suffix(final_text, str(ctx.get("text_buffer") or ""))
                 if text_delta:
@@ -1253,19 +1233,3 @@ class LangGraphSseBridge:
         )
 
 
-def bridge_raw_to_sse_lines(
-    raw: Any,
-    bridge: LangGraphSseBridge,
-    builder: Optional[AssistantMessageBuilder],
-    ctx: Dict[str, Any],
-    *,
-    keepalive_comment: str,
-) -> Optional[List[str]]:
-    """将 MemoryStreamBridge 单条原始事件转为 SSE 行；``None`` 表示结束哨兵应跳过。"""
-    if raw is HEARTBEAT_SENTINEL:
-        return [keepalive_comment]
-    if raw is END_SENTINEL:
-        return None
-    if isinstance(raw, StreamBridgeError):
-        raise raw.exc
-    return bridge.process_item(raw, builder, ctx)

@@ -4,9 +4,8 @@
 
 | 场景 | 命令 | 状态 |
 |------|------|------|
-| 测试用例 Agent | `uv run python -m evals.case` | 已实现 |
 | 深度研究（DeepResearch Bench 子集） | `uv run python -m evals.agent.deepresearch` | 已实现（官方判分未接入） |
-| Agent E2E（判卷/引用/归因） | `uv run python -m evals.agent.rag` | 已实现 |
+| Agent E2E（ERB 官方口径） | `uv run python -m evals.agent.rag` | 已实现 |
 | 记忆召回（LongMemEval） | `uv run python -m evals.agent.memory` | 已实现 |
 | 消息压缩（三组对照，真 Agent 路径） | `uv run python -m evals.compression` | 已实现 |
 | 深度研究负载测试 | `uv run locust -f evals/loadtest/locustfile.py` | 已实现 |
@@ -29,7 +28,7 @@ cp backend/evals/.env.example backend/evals/.env
 ```
 
 - 仅在 `eval_langfuse_run(...)` 上下文内临时注入 SDK 环境变量，**退出后恢复**，不污染主项目
-- trace metadata：`source=noesis-eval`、`eval_line`（`case` / `agent` / `compression`）、`eval_tag`
+- trace metadata：`source=noesis-eval`、`eval_line`（`agent` / `compression`）、`eval_tag`
 - 未配置 `evals/.env` 时评测照常跑分，只是不上报 Langfuse
 
 ---
@@ -40,9 +39,8 @@ Noesis **没有**统一的评测结果 Web 页面；各子模块产物与查看�
 
 | 评测线 | 产物目录 | 专用 Web UI | 推荐查看方式 |
 |--------|----------|-------------|--------------|
-| 测试用例 `evals.case` | `evals/case/results/<tag>/` | **有**（promptfoo） | 控制台汇总 + `npx promptfoo view` |
 | 深度研究 | `evals/agent/deepresearch/results/<tag>/` | **无** | `articles.jsonl`（直接喂官方 RACE/FACT 判分脚本）+ `summary.json` |
-| Agent E2E | `evals/agent/rag/results/<tag>/` | **无** | `summary.md` + `attribution.md`（失败归因） |
+| Agent E2E | `evals/agent/rag/results/<tag>/` | **无** | `erb_answers.jsonl`（喂 ERB 官方判分脚本）+ `summary.md`（运行健康度） |
 | 记忆召回 | `evals/agent/memory/results/<tag>/` | **无** | `summary.md`（三层指标） |
 | 消息压缩 | `evals/compression/results/<tag>/` | **无** | `summary.md`；`--compare-to` 对比历史 |
 | 知识库检索 `evals.kb.erb` | `evals/kb/results/<tag>/` | **无** | `summary.md`（Recall/MRR/nDCG/阈值表 + CI） |
@@ -50,26 +48,9 @@ Noesis **没有**统一的评测结果 Web 页面；各子模块产物与查看�
 
 所有线共用统一产物结构：`results/<tag>/{manifest.json, raw(.jsonl), summary.json, summary.md}`——
 manifest 记录模型/数据集/种子/配置/token 成本/git sha；**tag 复用被拒绝**（历史基线不覆盖，换新 tag）。
-含 LLM-as-judge 的线另落盘 `manual_review_queue.json`（固定种子 10% 人工抽检清单）。
+含 LLM-as-judge 的线（memory）另落盘 `manual_review_queue.json`（固定种子 10% 人工抽检清单）。
 判卷模型必须与被测模型不同（`--judge-model-id` 必填，相同即拒跑）。
-
-### 测试用例（promptfoo）
-
-跑分结束控制台打印 recall/precision，并写入：
-
-```
-evals/case/results/<tag>/<phase>.json
-evals/case/results/<tag>/<phase>-summary.json
-```
-
-Web 查看（需 Node.js）：
-
-```bash
-cd backend/evals/case/testpoints   # 或 rag，与 --phase 对应
-npx promptfoo@latest view
-```
-
-控制台若打印了 `eval id`，在 promptfoo UI 里按该 id 定位本次跑分。
+Agent E2E 线不自带判分：跑完自动导出 `erb_answers.jsonl`，质量指标由 ERB 官方脚本判分产出（见下文 Agentic RAG 一节）。
 
 ### 深度研究（DeepResearch Bench 中文 5 题子集）
 
@@ -121,47 +102,7 @@ cat evals/kb/results/baseline/summary.md
 
 ---
 
-## 1. 测试用例（`evals.case` + promptfoo）
-
-指标：**阶段 A**（L0、`point_coverage_recall`、`point_coverage_precision`）、**阶段 B**（两路 RAG Recall@3/Hit@3、`document_context_present`）。
-
-```
-evals/case/
-  README.md
-  report.py                   # 跑分后汇总指标、写 summary
-  results/<tag>/              # 默认 promptfoo JSON + *-summary.json
-  testpoints/
-    golden/                   # 金标准源（prd_*.yaml）
-    golden_loader.py
-    generate_eval_dataset.py  # 从 documents/ + golden/ 生成 promptfooconfig
-    promptfooconfig.yaml      # 运行时配置（由脚本生成）
-    documents/
-  rag/
-    promptfooconfig.yaml
-    corpus/test_cases/
-    ingest.py
-  shared/                     # assertions、judge
-```
-
-```bash
-uv run python -m evals.case --phase testpoints --tag baseline
-uv run python -m evals.case --phase stage-a --tag baseline   # 同上别名
-uv run python -m evals.case --phase rag --tag rb-baseline
-uv run python -m evals.case --phase stage-b --tag rb-baseline # 同上别名
-uv run python -m evals.case.rag.ingest --map-only
-uv run python -m evals.case.rag.ingest --reset
-uv run python -m evals.case --phase testpoints --tag debug --item-id prd_001
-```
-
-阶段 A 金标准源在 `testpoints/golden/*.yaml`；运行时写入 `promptfooconfig.yaml` 的 `golden_test_points_json`。**不**使用 `dataset.jsonl`。跑分结束后默认写入 `results/<tag>/` 并在控制台打印 recall/precision 汇总。
-
-RAG 集成测（pytest，默认 skip）：`NOESIS_CASE_RAG_EVAL=1` + 先 `evals.case.rag.ingest`。
-
-coverage 走 Python 确定性 scorer（`shared/coverage_scorer.py`）；borderline 可启用 LLM 仲裁。详见 `evals/case/README.md`。
-
----
-
-## 2. Agent 评测（DeepResearch + Agentic RAG）
+## 1. Agent 评测（DeepResearch + Agentic RAG）
 
 个人学习与日常回归推荐 **两条主线**：
 
@@ -185,22 +126,43 @@ evals/agent/
 
 题库来源、运行方式与产物见上文「各评测线如何查看结果 → 深度研究」；官方 RACE/FACT 判分暂未接入，当前产出报告原文供外部脚本判分。
 
-### Agentic RAG → Agent E2E（判卷 / 引用溯源 / 失败归因）
+### Agentic RAG → Agent E2E（官方 ERB 口径）
 
 ```bash
-uv run python -m evals.agent.rag \
-  --sample 10 --model-id <catalog-model-id> --judge-model-id <judge-model-id> --tag t1
+# ① 跑被测：HTTP 驱动生产 server API（登录 → 建会话 → 创建 run → 消费 SSE）。
+#    会话/消息/工具调用由 server 持久化，--eval-user 账号（默认 test）前端可见；
+#    server 须已运行（scripts/run.sh dev，默认 127.0.0.1:8089）。
+#    --model-id 为「provider_slug/模型名」复合 id（设置页自定义模型，key 加密存 DB）。
+uv run python -m evals.agent.rag --sample 10 \
+  --model-id "huoshan/glm-5.3-flash" --tag t1
 # 中断后续跑（同 tag：已完成题自动跳过）；--retry-failed 只重跑 error 题
 uv run python -m evals.agent.rag ... --tag t1 --resume
 ```
 
-数据集 `fixtures/erb211.jsonl`（由 `uv run python -m evals.agent.rag.build_dataset` 从 ERB 生成，211 题），每行含 `query / expected_sources / expected_doc_ids / gold_answer / answer_facts`。每题跑完整 `GeneralQAAgent → search_knowledge_base → KbRetrievalService` 链路，产出：
+数据集 `fixtures/erb211.jsonl`（由 `uv run python -m evals.agent.rag.build_dataset` 从 ERB 生成，211 题）。本脚本只跑被测链路并自动导出 ERB 官方判分格式 `erb_answers.jsonl`（`question_id / answer / document_ids`，检索文档名经 `evals/kb/erb_data/ingest_plan.json` 映射回官方 dsid），不做任何自研判分。
 
-- **任务成功率**：judge 按 gold_answer 三档判卷（采纳/部分采纳/不采纳），summary 同时给全量与折半口径
-- **引用溯源三指标**：格式遵循率（citation 契约 + 伪协议头/URL 编码回归断言）、引用正确率（引用 ∈ GT，确定性）、事实可溯源率（answer_facts 逐条 judge）
-- **失败归因**（`attribution.md`）：不采纳题关联检索命中（`--kb-results` 指向 kb 线 raw.json，缺则现场补检索）+ 工具轨迹，确定性规则归到「检索没召回 / 工具行为异常 / 推理错 / 待人工复核」
+**质量指标由 ERB 官方脚本产出**（github.com/onyx-dot-app/EnterpriseRAG-Bench，判分 prompt 与指标定义均为官方）：
 
-逐题增量落盘 `raw.jsonl`（同一 sample_id 后写覆盖先写），长跑中断不丢已完成题。
+| 官方指标 | 含义 |
+|---|---|
+| Correctness（回答正确率） | 回答与标准答案二值比对（判分前官方先剥除回答中的引用标记） |
+| Completeness（要点完整率） | `answer_facts` 逐条判「回答是否包含或蕴含」，取比例 |
+| Document Recall@10（检索命中率） | 提交的 document_ids 覆盖金标文档的比例 |
+| Invalid Extra Documents（平均噪声文档数） | 提交的多余文档经裁判分类后计无关个数（绝对数，故意不用 precision） |
+| info_not_found 拒答（负样本） | 是否承认信息不存在而非编造 |
+
+官方判分脚本已移植进仓库：`evals/agent/rag/erb_scorer/`（来源与适配说明见其 README：官方 commit `d36685e`，判分 prompt 与指标算法零改动；含 532 篇官方格式语料与 231 题金标子集，自包含可独立运行）。判分（裁判模型自定，官方论文口径 GPT-5.4，结果须随数声明裁判）：
+
+```bash
+cd evals/agent/rag/erb_scorer && LLM_PROVIDER=openai LLM_API_KEY=<key> \
+  LLM_BASE_URL=<gateway> LLM_MODEL_NAME=<judge-model> \
+  uv run --with openai --with 'pydantic[email]' --with tiktoken \
+  --with pyyaml --with python-dotenv --with pyarrow \
+  python -m src.scripts.answer_evaluation.metrics_based_eval \
+  --answers-file <run 目录>/erb_answers.jsonl --parallelism 6
+```
+
+归因由官方指标天然覆盖：检索命中率低 = 检索问题；命中率高但正确率低 = 回答问题。逐题增量落盘 `raw.jsonl`（同一 sample_id 后写覆盖先写），长跑中断不丢已完成题。
 
 ---
 
@@ -299,7 +261,7 @@ NOESIS_COMPRESSION_EVAL_INTEGRATION=1 uv run pytest tests/test_eval_compression_
 
 ---
 
-## 4. 深度研究负载测试（`evals.loadtest` + Locust）
+## 2. 深度研究负载测试（`evals.loadtest` + Locust）
 
 对运行中的后端发 HTTP 请求，压测 `SUPER_AGENT_QA` SSE 链路（与离线 eval 不同，走真实 API）。
 
@@ -324,9 +286,9 @@ uv run locust -f evals/loadtest/locustfile.py --host=http://127.0.0.1:8089 \
 
 ---
 
-## 5. 知识库检索（`evals.kb.erb`）— ERB 企业级基准
+## 3. 知识库检索（`evals.kb.erb`）— ERB 企业级基准
 
-EnterpriseRAG-Bench（Onyx）子集：**211 正样本题**（GT 全部在语料内）+ **20 info_not_found 负样本**，语料 `erb-eval` 集合（312 GT + 220 confluence 干扰，文件名已转短名，`ingest_plan.json` 为语料清单与 dsid 映射）。
+EnterpriseRAG-Bench（Onyx）子集：**211 正样本题**（GT 全部在语料内）+ **20 info_not_found 负样本**，语料 `erb-eval` 集合（566 篇 = 首批 312 GT + 220 confluence 干扰 + 2026-09-17 补充 34 篇官方 Conflicting Info 题金标，文件名已转短名，`ingest_plan.json` 为语料清单与 dsid 映射）。补充导入用 `evals/kb/erb_supplement.py`（生产入库管道，幂等）。扩充题集 `fixtures/erb238.jsonl`（211 + 17 道 Conflicting Info，跑 Agent E2E 时 `--dataset evals/agent/rag/fixtures/erb238.jsonl`；默认数据集仍为 erb211 保持旧基线可复现）。官方 High Level 题（10 道）无金标文档，暂未纳入题池。
 
 ```bash
 cd backend
@@ -338,6 +300,6 @@ uv run python -m evals.kb.erb --all --tag baseline     # 全量 211+20，rerank 
 - 设计：单次检索记录原始 rerank 分（`score_threshold=0`），阈值效果离线模拟，不重复调用 API
 - 产物：`evals/kb/results/<tag>/`（manifest/raw/summary 四件套；raw 含每题原始分，阈值实验可离线复算）
 - 数据集：`evals/kb/erb_data/`（gitignored；`ERB_DATA_DIR` 可覆盖）。语料入库用集合级 `chunk_size=2000/overlap=200`，阈值 `score_threshold=0.05`
-- 与 `evals.case --phase rag` / `evals.agent.rag`（场景级 Agent E2E）互补；归因时把 kb 线 raw.json 经 `--kb-results` 喂给 E2E 线
+- 与 `evals.agent.rag`（场景级 Agent E2E）互补；归因时把 kb 线 raw.json 经 `--kb-results` 喂给 E2E 线
 
 `sse_client.consume_sse_stream` 读到 `data: [DONE]` 才计为成功端到端（与前端一致）；**提前断开**不影响服务端 partial 落库（见 `docs/engineering/platform/chat-streaming.md`）。压测验证落库时请查 `t_chat_message` 同一 session 仅一条 assistant 行。

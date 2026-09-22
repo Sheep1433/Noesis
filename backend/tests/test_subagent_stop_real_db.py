@@ -32,7 +32,7 @@ from langchain_core.tools import tool
 from langgraph.checkpoint.memory import MemorySaver
 from pydantic import PrivateAttr
 
-from noesis.agents.subagents.executor import (
+from noesis.agents.background.executor import (
     BackgroundTaskExecutor,
     BgTaskStatus,
     shutdown as bg_shutdown,
@@ -223,7 +223,7 @@ async def _run_stop_scenario(pg_manager, *, hard_kill: bool) -> None:
             # 绕过墙钟直接触发宽限超时硬杀（真实路径为 call_later 回调）；
             # CancelledError → _finalize_stop(outcome=None)：部分成果唯一来源
             # 是端口读真实落库投影
-            import noesis.agents.subagents.executor as executor_mod
+            import noesis.agents.background.executor as executor_mod
 
             with executor_mod._TASKS_LOCK:
                 entry = executor_mod._TASKS[task_id]

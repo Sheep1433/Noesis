@@ -19,10 +19,17 @@ from typing import Any, Protocol, runtime_checkable
 from noesis.runtime.logging import logger
 
 RUN_BUS_SCHEMA_VERSION = 1
+SIGNAL_SCHEMA_VERSION = 1
 
 # wakeup topic 约定：dispatcher 消费 run-created；P2 command consumer 消费 run-command
 WAKEUP_TOPIC_RUN_CREATED = "run-created"
 WAKEUP_TOPIC_RUN_COMMAND = "run-command"
+
+# 信令 scope（task 4.7）：user=用户级列表刷新、session=跨窗口活跃 run 发现、
+# bg-tasks=后台任务面板与目录流。hint 语义：不分配 sequence、不进 checkpoint
+SIGNAL_SCOPE_USER = "user"
+SIGNAL_SCOPE_SESSION = "session"
+SIGNAL_SCOPE_BG_TASKS = "bg-tasks"
 
 
 class EnvelopePayloadTooLarge(RuntimeError):
@@ -112,9 +119,51 @@ class BusSubscription:
         self._closed = True
 
 
+class SignalSubscription:
+    """信令订阅句柄：ready() 后发布的信令保证可见；close 幂等释放。
+
+    迭代产出信令 envelope dict：{schema_version, scope, key, origin, payload}。
+    """
+
+    def __init__(self, queue: asyncio.Queue, release) -> None:
+        self._queue = queue
+        self._release = release
+        self._released = False
+        self._closed = False
+
+    async def ready(self) -> None:
+        return None
+
+    def __aiter__(self):
+        return self._iterate()
+
+    async def _iterate(self):
+        while True:
+            item = await self._queue.get()
+            if item is None:
+                return
+            yield item
+
+    async def close(self) -> None:
+        self._closed = True
+        if not self._released:
+            self._released = True
+            try:
+                self._queue.put_nowait(None)
+            except asyncio.QueueFull:
+                pass
+            await self._release()
+
+
 @runtime_checkable
 class RunBus(Protocol):
     """Run 事件广播 port。Service 层禁止依赖具体 adapter 类型。"""
+
+    async def publish_signal(
+        self, scope: str, key: str, payload: Mapping[str, Any], *, origin: str = ""
+    ) -> None: ...
+
+    async def subscribe_signals(self, scope: str, key: str) -> SignalSubscription: ...
 
     async def publish_run_events(
         self, run_id: str, envelopes: Sequence[RunEventEnvelope]
@@ -162,9 +211,11 @@ class InMemoryRunBus:
     def __init__(self, *, envelope_payload_max_bytes: int) -> None:
         self._envelope_payload_max_bytes = envelope_payload_max_bytes
         self._run_channels: dict[str, set[asyncio.Queue]] = {}
+        self._signal_channels: dict[tuple[str, str], set[asyncio.Queue]] = {}
         self._wakeup_subscribers: set[asyncio.Queue] = set()
         self._dropped_events = 0
         self._dropped_wakeups = 0
+        self._dropped_signals = 0
         self._closed = False
 
     @property
@@ -174,6 +225,46 @@ class InMemoryRunBus:
     @property
     def dropped_wakeups(self) -> int:
         return self._dropped_wakeups
+
+    @property
+    def dropped_signals(self) -> int:
+        return self._dropped_signals
+
+    async def publish_signal(
+        self, scope: str, key: str, payload: Mapping[str, Any], *, origin: str = ""
+    ) -> None:
+        if self._closed:
+            return
+        message = {
+            "schema_version": SIGNAL_SCHEMA_VERSION,
+            "scope": scope,
+            "key": key,
+            "origin": origin,
+            "payload": dict(payload),
+        }
+        for queue in list(self._signal_channels.get((scope, key), ())):
+            try:
+                queue.put_nowait(message)
+            except asyncio.QueueFull:
+                self._dropped_signals += 1
+                logger.warning(
+                    "run bus signal subscriber queue full, dropped scope={} key={}",
+                    scope, key,
+                )
+
+    async def subscribe_signals(self, scope: str, key: str) -> SignalSubscription:
+        if self._closed:
+            raise RuntimeError("run bus closed")
+        queue: asyncio.Queue = asyncio.Queue(maxsize=256)
+        channel = self._signal_channels.setdefault((scope, key), set())
+        channel.add(queue)
+
+        async def _release() -> None:
+            channel.discard(queue)
+            if not channel:
+                self._signal_channels.pop((scope, key), None)
+
+        return SignalSubscription(queue, _release)
 
     async def publish_run_events(
         self, run_id: str, envelopes: Sequence[RunEventEnvelope]
@@ -252,6 +343,13 @@ class InMemoryRunBus:
                 except asyncio.QueueFull:
                     pass
         self._run_channels.clear()
+        for channel in list(self._signal_channels.values()):
+            for queue in list(channel):
+                try:
+                    queue.put_nowait(None)
+                except asyncio.QueueFull:
+                    pass
+        self._signal_channels.clear()
         for queue in list(self._wakeup_subscribers):
             try:
                 queue.put_nowait(None)
@@ -298,6 +396,11 @@ class _MemoryWakeupSubscription(WakeupSubscription):
 
 __all__ = [
     "RUN_BUS_SCHEMA_VERSION",
+    "SIGNAL_SCHEMA_VERSION",
+    "SIGNAL_SCOPE_BG_TASKS",
+    "SIGNAL_SCOPE_SESSION",
+    "SIGNAL_SCOPE_USER",
+    "SignalSubscription",
     "WAKEUP_TOPIC_RUN_CREATED",
     "WAKEUP_TOPIC_RUN_COMMAND",
     "BusSubscription",

@@ -16,7 +16,7 @@ from langchain_core.tools import StructuredTool
 from pydantic import BaseModel, Field
 
 from noesis.runtime.logging import logger
-from noesis.services.history_search import (
+from noesis.repositories.history_search import (
     SessionAccessDenied,
     search_session_history,
     search_user_sessions,

@@ -202,36 +202,6 @@ def test_attachment_roundtrip(auth_client) -> None:
 
 
 @pytest.mark.llm
-def test_user_signal_stream_pushes_run_started(
-    auth_client, create_session, create_run
-) -> None:
-    """用户级信令流：会话列表实时刷新数据源，创建 run 后应推 run-started。"""
-    session_id = create_session(title="用户信令流验证")
-    received: dict[str, dict | None] = {"frame": None}
-
-    def pump() -> None:
-        try:
-            received["frame"] = _read_sse_first_matching(
-                auth_client,
-                "/api/chat/events/stream",
-                want_event="user-signal",
-                match=lambda f: f.get("type") == "run-started"
-                and f.get("session_id") == session_id,
-                deadline_seconds=60.0,
-            )
-        except BaseException:  # noqa: BLE001 - 线程边界传回主断言
-            received["frame"] = None
-
-    consumer = threading.Thread(target=pump)
-    consumer.start()
-    time.sleep(1.0)  # 等订阅建立再建 run，避免竞态漏帧
-    run = create_run(session_id=session_id, content="1+1 等于几？", qa_type="COMMON_QA")
-    consumer.join(timeout=70.0)
-
-    frame = received["frame"]
-    assert frame is not None, "用户信令流未推送本会话的 run-started 帧"
-    assert frame.get("run_id") == run["run_id"]
-
 
 def test_children_stream_keepalive_when_empty(auth_client) -> None:
     """子 Agent 目录事件流：无子任务的会话建连成功，空闲期只发 keepalive。"""
@@ -239,7 +209,7 @@ def test_children_stream_keepalive_when_empty(auth_client) -> None:
     try:
         deadline = time.monotonic() + 40.0
         with auth_client.stream(
-            "GET", f"/api/chat/sessions/{session_id}/children/stream"
+            "GET", f"/api/chat/sessions/{session_id}/tasks/stream"
         ) as response:
             response.raise_for_status()
             assert response.headers["content-type"].startswith("text/event-stream")

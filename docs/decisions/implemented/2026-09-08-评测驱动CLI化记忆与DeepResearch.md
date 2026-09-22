@@ -24,8 +24,10 @@ SuperAgent，等于维护了第二条平台集成路径：评测自己建数据�
 - CLI 扩展为 Claude Code 风格：`noesis chat -p "<问题>" --model <模型>
   --output-format text|json|stream-json`；`-p` 模式跑完即退、非零退出码即失败，
   会话行落库为默认行为（子 Agent 派发需要血缘），空收场（零文本零工具却报完成）
-  判失败。被测模型凭据走 env 直连：`NOESIS_API_KEY` + `NOESIS_BASE_URL`
-  （`evals/.env`，gitignored），跳过目录与用户模型解析。
+  判失败。被测模型解析：super `-p` 走生产 DB 模型解析（2026-09-15 起取代
+  env 直连，见 `docs/decisions/implemented/2026-09-15-评测CLI复用生产DB链路.md`）；
+  env 直连（`NOESIS_API_KEY` + `NOESIS_BASE_URL`，evals/.env，gitignored）
+  仍服务 common/simple_mcp 的 `-p`。
 - 新增 `evals/agent/cli_driver.py`：每题 spawn 一个全新 CLI 子进程（跨样本无共享
   事件循环/连接池/全局状态），解析 stream-json，持有 wall-clock 超时——杀进程
   组但保留已收到的部分结果（超时题仍可判卷）。
@@ -55,8 +57,8 @@ SuperAgent，等于维护了第二条平台集成路径：评测自己建数据�
 - 每题一次子进程启动（秒级，相对每题分钟级的 agent 运行可忽略）。
 - `local_shell` 使评测环境与生产沙箱语义有一处已知偏差，在 driver 注释与本
   记录明示；未来若评测需要覆盖沙箱内工具行为，需单独评估。
-- CLI 子进程内不接 Langfuse 过程追踪（此前 in-process 经 `eval_langfuse_run`
-  挂接）；评测结果与判卷记录仍完整落盘 raw.jsonl/manifest。
+- CLI 子进程的 Langfuse 过程追踪：super `-p` 经生产 headless 入口原生接入
+  （2026-09-15 起，含短命进程退出 flush），raw.jsonl 仍逐行落盘作可重放底账。
 
 ## 验证
 

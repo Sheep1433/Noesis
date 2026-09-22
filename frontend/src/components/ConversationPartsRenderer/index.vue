@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import type { MessageContent, TaskCatalogEntry } from '@/api/chat'
+import type { MessageContent, SessionTaskEntry } from '@/api/chat'
 import type { CitationIndex } from '@/views/chat/citationRendering'
 import type { RetrievalResultUi, RetrievalUiPart, ToolUiPart } from '@/views/chat/messageParts'
 import { computed } from 'vue'
@@ -28,7 +28,7 @@ const props = withDefaults(defineProps<{
   msgMetadata?: Record<string, unknown> | null
   qaType?: string
   /** start_async_task 委派卡的后台任务目录查询（主会话宿主提供） */
-  taskForToolPart?: (part: ToolUiPart) => TaskCatalogEntry | undefined
+  taskForToolPart?: (part: ToolUiPart) => SessionTaskEntry | undefined
   /** compact 工具模式（并行组紧凑样式） */
   compactTools?: boolean
   /** 消息仍在生成（并行组默认展开看进度；完成后收起） */

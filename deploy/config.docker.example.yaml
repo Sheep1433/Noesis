@@ -143,10 +143,6 @@ qdrant:
   grpc_port: 6334
   prefer_grpc: false
   default_collection: knowledge_base
-  requirement_docs_collection: requirement_docs
-  test_case_docs_collection: test_case_docs
-  test_case_upload_collection: ""
-  case_rag_historical_requirements_enabled: false
 
 langfuse:
   tracing_enabled: true

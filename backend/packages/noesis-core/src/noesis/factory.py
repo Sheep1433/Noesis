@@ -26,7 +26,7 @@ from noesis.agents.middlewares.stack import NoesisStackDeps, build_noesis_stack
 from noesis.config.env import HitlConfig, ModelConfig
 from noesis.llm.factory import get_llm
 from noesis.llm.model_limits import resolve_context_max_tokens
-from noesis.services.history_search import record_compaction_boundary
+from noesis.repositories.history_search import record_compaction_boundary
 from noesis.storage.postgres.manager import pg_manager
 
 # 压缩摘要指令：作为最后一条 HumanMessage 送达（尾部 = 模型注意力所在），

@@ -66,14 +66,20 @@ async def run_cli_agent(
     session_id: str,
     user_id: str,
     model: str | None = None,
+    qa_type: str = "super",
+    kb_collections: list[str] | None = None,
+    web_search: bool = True,
     time_budget_seconds: int = 600,
     extra_env: dict[str, str] | None = None,
     raw_dump: Path | None = None,
 ) -> dict[str, Any]:
-    """跑一题（super）：spawn `noesis chat -p ... --output-format stream-json`，返回评测记录。
+    """跑一题：spawn `noesis chat -p ... --output-format stream-json`，返回评测记录。
 
     model 须为内置目录 id 或该账号的自定义模型复合 id（如
     provider/model），经生产模型解析（会话 extra → 用户偏好 → 平台默认）。
+
+    qa_type / kb_collections / web_search 透传 CLI（super 默认；common 场景
+    用 kb_collections 限定集合、web_search=False 关闭联网）。
 
     raw_dump：CLI 的原始 stdout 逐行落盘（评测结果的可重放底账）——
     driver 层采集出 bug 或结果误删时，从原始流的 ``__tw_result__`` 行
@@ -83,8 +89,12 @@ async def run_cli_agent(
         "uv", "run", "noesis", "chat", "-p", query,
         "--output-format", "stream-json",
         "--session-id", session_id,
-        "--qa-type", "super",
+        "--qa-type", qa_type,
     ]
+    if kb_collections:
+        argv += ["--kb-collections", ",".join(kb_collections)]
+    if not web_search:
+        argv.append("--no-web-search")
     if model:
         argv += ["--model", model]
     env = dict(os.environ)

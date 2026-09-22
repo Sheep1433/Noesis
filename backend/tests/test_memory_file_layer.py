@@ -10,8 +10,8 @@ from unittest.mock import AsyncMock
 import pytest
 
 import noesis.config.user_data_paths as user_data_paths
-from noesis.services.memory import extraction
-from noesis.services.memory.store import MemoryStore
+from noesis.memory import extraction
+from noesis.memory.store import MemoryStore
 
 
 @pytest.fixture()
@@ -427,7 +427,7 @@ async def test_extract_session_marks_and_skips_when_disabled(
 ) -> None:
     from unittest.mock import MagicMock
 
-    from noesis.services.memory.user_settings import MemoryUserSettings
+    from noesis.memory.user_settings import MemoryUserSettings
 
     monkeypatch.setattr(MemoryUserSettings, "is_enabled", staticmethod(lambda _u: False))
     session = MagicMock(id="sess-off", memory_extracted_seq=7)
@@ -475,7 +475,7 @@ async def test_load_segment_includes_bridge_and_new_messages() -> None:
 async def test_load_segment_head_tail_truncation_keeps_both_ends(
     users_root: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    import noesis.services.memory.extraction as ext
+    import noesis.memory.extraction as ext
 
     rows = [_msg(i, "user", f"消息{i}" * 50) for i in range(1, 21)]
 
@@ -494,8 +494,8 @@ async def test_watermark_advanced_only_on_success(monkeypatch: pytest.MonkeyPatc
     """LLM 失败 → _mark_extracted 不被调用（水位不动，下次重试）。"""
     from unittest.mock import AsyncMock, MagicMock
 
-    from noesis.services.memory.extraction import MemoryExtractionService
-    from noesis.services.memory.user_settings import MemoryUserSettings
+    from noesis.memory.extraction import MemoryExtractionService
+    from noesis.memory.user_settings import MemoryUserSettings
 
     monkeypatch.setattr(MemoryUserSettings, "is_enabled", staticmethod(lambda _u: True))
     session = MagicMock(id="s", memory_extracted_seq=None)
@@ -522,7 +522,7 @@ async def test_watermark_advanced_only_on_success(monkeypatch: pytest.MonkeyPatc
 @pytest.mark.asyncio
 async def test_subagent_sessions_excluded_from_sweep(monkeypatch: pytest.MonkeyPatch) -> None:
     """sweep 只捞 kind=root（subagent 结论经父会话通知回流，不直接抽）。"""
-    from noesis.services.memory.extraction import MemoryExtractionService
+    from noesis.memory.extraction import MemoryExtractionService
 
     captured = {}
 
@@ -542,7 +542,7 @@ async def test_subagent_sessions_excluded_from_sweep(monkeypatch: pytest.MonkeyP
             return False
 
     monkeypatch.setattr(
-        "noesis.services.memory.extraction.pg_manager.get_async_session_context",
+        "noesis.memory.extraction.pg_manager.get_async_session_context",
         _Ctx,
     )
     await MemoryExtractionService.sweep_once()
@@ -553,7 +553,7 @@ def test_updated_at_preserved_by_mark_extracted_statement() -> None:
     """标记语句显式携带 updated_at 自身（抑制 onupdate，不扰动会话排序）。"""
     import asyncio
 
-    from noesis.services.memory.extraction import MemoryExtractionService
+    from noesis.memory.extraction import MemoryExtractionService
 
     async def run():
         db = SimpleNamespace(execute=AsyncMock(), commit=AsyncMock())
@@ -571,7 +571,7 @@ def test_updated_at_preserved_by_mark_extracted_statement() -> None:
 
 @pytest.mark.asyncio
 async def test_consolidation_remove_and_merge(users_root: Path) -> None:
-    from noesis.services.memory.consolidation import (
+    from noesis.memory.consolidation import (
         ConsolidateAction,
         MemoryConsolidationService as MCS,
     )
@@ -601,10 +601,10 @@ async def test_consolidation_remove_and_merge(users_root: Path) -> None:
 
 @pytest.mark.asyncio
 async def test_consolidation_drops_dead_index_lines(users_root: Path) -> None:
-    from noesis.services.memory.consolidation import (
+    from noesis.memory.consolidation import (
         MemoryConsolidationService as MCS,
     )
-    from noesis.services.memory.store import IndexEntry
+    from noesis.memory.store import IndexEntry
 
     entry = MemoryStore.upsert_entry(
         "u1", memory_type="gotcha", label="边界", body="不要越过", sources=["s"]
@@ -777,7 +777,7 @@ def test_extraction_prompt_contains_routing_guardrails() -> None:
 
 
 def test_consolidation_prompt_contains_priority_rules() -> None:
-    from noesis.services.memory.consolidation import _CONSOLIDATION_PROMPT
+    from noesis.memory.consolidation import _CONSOLIDATION_PROMPT
 
     prompt = _CONSOLIDATION_PROMPT
     assert "用户显式修正" in prompt
@@ -792,7 +792,7 @@ def test_consolidation_prompt_contains_priority_rules() -> None:
 
 @pytest.mark.asyncio
 async def test_consolidation_snapshots_and_syncs_description(users_root: Path) -> None:
-    from noesis.services.memory.consolidation import (
+    from noesis.memory.consolidation import (
         ConsolidateAction,
         MemoryConsolidationService as MCS,
     )
@@ -842,7 +842,7 @@ async def test_consolidation_snapshots_and_syncs_description(users_root: Path) -
 
 @pytest.mark.asyncio
 async def test_consolidation_rewrite_without_description_preserves(users_root: Path) -> None:
-    from noesis.services.memory.consolidation import (
+    from noesis.memory.consolidation import (
         ConsolidateAction,
         MemoryConsolidationService as MCS,
     )
@@ -865,7 +865,7 @@ async def test_consolidation_rewrite_without_description_preserves(users_root: P
 
 
 def test_consolidation_aligns_frontmatter_type(users_root: Path) -> None:
-    from noesis.services.memory.consolidation import (
+    from noesis.memory.consolidation import (
         MemoryConsolidationService as MCS,
     )
 
@@ -894,7 +894,7 @@ def test_consolidation_aligns_frontmatter_type(users_root: Path) -> None:
 
 
 def test_recent_journal_excludes_snapshot_blocks(users_root: Path) -> None:
-    from noesis.services.memory.consolidation import (
+    from noesis.memory.consolidation import (
         MemoryConsolidationService as MCS,
     )
 
@@ -912,7 +912,7 @@ def test_recent_journal_excludes_snapshot_blocks(users_root: Path) -> None:
 
 def test_recent_journal_strips_snapshot_with_embedded_headers(users_root: Path) -> None:
     """快照正文内嵌 ``## `` 标题行时整块剔除，不漏进整理信号（回归）。"""
-    from noesis.services.memory.consolidation import (
+    from noesis.memory.consolidation import (
         MemoryConsolidationService as MCS,
     )
 

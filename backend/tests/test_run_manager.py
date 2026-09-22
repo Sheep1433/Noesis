@@ -383,6 +383,65 @@ async def test_hitl_timeout_handler_survives_resume_and_second_pause() -> None:
 
 
 @pytest.mark.asyncio
+async def test_production_hitl_entry_suspends_watchdog_and_arms_hitl_timeout() -> None:
+    """生产路径（apply_event + projection）进 HITL 必须停看门狗、挂 HITL 专属超时。
+
+    回归：HITL 配套（停看门狗 + _expire_hitl_pending）曾只在 transition() 里，
+    而生产路径不经 transition()——审批等待计入 run 时长，被 RUN_TIMEOUT 误杀。
+    """
+    from noesis.chat.delivery.events import HitlRequired
+    from noesis.services.run_service import RunProjection
+
+    async def producer(publish):
+        return None
+
+    manager = RunManager(
+        max_run_duration_seconds=0.05, hitl_pending_timeout_seconds=10.0
+    )
+    projection = RunProjection(
+        run_id="run-hitl-prod",
+        user_id="user-1",
+        session_id="session-1",
+        assistant_message_id="message-1",
+        qa_type="SUPER_AGENT_QA",
+    )
+    handle = await manager.start(
+        run_id="run-hitl-prod",
+        session_id="session-1",
+        user_id="user-1",
+        assistant_message_id="message-1",
+        snapshot_provider=projection.snapshot,
+        producer=producer,
+        state=projection,
+    )
+    await handle.producer_task
+    await manager.apply_event(
+        "run-hitl-prod",
+        HitlRequired({
+            "interrupt_id": "interrupt-1",
+            "kind": "approval",
+            "action_requests": [],
+        }),
+    )
+    assert handle.status == RunStatus.HITL_PENDING
+
+    # 看门狗已挂起：超过 max_run_duration 也不触发 RUN_TIMEOUT
+    await asyncio.sleep(0.12)
+    assert handle.limit_error is None
+    assert handle.status == RunStatus.HITL_PENDING
+    assert handle.watchdog_task is None
+    assert handle.hitl_timeout_task is not None
+
+    # 审批恢复后看门狗重新计时
+    async def resumed_producer(publish):
+        await publish("after-approval")
+
+    resumed = await manager.resume("run-hitl-prod", resumed_producer)
+    assert resumed.watchdog_task is not None
+    await resumed.producer_task
+
+
+@pytest.mark.asyncio
 async def test_terminal_retention_releases_run_handle() -> None:
     async def producer(publish):
         return None
@@ -475,3 +534,87 @@ async def test_delivery_failure_does_not_cancel_producer_or_other_deliveries() -
     assert isinstance(handle.delivery_failures["sse:test"], ConnectionError)
     assert manager.metrics_snapshot()["delivery_failures"] == 1
     await manager.shutdown(drain_seconds=0)
+
+
+@pytest.mark.asyncio
+async def test_periodic_checkpoint_flush_catches_up_after_silence() -> None:
+    """周期 checkpoint（task 4.4）：policy 未命中的静默期，DB snapshot 有界追上。"""
+    from noesis.chat.delivery.events import WireFrame
+
+    release = asyncio.Event()
+    requests: list = []
+
+    async def checkpoint_handler(request) -> None:
+        requests.append(request)
+
+    async def producer(publish):
+        await publish(WireFrame(event="text-delta", data={"delta": "x"}))
+        await release.wait()
+
+    manager = RunManager(periodic_checkpoint_interval_seconds=0.05)
+    handle = await manager.start(
+        run_id="run-flush",
+        session_id="session-1",
+        user_id="user-1",
+        assistant_message_id="message-1",
+        snapshot_provider=_snapshot("run-flush"),
+        producer=producer,
+        checkpoint_policy=lambda event, sequence: None,  # 事件驱动关闭
+        checkpoint_handler=checkpoint_handler,
+    )
+    try:
+        for _ in range(200):
+            if requests and requests[-1].snapshot_sequence >= handle.last_sequence:
+                break
+            await asyncio.sleep(0.01)
+        assert requests, "静默期应由周期 flush 提交 checkpoint"
+        assert requests[-1].snapshot_sequence == handle.last_sequence
+        assert requests[-1].kind == "periodic"
+    finally:
+        release.set()
+        await handle.producer_task
+        await manager.shutdown(drain_seconds=0)
+
+
+@pytest.mark.asyncio
+async def test_periodic_checkpoint_flush_skips_when_persisted() -> None:
+    """已持久化到 last_sequence 时不重复提交。"""
+    from noesis.chat.delivery.events import WireFrame
+
+    release = asyncio.Event()
+    requests: list = []
+
+    async def checkpoint_handler(request) -> None:
+        requests.append(request)
+
+    async def producer(publish):
+        await publish(WireFrame(event="text-delta", data={"delta": "x"}))
+        await release.wait()
+
+    manager = RunManager(periodic_checkpoint_interval_seconds=0.05)
+    handle = await manager.start(
+        run_id="run-flush2",
+        session_id="session-1",
+        user_id="user-1",
+        assistant_message_id="message-1",
+        snapshot_provider=_snapshot("run-flush2"),
+        producer=producer,
+        checkpoint_policy=lambda event, sequence: None,
+        checkpoint_handler=checkpoint_handler,
+    )
+    try:
+        # 等第一个周期提交，然后标记已持久化到当前 sequence
+        for _ in range(200):
+            if requests:
+                break
+            await asyncio.sleep(0.01)
+        assert requests
+        async with handle.lock:
+            handle.last_persisted_sequence = handle.last_sequence
+        count = len(requests)
+        await asyncio.sleep(0.2)  # 覆盖多个周期
+        assert len(requests) == count, "已持久化时周期 flush 不得重复提交"
+    finally:
+        release.set()
+        await handle.producer_task
+        await manager.shutdown(drain_seconds=0)

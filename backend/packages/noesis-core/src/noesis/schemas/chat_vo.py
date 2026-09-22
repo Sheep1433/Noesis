@@ -6,13 +6,6 @@ from pydantic import BaseModel, Field
 # Session Schemas (会话)
 # ============================================================================
 
-class CreateSessionRequest(BaseModel):
-    """创建会话请求"""
-    title: Optional[str] = Field(None, description='会话标题，不传则使用默认标题')
-    parent_id: Optional[str] = Field(None, description='父会话 ID（subagent 场景）')
-    extra: Optional[Dict[str, Any]] = Field(None, description='会话元数据')
-
-
 class EnsureSessionRequest(BaseModel):
     """幂等物化会话（client session_id + get_or_create）"""
     title: Optional[str] = Field(None, description='会话标题，不传则使用默认标题')
@@ -136,16 +129,7 @@ class MessageListResponse(BaseModel):
 # API Schemas (API 层级)
 # ============================================================================
 
-class SendMessageRequest(BaseModel):
-    """直接写入会话消息请求。"""
-    session_id: Optional[str] = Field(None, description='会话 ID')
-    content: str = Field(..., description='消息内容')
-    parent_id: Optional[str] = Field(None, description='父消息 ID')
-    role: Literal['user', 'assistant'] = Field('user', description='角色: user | assistant')
-    extra: Optional[Dict[str, Any]] = Field(None, description='额外元数据')
-
-
-class SubagentFollowupRequest(BaseModel):
+class SubagentMessageRequest(BaseModel):
     """向现有 child session 发起下一轮对话。"""
     message: str = Field(..., min_length=1, description='补充要求')
     model_id: Optional[str] = Field(None, description='该轮使用的模型（缺省沿用当前模型）')
@@ -186,8 +170,3 @@ class RunSnapshotResponse(BaseModel):
     message: Optional[str] = Field(None, description='用户安全提示')
 
 
-class SendMessageResponse(BaseModel):
-    """发送消息响应"""
-    message_id: str = Field(..., description='消息 UUID')
-    session_id: str = Field(..., description='会话 ID')
-    status: str = Field(..., description='消息状态')

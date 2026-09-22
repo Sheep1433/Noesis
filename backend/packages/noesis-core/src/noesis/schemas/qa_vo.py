@@ -52,11 +52,6 @@ class QaQueryRequest(BaseModel):
     )
 
 
-class TestCaseResumeRequest(BaseModel):
-    """测试用例生成：采纳测试点后继续生成具体用例"""
-    selected_point_names: List[str] = Field(..., description="用户采纳的测试点 point_name 列表，至少一项")
-
-
 class HitlDecisionItem(BaseModel):
     type: Literal["approve", "reject", "respond"] = Field(..., description="HITL 决策类型")
     message: Optional[str] = Field(None, description="reject 说明或 respond 回答文本")
@@ -71,29 +66,6 @@ class HitlResumeRequest(BaseModel):
         None,
         description="网络类 execute：once 仅本次；session 本会话同类放行",
     )
-
-
-class TestCaseExportCaseItem(BaseModel):
-    """导出用例条目（与阶段 B 产出字段对齐）"""
-
-    point_name: str = Field(description="测试点名称")
-    case_id: Optional[str] = Field(default=None, description="用例编号")
-    point_level: Optional[str] = Field(default=None, description="优先级")
-    point_type: Optional[str] = Field(default=None, description="测试类型")
-    scene_name: Optional[str] = Field(default=None, description="所属场景")
-    preconditions: List[str] = Field(default_factory=list, description="前置条件")
-    test_steps: List[str] = Field(default_factory=list, description="测试步骤")
-    expected_results: List[str] = Field(default_factory=list, description="预期结果")
-
-
-class TestCaseExportRequest(BaseModel):
-    """测试用例导出为 Markdown；未传 test_cases 时从协调器缓存读取"""
-
-    test_cases: Optional[List[TestCaseExportCaseItem]] = Field(
-        default=None,
-        description="客户端组装的用例列表；省略或为空时尝试读取本会话最近一次生成结果",
-    )
-    query: Optional[str] = Field(default=None, description="需求说明，写入报告头部")
 
 
 class QueryUserRecordRequest(BaseModel):

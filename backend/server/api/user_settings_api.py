@@ -14,11 +14,11 @@ from noesis.schemas.login_vo import CurrentUser
 from noesis.services.messaging_channel_service import MessagingChannelService
 from noesis.services.scheduled_task_service import ScheduledTaskService
 from noesis.services.scheduled_task_service import compute_next_run_ms, cron_summary
-from noesis.services.memory.store import MemoryStore
-from noesis.services.memory.types import MEMORY_TYPES, TYPE_LABELS
-from noesis.services.memory.user_settings import MemoryUserSettings
+from noesis.memory.store import MemoryStore
+from noesis.memory.types import MEMORY_TYPES, TYPE_LABELS
+from noesis.memory.user_settings import MemoryUserSettings
 from noesis.services.user_memory_service import UserMemoryService
-from server.auth_dependencies import get_current_user, require_csrf
+from server.auth_dependencies import get_current_user
 from noesis.services.settings_service import SettingsService
 
 user_settings_router = APIRouter(prefix="/api/user", tags=["用户设置"])
@@ -86,7 +86,6 @@ async def put_memory_settings(
     request: Request,
     current_user: CurrentUser = Depends(get_current_user),
 ):
-    await require_csrf(request)
     enabled = MemoryUserSettings.set_enabled(current_user.user_id, body.enabled)
     return ResponseUtil.success(msg="已保存", data={"enabled": enabled})
 
@@ -153,7 +152,6 @@ async def put_memory_entry(
     current_user: CurrentUser = Depends(get_current_user),
 ):
     """用户直接编辑条目文件（最高权限）；索引行同步。"""
-    await require_csrf(request)
     user_id = current_user.user_id
     try:
         path = MemoryStore.entry_path(user_id, memory_type, slug)
@@ -161,12 +159,12 @@ async def put_memory_entry(
         raise HTTPException(status_code=400, detail=str(e)) from e
     if not path.is_file():
         raise HTTPException(status_code=404, detail="条目不存在")
-    from noesis.services.memory.extraction import MAX_ENTRY_CHARS
+    from noesis.memory.extraction import MAX_ENTRY_CHARS
 
     # 直接编辑放宽一倍：最高权限入口，索引同步前给用户更大书写空间
     if len(body.content.encode("utf-8")) > MAX_ENTRY_CHARS * 2:
         raise HTTPException(status_code=400, detail="内容超出上限")
-    from noesis.services.memory.store import IndexEntry
+    from noesis.memory.store import IndexEntry
 
     path.write_text(body.content, encoding="utf-8")
     front = MemoryStore.read_entry_file(path)
@@ -189,7 +187,6 @@ async def delete_memory_entry(
     request: Request,
     current_user: CurrentUser = Depends(get_current_user),
 ):
-    await require_csrf(request)
     try:
         removed = MemoryStore.remove_entry(current_user.user_id, memory_type, slug)
     except ValueError as e:
@@ -220,7 +217,6 @@ async def rebuild_memory_index(
     request: Request,
     current_user: CurrentUser = Depends(get_current_user),
 ):
-    await require_csrf(request)
     state = MemoryStore.rebuild_index(current_user.user_id)
     return ResponseUtil.success(msg="索引已重建", data={"entries": len(state.entries)})
 
@@ -244,7 +240,6 @@ async def put_user_memory_file(
     request: Request,
     current_user: CurrentUser = Depends(get_current_user),
 ):
-    await require_csrf(request)
     try:
         data = UserMemoryService.write_file(current_user.user_id, file_name, body.content)
     except ValueError as e:
@@ -279,7 +274,6 @@ async def parse_scheduled_task(
     current_user: CurrentUser = Depends(get_current_user),
 ):
     """自然语言解析为定时任务草稿，前端拿回预填表单后二次确认提交。"""
-    await require_csrf(request)
     body = await request.json()
     text = str(body.get("text") or "").strip()
     if not text:
@@ -323,7 +317,6 @@ async def create_scheduled_task(
     current_user: CurrentUser = Depends(get_current_user),
     db: AsyncSession = Depends(get_db),
 ):
-    await require_csrf(request)
     try:
         item = await ScheduledTaskService.create_task(
             db, current_user.user_id, body.model_dump()
@@ -355,7 +348,6 @@ async def update_scheduled_task(
     current_user: CurrentUser = Depends(get_current_user),
     db: AsyncSession = Depends(get_db),
 ):
-    await require_csrf(request)
     try:
         item = await ScheduledTaskService.update_task(
             db,
@@ -379,7 +371,6 @@ async def delete_scheduled_task(
     current_user: CurrentUser = Depends(get_current_user),
     db: AsyncSession = Depends(get_db),
 ):
-    await require_csrf(request)
     ok = await ScheduledTaskService.delete_task(db, current_user.user_id, task_id)
     if not ok:
         return ResponseUtil.not_found(msg="任务不存在")
@@ -395,7 +386,6 @@ async def enable_scheduled_task(
     current_user: CurrentUser = Depends(get_current_user),
     db: AsyncSession = Depends(get_db),
 ):
-    await require_csrf(request)
     item = await ScheduledTaskService.set_enabled(db, current_user.user_id, task_id, True)
     if item is None:
         return ResponseUtil.not_found(msg="任务不存在")
@@ -409,7 +399,6 @@ async def disable_scheduled_task(
     current_user: CurrentUser = Depends(get_current_user),
     db: AsyncSession = Depends(get_db),
 ):
-    await require_csrf(request)
     item = await ScheduledTaskService.set_enabled(db, current_user.user_id, task_id, False)
     if item is None:
         return ResponseUtil.not_found(msg="任务不存在")
@@ -424,7 +413,6 @@ async def run_scheduled_task_once(
     db: AsyncSession = Depends(get_db),
     idempotency_key: Optional[str] = Header(default=None, alias="Idempotency-Key"),
 ):
-    await require_csrf(request)
     try:
         item = await ScheduledTaskService.run_once(db, current_user.user_id, task_id, idempotency_key)
     except ValueError as e:
@@ -469,7 +457,6 @@ async def retry_scheduled_task_run(
     current_user: CurrentUser = Depends(get_current_user),
     db: AsyncSession = Depends(get_db),
 ):
-    await require_csrf(request)
     try:
         run = await ScheduledTaskService.retry_run(db, current_user.user_id, run_id, idempotency_key)
     except ValueError as exc:
@@ -497,7 +484,6 @@ async def create_channel(
     current_user: CurrentUser = Depends(get_current_user),
     db: AsyncSession = Depends(get_db),
 ):
-    await require_csrf(request)
     try:
         payload = body.model_dump()
         if body.bot_token:
@@ -521,7 +507,6 @@ async def update_channel(
     current_user: CurrentUser = Depends(get_current_user),
     db: AsyncSession = Depends(get_db),
 ):
-    await require_csrf(request)
     try:
         await _validate_channel_session(db, current_user.user_id, body.session_strategy, body.default_session_id)
         item = MessagingChannelService.update_channel(
@@ -543,7 +528,6 @@ async def delete_channel(
     current_user: CurrentUser = Depends(get_current_user),
     db: AsyncSession = Depends(get_db),
 ):
-    await require_csrf(request)
     try:
         MessagingChannelService.delete_channel(current_user.user_id, channel_id)
     except KeyError:
@@ -564,7 +548,6 @@ async def _validate_channel_session(db: AsyncSession, user_id: str, strategy: st
 @user_settings_router.post("/channels/{channel_id}/test-connection")
 async def test_channel_connection(channel_id: str, request: Request, current_user: CurrentUser = Depends(get_current_user), db: AsyncSession = Depends(get_db)):
     from noesis.services.channel_operations_service import ChannelOperationsService
-    await require_csrf(request)
     try:
         result = await ChannelOperationsService.test_connection(current_user.user_id, channel_id)
     except KeyError:
@@ -577,7 +560,6 @@ async def test_channel_connection(channel_id: str, request: Request, current_use
 @user_settings_router.post("/channels/{channel_id}/test-delivery")
 async def test_channel_delivery(channel_id: str, request: Request, current_user: CurrentUser = Depends(get_current_user), db: AsyncSession = Depends(get_db)):
     from noesis.services.channel_operations_service import ChannelOperationsService
-    await require_csrf(request)
     try:
         result = await ChannelOperationsService.test_delivery(current_user.user_id, channel_id)
     except KeyError:

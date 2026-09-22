@@ -2,6 +2,7 @@
 
 > 状态：Current
 > 关联 OpenSpec：`agent-delivery`、`platform-chat`、`container-deployment`
+> 多实例与跨进程信令的扩展见 `enable-distributed-sse-pubsub`（已落地：leader 选举、Redis Run bus、durable command）；本文「单 active backend」相关表述以该变更后的现状为准。
 
 ## 1. 目标与边界
 
@@ -88,7 +89,7 @@ completed | partial | error | interrupted
 - create/get/stream/stop/HITL 均按 `(run_id, current_user_id)` 鉴权。
 - active-run 先验证 session 所属用户，跨用户统一 404。
 - active Run、单用户 Run、输出 bytes、run duration、HITL timeout、replay bytes、subscriber queue 与 terminal retention 均有明确上限。
-- PostgreSQL advisory lock 保护单 active backend；不能通过增加 Uvicorn worker 扩容。
+- 执行面由 PostgreSQL advisory lock + leader 选举仲裁：单 execution leader（redis 模式下 Web worker 可水平扩展，leader 面在晋升实例上运行，见 `enable-distributed-sse-pubsub` 落地与决策记录 `2026-09-20-分布式SSE与多实例部署落地`）。
 
 ## 8. 失败处理
 
@@ -132,11 +133,10 @@ RunManager 暴露：
 
 ## 12. 已知限制
 
-- 只支持单 active backend，不支持 owner lease、fencing 或跨进程接管。
+- 执行面仍为单 leader：多实例 = 多 Web worker + 晋升式 leader（任期 fencing 经 `t_runtime_leader`，durable command 认领 SKIP LOCKED）；**不**支持多实例同时执行 Run 或后台任务——执行外置是独立改造线（见决策记录 `2026-09-20-后台任务追加消息命令化` 边界说明）。
 - 进程崩溃只保留最近 checkpoint，内存 replay token 会丢失。
 - Channel outbound 不是 durable spool。
 - PostgreSQL 持续不可用时，系统选择有界停止而不是继续生成无法保存的内容。
-- `TEST_CASE_QA` 不使用本 Run 主路径。
 
 ## 13. 关联资料
 

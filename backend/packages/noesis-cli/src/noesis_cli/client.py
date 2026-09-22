@@ -1,12 +1,13 @@
 """Agent construction + checkpointer lifecycle for Noesis CLI.
 
-Reuses Agent classes (SuperAgent/GeneralQAAgent/SimpleMCPAgent) with an
+Reuses Agent classes (SuperAgent/GeneralQAAgent) with an
 in-memory MemorySaver via temporary_checkpointer — same pattern as
 evals/bootstrap.py:eval_runtime, but self-contained (no evals import).
 """
 
 from __future__ import annotations
 
+import logging
 import os
 import uuid
 from collections.abc import AsyncGenerator
@@ -16,7 +17,6 @@ from typing import Any
 from langgraph.checkpoint.memory import MemorySaver
 
 from noesis.agents.common_qa import GeneralQAAgent
-from noesis.agents.simple_mcp import SimpleMCPAgent
 from noesis.agents.super_agent import SuperAgent
 from noesis.config.checkpointer import temporary_checkpointer
 
@@ -25,7 +25,6 @@ QA_TYPE_MAP: dict[str, type] = {
     "super_agent": SuperAgent,
     "common": GeneralQAAgent,
     "common_qa": GeneralQAAgent,
-    "simple_mcp": SimpleMCPAgent,
 }
 
 #: qa_type CLI 名 → Agent run_agent 的 qa_type 参数（None 表示不传）
@@ -34,7 +33,6 @@ _QA_TYPE_ENUM = {
     "super_agent": "SUPER_AGENT_QA",
     "common": "COMMON_QA",
     "common_qa": "COMMON_QA",
-    "simple_mcp": None,
 }
 
 
@@ -55,8 +53,13 @@ def wire_langfuse() -> None:
 
     Agent 流式路径（noesis/runtime/stream.py）的 Langfuse 注入按 deps 开关
     门控，CLI 进程不经过 FastAPI lifespan，必须自行做与 server/wiring.py
-    相同的绑定，否则逐 LLM/工具调用 trace 静默丢失。独立安装（无 server
-    包可导入）时静默跳过。
+    相同的绑定，否则逐 LLM/工具调用 trace 静默丢失。
+
+    console script 的 sys.path 不含仓库 backend 目录（驱动方 driver 以
+    PYTHONPATH 兜底，直接 shell 跑没有）——`import server` 会 ImportError，
+    曾被静默吞掉造成「凭据齐全却无 trace」的摄入链路误诊；此处自动补
+    backend 根目录后再导入，仍失败则大声警告。独立安装（无 server 包）
+    时静默跳过。
     """
     if not (
         os.environ.get("LANGFUSE_PUBLIC_KEY", "").strip()
@@ -67,7 +70,21 @@ def wire_langfuse() -> None:
         from server.langfuse import sync_langfuse_env_from_app_config
         from server.wiring import wire_runtime_observability
     except ImportError:
-        return
+        import sys
+        from pathlib import Path
+
+        backend_root = Path(__file__).resolve().parents[4]
+        if backend_root.is_dir():
+            sys.path.insert(0, str(backend_root))
+        try:
+            from server.langfuse import sync_langfuse_env_from_app_config
+            from server.wiring import wire_runtime_observability
+        except ImportError:
+            logging.getLogger(__name__).warning(
+                "LANGFUSE_* 凭据已配置但 server 包不可导入，本进程 Langfuse "
+                "tracing 不生效（独立安装预期行为）"
+            )
+            return
     sync_langfuse_env_from_app_config()
     wire_runtime_observability()
 
@@ -109,46 +126,6 @@ def apply_env_model_direct(model_id: str | None) -> str | None:
     return wire_name
 
 
-def _is_uuid(value: str) -> bool:
-    try:
-        uuid.UUID(value)
-        return True
-    except (ValueError, AttributeError):
-        return False
-
-
-async def _ensure_session_row(session_id: str, user_id: str, title: str) -> None:
-    """补建父会话行：子 Agent 派发按 parent 会话查血缘，无行则派发失败
-    （生产由会话 API 先建行）。一次性 engine，进程退出即释放。
-
-    user_id 须为合法 UUID（t_chat_session.user_id 为 UUID 列）；
-    非法或数据库不可达时抛错——print 模式的评测宁可失败也不要静默降级。
-    """
-    if not _is_uuid(user_id):
-        raise ValueError(
-            f"NOESIS_USER_ID 须为合法 UUID 才能落会话行（当前 {user_id!r}）；"
-            f"子 Agent 派发需要会话血缘"
-        )
-    if len(session_id) > 36:
-        raise ValueError("session id 超长（t_chat_session.id VARCHAR(36)）")
-
-    from noesis.services.chat_service import ChatService
-    from noesis.storage.postgres.manager import ASYNC_SQLALCHEMY_DATABASE_URL
-    from sqlalchemy.ext.asyncio import async_sessionmaker, create_async_engine
-
-    engine = create_async_engine(ASYNC_SQLALCHEMY_DATABASE_URL)
-    try:
-        async with async_sessionmaker(bind=engine, expire_on_commit=False)() as db:
-            existing = await ChatService.get_session_by_id(
-                session_id, user_id=user_id, db=db)
-            if existing is None:
-                db.add(ChatService.build_session(
-                    user_id=user_id, title=title[:60], session_id=session_id))
-                await db.commit()
-    finally:
-        await engine.dispose()
-
-
 class ChatSession:
     """多轮会话:持有 MemorySaver + thread_id,跨 turn 复用。"""
 
@@ -158,7 +135,6 @@ class ChatSession:
         qa_type: str,
         model_id: str | None,
         thread_id: str | None = None,
-        ensure_session_row: bool = False,
         kb_collections: list[str] | None = None,
         web_search_enabled: bool = True,
     ) -> None:
@@ -166,10 +142,8 @@ class ChatSession:
         self.model_id = model_id
         self.thread_id = thread_id or f"cli-{uuid.uuid4().hex[:12]}"
         self.user_id = current_user_id()
-        self.ensure_session_row = ensure_session_row
         self.kb_collections = [c.strip() for c in kb_collections or [] if c.strip()]
         self.web_search_enabled = web_search_enabled
-        self._row_ready = False
         self._kb_ready = False
         self.checkpointer = MemorySaver()
         self.agent = resolve_agent_class(qa_type)()
@@ -178,16 +152,18 @@ class ChatSession:
         """进入 temporary_checkpointer 上下文,注入 in-memory checkpointer。
 
         必须包住所有 run_turn 调用;Agent 内部 self.checkpointer 读此 ContextVar。
+        CLI 是组合根:SuperAgent 的子会话操作走 agents.background.ports,
+        此处一并注册服务侧实现(幂等)。
         """
+        from noesis.services.runtime_ports import register_runtime_ports
+
+        register_runtime_ports()
         return temporary_checkpointer(self.checkpointer)
 
     async def run_turn(
         self, query: str, *, enabled_skills: list[str] | None = None
     ) -> AsyncGenerator[dict[str, Any], None]:
         """单轮对话:调 agent.run_agent,yield 事件 dict。"""
-        if self.ensure_session_row and not self._row_ready:
-            await _ensure_session_row(self.thread_id, self.user_id, title=query)
-            self._row_ready = True
         if self.kb_collections and not self._kb_ready:
             from noesis.knowledge.runtime import init_knowledge_base
 
@@ -222,14 +198,11 @@ async def _run_agent_turn(
 ) -> AsyncGenerator[dict[str, Any], None]:
     """调用 agent.run_agent(),签名因 Agent 类而异。
 
-    - SimpleMCPAgent: 只接受 query, session_id
     - GeneralQAAgent: kb_collections 提供即启用 KB 检索（默认关,跳过 Qdrant）
     - SuperAgent: 传 db=None 跳过平台 DB 依赖；enabled_skills 仅 SuperAgent 支持
     """
     qa_enum = _QA_TYPE_ENUM.get(qa_type)
-    if isinstance(agent, SimpleMCPAgent):
-        agen = agent.run_agent(query, session_id=thread_id)
-    elif isinstance(agent, GeneralQAAgent):
+    if isinstance(agent, GeneralQAAgent):
         agen = agent.run_agent(
             query,
             session_id=thread_id,

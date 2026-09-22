@@ -62,7 +62,7 @@ def test_hitl_resume_replay_updates_original_tool_part() -> None:
         "name": "execute",
         "input": {"command": "curl example.com"},
     }
-    projection.apply(WireFrame("tool-call-start", tool_input))
+    projection.apply(WireFrame("tool-input-start", tool_input))
     projection.apply(WireFrame("tool-input-available", tool_input))
     projection.apply(HitlRequired({
         "interrupt_id": "interrupt-1",
@@ -146,11 +146,14 @@ def test_run_projection_rolls_back_stream_on_rollback_frame() -> None:
         "output": "ok",
         "status": "success",
     }))
-    # 失败尝试的部分流式输出（重试前的正文与思考）
-    projection.apply(WireFrame("reasoning-delta", {"text_delta": "Now Phase 6:"}))
-    projection.apply(WireFrame("text-delta", {"text_delta": "Phase 3-5 完成。"}))
-    # 重试信号：回滚
-    projection.apply(WireFrame("stream-rollback", {"message_id": "message-1", "scope": "model_attempt"}))
+    # 失败尝试的部分流式输出（重试前的正文与思考，带 part_id 供回滚点名）
+    projection.apply(WireFrame("reasoning-delta", {"text_delta": "Now Phase 6:", "part_id": "p-fail-reasoning"}))
+    projection.apply(WireFrame("text-delta", {"text_delta": "Phase 3-5 完成。", "part_id": "p-fail-text"}))
+    # 重试信号：按 part_ids 回滚
+    projection.apply(WireFrame("stream-rollback", {
+        "message_id": "message-1", "scope": "model_attempt",
+        "part_ids": ["p-fail-reasoning", "p-fail-text"],
+    }))
     # 重试成功后的新输出
     projection.apply(WireFrame("text-delta", {"text_delta": "重试后的正文。"}))
 
@@ -160,3 +163,21 @@ def test_run_projection_rolls_back_stream_on_rollback_frame() -> None:
     assert types == ["text", "tool", "text"]
     assert parts[0]["content"] == "第一段正文。"
     assert parts[2]["content"] == "重试后的正文。"
+
+
+def test_stream_rollback_drops_only_named_part_ids() -> None:
+    """stream-rollback 按 part_ids 点名丢弃——失败尝试的 part 与更早的正文
+    part 同为 text 类型，旧「尾部弹回」会把压缩分割线等前文一起误删。"""
+    projection = RunProjection(
+        run_id="run-rollback-ids",
+        user_id="user-1",
+        session_id="session-1",
+        assistant_message_id="message-1",
+        qa_type="SUPER_AGENT_QA",
+    )
+    projection.apply(WireFrame("text-delta", {"part_id": "p-keep", "text_delta": "旧正文"}))
+    projection.apply(WireFrame("text-delta", {"part_id": "p-drop", "text_delta": "失败尝试"}))
+    projection.apply(WireFrame("stream-rollback", {"part_ids": ["p-drop"]}))
+    text = "".join(p.get("content") or "" for p in projection.builder.to_dict()["parts"])
+    assert "旧正文" in text
+    assert "失败尝试" not in text

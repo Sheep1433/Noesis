@@ -1,8 +1,10 @@
 <script setup lang="ts">
-import { NDrawer, NDrawerContent } from 'naive-ui'
 import SubagentConversationView from '@/components/SubagentConversationView/index.vue'
-import { useResponsiveDrawerWidth } from '@/hooks/useResponsiveDrawerWidth'
+import SubagentSessionDrawer from '@/components/SubagentSessionDrawer/index.vue'
 
+// 单任务对话抽屉 = 共享壳 + 内嵌对话视图。
+// 任务列表入口（TaskListPanel）需要列表/详情切换，直接用壳；
+// 本组合只补「视图内嵌 + 标题默认」这一层，宽度/遮罩逻辑全部在壳里。
 const props = withDefaults(defineProps<{
   sessionId: string
   runId?: string | null
@@ -14,26 +16,15 @@ const props = withDefaults(defineProps<{
 
 const emit = defineEmits<{ (event: 'changed'): void }>()
 const show = defineModel<boolean>('show', { default: false })
-const { drawerWidth } = useResponsiveDrawerWidth({ max: 760, mobileRatio: 0.96 })
 </script>
 
 <template>
-  <n-drawer v-model:show="show" placement="right" :width="drawerWidth">
-    <n-drawer-content :title="props.title" closable>
-      <SubagentConversationView
-        :session-id="props.sessionId"
-        :run-id="props.runId"
-        :active="show"
-        @changed="emit('changed')"
-      />
-    </n-drawer-content>
-  </n-drawer>
+  <SubagentSessionDrawer v-model:show="show" :title="props.title">
+    <SubagentConversationView
+      :session-id="props.sessionId"
+      :run-id="props.runId"
+      :active="show"
+      @changed="emit('changed')"
+    />
+  </SubagentSessionDrawer>
 </template>
-
-<style scoped lang="scss">
-:deep(.n-drawer-header__main) {
-  overflow: hidden;
-  white-space: nowrap;
-  text-overflow: ellipsis;
-}
-</style>

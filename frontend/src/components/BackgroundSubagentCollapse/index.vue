@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import type { TaskCatalogEntry } from '@/api/chat'
+import type { SessionTaskEntry } from '@/api/chat'
 import type { ToolUiPart } from '@/views/chat/messageParts'
 import { GitNetworkOutline } from '@vicons/ionicons-v5'
 import { computed, ref } from 'vue'
@@ -7,7 +7,7 @@ import SubagentConversationDrawer from '@/components/SubagentConversationDrawer/
 
 const props = defineProps<{
   toolPart: ToolUiPart
-  task?: TaskCatalogEntry
+  task?: SessionTaskEntry
 }>()
 
 const show = ref(false)

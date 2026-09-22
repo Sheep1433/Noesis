@@ -35,7 +35,7 @@ from evals.agent.memory.runner import (
     run_negative_sample,
     seed_eval_memory,
 )
-from evals.agent.rag.judge import judge_answer
+from evals.agent.judge import judge_answer
 from evals.agent.rag.__main__ import (
     _is_error,
     append_raw_record,
@@ -96,8 +96,8 @@ def _run(args: argparse.Namespace) -> int:
     from noesis.llm import get_llm
 
     # judge 在宿主机侧运行（单次 LLM 调用，不进 CLI 子进程），沿用用户模型
-    # 绑定；被测模型走 CLI 子进程的 env 直连（evals/.env 的 NOESIS_*），
-    # --model-id 即端点真实模型名
+    # 绑定；被测模型经 CLI 子进程走生产 DB 模型解析，--model-id 须为内置
+    # 目录 id 或评测账号的自定义模型复合 id（如 provider/model）
     judge_user = args.judge_model_user or args.model_user
     if judge_user:
         judge_snapshot_id = bind_user_model_sync(judge_user, args.judge_model_id)

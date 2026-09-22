@@ -13,7 +13,7 @@ from noesis.agents.tools.history_search_tool import (
     SearchSessionsInput,
     build_history_search_tools,
 )
-from noesis.services.history_search import (
+from noesis.repositories.history_search import (
     HistoryHit,
     SessionAccessDenied,
     SessionGroup,

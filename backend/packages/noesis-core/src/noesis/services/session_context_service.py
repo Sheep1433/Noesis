@@ -26,8 +26,8 @@ from noesis.config.user_data_paths import (
 from noesis.schemas.session_context_vo import FsTreeNode, SessionContextResponse
 
 from noesis.services.chat_service import ChatService
-from noesis.services.memory.store import IndexEntry, MemoryStore
-from noesis.services.memory.types import MEMORY_TYPES
+from noesis.memory.store import IndexEntry, MemoryStore
+from noesis.memory.types import MEMORY_TYPES
 from noesis.services.skill_fs_service import SkillFsService
 
 # 浏览器整文件文本通道上限（预览读 / 面板保存写）。约束方主要是访问者的浏览器
@@ -341,11 +341,7 @@ class SessionContextService:
     ) -> tuple[str, bytes, str]:
         await cls._ensure_owned(session_id, user_id, db)
         rel_norm = cls._normalize_archive_path(rel_path, session_id)
-        root = str(get_user_root(user_id))
-        try:
-            full = SkillFsService._safe_join(root, rel_norm)
-        except ValueError:
-            raise ServiceException(message='非法路径')
+        full = cls._resolve_user_file_path(user_id, rel_norm)
         if not os.path.exists(full):
             raise NotFoundException(message="路径不存在")
 
@@ -391,11 +387,7 @@ class SessionContextService:
     ) -> tuple[str, str]:
         await cls._ensure_owned(session_id, user_id, db)
         rel_norm = cls._normalize_rel_path(rel_path, session_id)
-        root = str(get_user_root(user_id))
-        try:
-            full = SkillFsService._safe_join(root, rel_norm)
-        except ValueError:
-            raise ServiceException(message='非法路径')
+        full = cls._resolve_user_file_path(user_id, rel_norm)
         if not os.path.isfile(full):
             raise NotFoundException(message="不是文件或不存在")
         size = os.path.getsize(full)
@@ -406,6 +398,20 @@ class SessionContextService:
                 return rel_norm, handle.read()
         except OSError as exc:
             raise ServiceException(message=f"读取失败: {exc}") from exc
+
+    @classmethod
+    def _resolve_user_file_path(cls, user_id: str, rel_norm: str) -> str:
+        """面板键 → 宿主路径：根文件走 getter（memory/ 子树内），
+        其余 user-root 相对键经 _safe_join（防穿越）。
+        """
+        if rel_norm == 'AGENTS.md':
+            return str(get_user_agents_md_path(user_id))
+        if rel_norm == 'USER.md':
+            return str(get_user_profile_md_path(user_id))
+        try:
+            return SkillFsService._safe_join(str(get_user_root(user_id)), rel_norm)
+        except ValueError:
+            raise ServiceException(message='非法路径')
 
     @classmethod
     def _validate_write_size(cls, content: str) -> None:
@@ -425,11 +431,7 @@ class SessionContextService:
         rel_norm = cls._normalize_rel_path(rel_path, session_id)
         if rel_norm.startswith('memory/'):
             return cls._write_memory_file(user_id, rel_norm, content)
-        root = str(get_user_root(user_id))
-        try:
-            full = SkillFsService._safe_join(root, rel_norm)
-        except ValueError:
-            raise ServiceException(message='非法路径')
+        full = cls._resolve_user_file_path(user_id, rel_norm)
         if not os.path.isfile(full):
             raise NotFoundException(message="不是文件或不存在")
         cls._validate_write_size(content)

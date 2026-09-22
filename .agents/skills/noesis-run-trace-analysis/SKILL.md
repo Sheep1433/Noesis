@@ -14,17 +14,21 @@ description: >-
 本地优先：**Postgres + backend logs = 默认事实来源**；**Langfuse = 可选的模型级观测补充**。
 不要因为 Langfuse 不可达就放弃本地分析，也不要只看一条 trace 或只信 `status=success`。
 
-Noesis 连接细节、API、陷阱见 [references/reference.md](references/reference.md)。
-
 ## 会话轨迹可视化（两种官方用法）
 
 **用法一：本地服务直连 Postgres（实时，含 codex/opencode 多源）**
 
 ```bash
-cd backend && uv run python   ../.agents/skills/noesis-run-trace-analysis/references/session_viewer.py   [--codex ~/.codex/sessions] [--opencode <db>] [--recent 100]
+cd backend && uv run python   ../.agents/skills/noesis-run-trace-analysis/references/session_viewer.py
 ```
 
-浏览器自动打开 http://127.0.0.1:8899；数据实时查库，头部下拉切换数据源。
+裸命令即全量加载：noesis（Postgres 直连，实时查库）必挂，检测到默认路径
+自动挂 codex（`~/.codex/sessions`）、opencode
+（`~/.local/share/opencode/opencode.db`，列表首次加载约 2s）与 claude-code
+（`~/.claude/projects`，主会话 + Task 子 Agent 转录挂子会话树）；浏览器自动
+打开 http://127.0.0.1:8899，头部下拉切换数据源。`--opencode <db>` /
+`--codex <dir>` / `--claude-code <dir>` / `--port` 四个可选参数用于非默认
+位置或改端口。
 扩展新数据源：实现 Provider 基类（list_sessions / get_messages，契约见
 session_viewer.py 模块 docstring）并注册进 PROVIDERS。
 

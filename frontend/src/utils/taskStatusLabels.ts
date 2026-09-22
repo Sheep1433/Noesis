@@ -1,8 +1,8 @@
-import type { AgentRunStatus, TaskCatalogEntry } from '@/api/chat'
+import type { AgentRunStatus, SessionTaskEntry } from '@/api/chat'
 
 /**
  * 任务状态文案的统一来源：消息流任务卡（BackgroundSubagentCollapse）、
- * 任务目录抽屉（TaskCatalogPanel）、子会话视图（SubagentConversationView）
+ * 任务目录抽屉（TaskListPanel）、子会话视图（SubagentConversationView）
  * 共用，避免三处手抄漂移。
  *
  * launching / launched 是任务卡专用的 UI 伪状态：目录未匹配时只描述
@@ -10,7 +10,7 @@ import type { AgentRunStatus, TaskCatalogEntry } from '@/api/chat'
  */
 export type TaskStatusKey =
   | AgentRunStatus
-  | TaskCatalogEntry['status']
+  | SessionTaskEntry['status']
   | 'launching'
   | 'launched'
 

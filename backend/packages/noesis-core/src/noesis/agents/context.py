@@ -5,14 +5,15 @@ from __future__ import annotations
 from dataclasses import asdict, dataclass
 from pathlib import Path
 
-from noesis.agents.backends.memory import UserMemoryBackend
-from noesis.agents.backends.paths import (
+from noesis.paths import (
     AGENT_MEMORY_AGENTS_FILE,
     AGENT_MEMORY_INDEX_FILE,
+    AGENT_MEMORY_ROUTE,
     AGENT_MEMORY_USER_FILE,
 )
+from noesis.memory.layout import ensure_user_memory_files
+from noesis.memory.store import MemoryStore
 from noesis.config.user_data_paths import (
-    ensure_user_memory_files,
     get_user_agents_md_path,
     get_user_memory_index_path,
     get_user_profile_md_path,
@@ -54,30 +55,24 @@ def render_memory_block(user_id: str | int, memory_sources: tuple[str, ...]) -> 
     guidelines；HTML 注释剥离），供预览与真实注入共用格式。
 
     deepagents 0.6.12 的 ``MemoryMiddleware._format_agent_memory`` 是该格式
-    的唯一实现；经实例调用而非复制，防两套格式漂移。读取经 UserMemoryBackend
-    （键剥 /memory 路由前缀，与 Composite 运行时派发一致），渲染仍以完整
-    source 路径为键——与真实注入的路径头逐字一致。
+    的唯一实现；经实例调用而非复制，防两套格式漂移。source 路径即 agent
+    可见路径（/memory/...），宿主文件在用户 memory/ 子树（布局见
+    noesis.memory.layout）直接读取，以完整 source 路径为键——与真实注入
+    的路径头逐字一致。
     """
     from deepagents.middleware.memory import MemoryMiddleware
 
-    from noesis.agents.backends.paths import AGENT_MEMORY_ROUTE
-
-    backend = UserMemoryBackend(
-        agents_path=get_user_agents_md_path(user_id),
-        user_path=get_user_profile_md_path(user_id),
-        user_id=str(user_id),
-    )
+    memory_root = MemoryStore.memory_root(user_id)
     middleware = MemoryMiddleware(
-        backend=backend,
+        backend=None,
         sources=list(memory_sources),
         system_prompt=NOESIS_MEMORY_SYSTEM_PROMPT,
     )
-    stripped = [source.removeprefix(AGENT_MEMORY_ROUTE) for source in memory_sources]
     contents: dict[str, str] = {}
-    responses = backend.download_files(stripped)
-    for source, response in zip(memory_sources, responses, strict=True):
-        if response.error is None and response.content is not None:
-            contents[source] = response.content.decode("utf-8")
+    for source in memory_sources:
+        host = memory_root / source.removeprefix(AGENT_MEMORY_ROUTE)
+        if host.is_file():
+            contents[source] = host.read_text(encoding="utf-8", errors="replace")
     return middleware._format_agent_memory(contents, NOESIS_MEMORY_SYSTEM_PROMPT)  # noqa: SLF001
 
 

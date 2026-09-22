@@ -49,25 +49,17 @@ def ensure_user_root(user_id: str | int) -> Path:
     return _ensure_sandbox_dir(get_user_root(user_id))
 
 
-_AGENTS_MD_SEED = """<!-- Noesis 用户记忆：Agent 会在你明确要求「记住」时更新此文件 -->
-## 关于我
-
-## 工作偏好
-"""
-
-_USER_MD_SEED = """<!-- Noesis 用户画像：可在设置页或上下文面板编辑 -->
-## 基本信息
-"""
-
-
 def get_user_agents_md_path(user_id: str | int) -> Path:
-    """返回用户 AGENTS.md 路径（跨会话，不创建）。"""
-    return get_user_root(user_id) / "AGENTS.md"
+    """返回用户 AGENTS.md 路径（`.noesis/users/{id}/memory/`，跨会话，不创建）。
+
+    布局与 seed 见 ``noesis.memory.layout``。
+    """
+    return get_user_root(user_id) / "memory" / "AGENTS.md"
 
 
 def get_user_profile_md_path(user_id: str | int) -> Path:
-    """返回用户 USER.md 路径（跨会话，不创建）。"""
-    return get_user_root(user_id) / "USER.md"
+    """返回用户 USER.md 路径（`.noesis/users/{id}/memory/`，跨会话，不创建）。"""
+    return get_user_root(user_id) / "memory" / "USER.md"
 
 
 def get_user_memory_index_path(user_id: str | int) -> Path:
@@ -83,18 +75,6 @@ def get_user_channels_path(user_id: str | int) -> Path:
 def ensure_user_channels_path(user_id: str | int) -> Path:
     ensure_user_root(user_id)
     return get_user_channels_path(user_id)
-
-
-def ensure_user_memory_files(user_id: str | int) -> Path:
-    """创建用户根目录并 seed AGENTS.md / USER.md（若不存在）。"""
-    root = ensure_user_root(user_id)
-    agents = get_user_agents_md_path(user_id)
-    if not agents.is_file():
-        agents.write_text(_AGENTS_MD_SEED, encoding="utf-8")
-    profile = get_user_profile_md_path(user_id)
-    if not profile.is_file():
-        profile.write_text(_USER_MD_SEED, encoding="utf-8")
-    return root
 
 
 def get_user_skills_dir(user_id: str | int) -> Path:
