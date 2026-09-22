@@ -68,8 +68,9 @@ GET /api/chat/runs/{run_id}/stream?after_sequence=N
 
 run 内容流之外有两条**轻量信令流**，只推定位符（`run-started | run-hitl-pending | run-terminal`），不推内容：
 
-- `GET /api/chat/sessions/{session_id}/events`（event: `session-signal`）——同一会话的其它窗口（跨浏览器、跨设备）实时发现活跃 run，收到后经 `active-run` / `runs/{run_id}` 取权威状态并加入订阅。建连先下发当前 active run 作为首帧，覆盖「窗口先连、run 后建」之外的所有时序；超订阅数 429/`SESSION_SIGNAL_LIMIT`。
-- `GET /api/chat/events/stream`（event: `user-signal`）——该用户**任意**会话的 run 状态变化（携带 `session_id`/`status`），会话列表据此 patch 行级 run_status；建连先下发用户全部活跃 run。超订阅数 429/`USER_SIGNAL_LIMIT`。
+- 任务清单流 `GET /api/chat/sessions/{session_id}/tasks/stream`——该会话任务清单（子 Agent 摘要 `child-session`、后台命令条目 `bg-task`、续跑通知 `bg-continuation`）的实时更新；只推清单条目不推正文，正文由 child run 的内容流按需订阅。快照经同前缀的 `GET /sessions/{id}/tasks` 获取。
+
+> **已退役**（2026-09-21 下线，原「两条轻量信令流」）：`session-signal`（`/sessions/{id}/events`，跨窗口发现活跃 run）与 `user-signal`（`/events/stream`，会话列表实时刷新）。下线动机：浏览器 HTTP/1.1 同域 6 连接上限下，多标签页的信令流叠加 run 内容流直接挤占普通 API 请求配额（页面卡死的根因）；其职责由既有拉取路径承接——会话列表在进入/切换时全量刷新，活跃 run 经 `active-run` 端点发现。
 
 信令由 `RunManager` 在状态迁移点发布（`start()`/`resume()` 直接置 RUNNING 处，及 `transition()` 到 HITL_PENDING / 终态处；`chat/runs/{session_signals,user_signals}.py` 进程内总线，有界队列慢订阅丢帧）。**信令是 hint**：丢失或断线靠 `active-run` 自愈，不参与权威状态；流不主动结束，随页面关闭断开，15s 注释 keepalive。
 
@@ -101,7 +102,7 @@ run 内容流（`GET /api/chat/runs/{run_id}/stream`，主会话与子 Agent run
 
 **durable / transient**：durable 事件占 sequence、进有界重放缓存、按连续性校验重放；transient 事件（流式 `text-delta` / `reasoning-delta` / `stats-update`，载荷带 `transient: true`）不占号、只投在线订阅者，重连方由 `run-snapshot` 快照恢复。恢复模型一份：重连 = `getAgentRun` 快照 replace + durable 重放 + live 接收。
 
-历史兼容：`tool-call-start` 是 `tool-input-start` 的旧名，仅在 `runs/projection.py` 的重放路径中作为别名接受，新代码不得发射；`token-details`、`finish-step` 已不存在；`message.updated`（子会话旧全量投影事件）已退役——子会话内容投影由前端 `messageParts` appenders 从帧事件组装，与主聊天同一实现。
+退役事件名：`token-details`、`finish-step` 已不存在；`message.updated`（子会话旧全量投影事件）已退役——子会话内容投影由前端 `messageParts` appenders 从帧事件组装，与主聊天同一实现。
 
 ### 4.3 HITL 与停止
 

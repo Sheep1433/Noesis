@@ -547,6 +547,28 @@ class ChatService:
         return True
 
     @classmethod
+    async def get_message_detail(
+        cls,
+        message_id: str,
+        user_id: str,
+        db: AsyncSession,
+    ) -> Optional[TChatMessage]:
+        """单条消息详情（含 session 归属校验；非本人或不存在一律 None）。"""
+        result = await db.execute(
+            select(TChatMessage).where(TChatMessage.id == message_id)
+        )
+        message = result.scalar_one_or_none()
+        if message is None:
+            return None
+        session_result = await db.execute(
+            select(TChatSession).where(TChatSession.id == message.session_id)
+        )
+        session = session_result.scalar_one_or_none()
+        if session is None or session.user_id != str(user_id):
+            return None
+        return message
+
+    @classmethod
     async def get_session_messages(
             cls,
             session_id: str,

@@ -11,7 +11,7 @@
 后台执行器只能是运行时实现细节，不能成为产品数据模型、API 命名或前端展示模型。
 
 运行器与会话用例经 `noesis/agents/background/ports.py` 注册窄端口通信（接口归消费方，实现在 services 侧注册；组合根 `services/runtime_ports.register_runtime_ports` 保证启动即就绪），agents 不 import 任何 service 模块；
-目录与 shell job 由 `AgentCatalogService` / `ShellJobService` 暴露给 API。
+任务清单与 shell job 由 `SessionTaskService` / `ShellJobService` 暴露给 API。
 
 ## 为什么推翻现有 BgTask 中心方案
 

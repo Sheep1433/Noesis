@@ -115,11 +115,6 @@ def _attach_signal_bridges() -> None:
         bus=run_bus,
         origin=f"{socket.gethostname()}:{os.getpid()}:{uuid.uuid4().hex[:8]}",
     )
-    from noesis.chat.runs.session_signals import session_signal_bus
-    from noesis.chat.runs.user_signals import user_signal_bus
-
-    session_signal_bus.attach_bridge(bridge)
-    user_signal_bus.attach_bridge(bridge)
     from noesis.agents.background.jobs import events as bg_events
 
     bg_events.configure_bg_signal_bridge(bridge)
@@ -200,6 +195,24 @@ def _request_digest(request: CreateRunRequest) -> str:
 
 
 class RunService:
+    @staticmethod
+    async def run_times_for_session(session_id: str, db: AsyncSession) -> dict:
+        """run 生命周期时间（assistant 消息"本轮起止"投影源）。
+
+        消息表 updated_at 是 checkpoint 落库时间会被刷新，不能当完成时间；
+        run.finished_at 是终态专用——该语义属于 run 查询方（Service），
+        API/展示层不重复解释。
+        """
+        from noesis.repositories.agent_run_repository import AgentRunRepository
+
+        return await AgentRunRepository(db).get_run_times_for_session(session_id)
+
+    @staticmethod
+    async def active_runs_for_user(user_id: str, db: AsyncSession) -> list:
+        from noesis.repositories.agent_run_repository import AgentRunRepository
+
+        return await AgentRunRepository(db).get_active_runs_for_user(user_id)
+
     @staticmethod
     async def publish_projected_event(run_id, projection, event, publish):
         """原子 apply + publish：projection.apply 在 RunHandle lock 内执行，

@@ -1,31 +1,31 @@
-import type { TaskCatalogEntry } from '@/api/chat'
+import type { SessionTaskEntry } from '@/api/chat'
 
-interface ChildCatalogStreamCallbacks {
-  onTask: (task: TaskCatalogEntry) => void
+interface SessionTaskStreamCallbacks {
+  onTask: (task: SessionTaskEntry) => void
   onContinuation: (payload: Record<string, unknown>) => void
   onParseError?: (error: unknown) => void
 }
 
-export interface ChildCatalogEventSource {
+export interface SessionTaskEventSource {
   addEventListener: (type: string, listener: (event: MessageEvent) => void) => void
   close: () => void
 }
 
-type EventSourceFactory = (url: string) => ChildCatalogEventSource
+type EventSourceFactory = (url: string) => SessionTaskEventSource
 
-export function createChildCatalogEventSource(
+export function createSessionTaskEventSource(
   sessionId: string,
-  callbacks: ChildCatalogStreamCallbacks,
+  callbacks: SessionTaskStreamCallbacks,
   factory: EventSourceFactory = (url) => new EventSource(url),
-): ChildCatalogEventSource {
+): SessionTaskEventSource {
   const source = factory(
-    `${location.origin}/api/chat/sessions/${encodeURIComponent(sessionId)}/children/stream`,
+    `${location.origin}/api/chat/sessions/${encodeURIComponent(sessionId)}/tasks/stream`,
   )
   source.addEventListener('bg-task', (event) => {
     try {
       const payload = JSON.parse(event.data)
       if (payload?.task) {
-        callbacks.onTask(payload.task as TaskCatalogEntry)
+        callbacks.onTask(payload.task as SessionTaskEntry)
       }
     } catch (error) {
       callbacks.onParseError?.(error)
@@ -43,7 +43,7 @@ export function createChildCatalogEventSource(
           user_id: undefined,
           description: String(payload.child.title || '子 Agent'),
           kind: 'subagent',
-          status: (payload.child.status || 'completed') as TaskCatalogEntry['status'],
+          status: (payload.child.status || 'completed') as SessionTaskEntry['status'],
           run_id: payload.child.run_id || null,
           started_at: payload.child.started_at || undefined,
           completed_at: payload.child.finished_at || null,
@@ -65,7 +65,7 @@ export function createChildCatalogEventSource(
   return source
 }
 
-interface ActivateChildCatalogOptions {
+interface ActivateSessionTaskOptions {
   sessionId: string
   currentSessionId: string | null
   hasStream: boolean
@@ -74,7 +74,7 @@ interface ActivateChildCatalogOptions {
 }
 
 /** 首次物化或连接缺失时激活会话后台任务流，已有连接不重复重开。 */
-export function activateChildCatalogSession(options: ActivateChildCatalogOptions): void {
+export function activateSessionTaskStream(options: ActivateSessionTaskOptions): void {
   const shouldOpen = options.currentSessionId !== options.sessionId || !options.hasStream
   options.setCurrentSession(options.sessionId)
   if (shouldOpen) {

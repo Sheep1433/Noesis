@@ -8,7 +8,7 @@ from fastapi import APIRouter, Body, Depends, Request
 from pydantic import BaseModel
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from server.auth_dependencies import get_current_user, require_csrf
+from server.auth_dependencies import get_current_user
 from server.db import get_db
 from server.response import ResponseUtil
 from noesis.schemas.login_vo import CurrentUser
@@ -60,7 +60,6 @@ async def create_provider(
     current_user: CurrentUser = Depends(get_current_user),
     db: AsyncSession = Depends(get_db),
 ):
-    await require_csrf(request)
     provider = await UserLLMService.create_provider(
         db,
         user_id=current_user.user_id,
@@ -94,7 +93,6 @@ async def update_provider(
     current_user: CurrentUser = Depends(get_current_user),
     db: AsyncSession = Depends(get_db),
 ):
-    await require_csrf(request)
     provider = await UserLLMService.update_provider(
         db,
         user_id=current_user.user_id,
@@ -129,7 +127,6 @@ async def delete_provider(
     current_user: CurrentUser = Depends(get_current_user),
     db: AsyncSession = Depends(get_db),
 ):
-    await require_csrf(request)
     await UserLLMService.delete_provider(
         db, user_id=current_user.user_id, provider_id=provider_id
     )
@@ -166,7 +163,6 @@ async def update_llm_preferences(
     current_user: CurrentUser = Depends(get_current_user),
     db: AsyncSession = Depends(get_db),
 ):
-    await require_csrf(request)
     default_model_id = await UserLLMService.set_default_model(
         db, user_id=current_user.user_id, model_id=body.default_model_id
     )
@@ -198,7 +194,6 @@ async def discover_provider_models(
     current_user: CurrentUser = Depends(get_current_user),
     db: AsyncSession = Depends(get_db),
 ):
-    await require_csrf(request)
     result = await UserLLMService.discover_draft_models(
         db,
         user_id=current_user.user_id,
@@ -241,7 +236,6 @@ async def create_model(
     current_user: CurrentUser = Depends(get_current_user),
     db: AsyncSession = Depends(get_db),
 ):
-    await require_csrf(request)
     entry = await UserLLMService.create_model(
         db,
         user_id=current_user.user_id,
@@ -271,7 +265,6 @@ async def update_model(
     current_user: CurrentUser = Depends(get_current_user),
     db: AsyncSession = Depends(get_db),
 ):
-    await require_csrf(request)
     entry = await UserLLMService.update_model(
         db,
         user_id=current_user.user_id,
@@ -301,7 +294,6 @@ async def delete_model(
     current_user: CurrentUser = Depends(get_current_user),
     db: AsyncSession = Depends(get_db),
 ):
-    await require_csrf(request)
     await UserLLMService.delete_model(
         db, user_id=current_user.user_id, entry_id=entry_id
     )

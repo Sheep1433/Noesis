@@ -96,7 +96,7 @@ declare module 'vue' {
     SubagentConversationDrawer: typeof import('./src/components/SubagentConversationDrawer/index.vue')['default']
     SubagentConversationView: typeof import('./src/components/SubagentConversationView/index.vue')['default']
     SubagentSessionDrawer: typeof import('./src/components/SubagentSessionDrawer/index.vue')['default']
-    TaskCatalogPanel: typeof import('./src/components/TaskCatalogPanel/index.vue')['default']
+    TaskListPanel: typeof import('./src/components/TaskListPanel/index.vue')['default']
     ThemeSwitcher: typeof import('./src/components/ThemeSwitcher/index.vue')['default']
     TodoList: typeof import('./src/components/TodoList/index.vue')['default']
     ToolCallCollapse: typeof import('./src/components/ToolCallCollapse/index.vue')['default']

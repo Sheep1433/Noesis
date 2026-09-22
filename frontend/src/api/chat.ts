@@ -97,7 +97,7 @@ export interface ChildSessionCatalogItem {
   step_count: number
   started_at?: number | null
   finished_at?: number | null
-  interrupt?: TaskCatalogEntry['interrupt'] | null
+  interrupt?: SessionTaskEntry['interrupt'] | null
 }
 
 export interface ChildSessionCatalogResponse {
@@ -378,27 +378,16 @@ export async function stopAgentRun(runId: string): Promise<AgentRunSnapshot> {
   return parseResponse<AgentRunSnapshot>(await authFetch(req))
 }
 
-export async function stopShellTask(sessionId: string, taskId: string): Promise<TaskCatalogEntry> {
+export async function stopShellTask(sessionId: string, taskId: string): Promise<SessionTaskEntry> {
   const req = makeRequest(
     'POST',
     `${location.origin}${BASE}/sessions/${encodeURIComponent(sessionId)}/shell-jobs/${encodeURIComponent(taskId)}/stop`,
   )
-  return parseResponse<TaskCatalogEntry>(await authFetch(req))
-}
-
-/** 订阅会话级信令流（跨窗口发现活跃 run）；帧为 event: session-signal 的轻量定位符 */
-export async function subscribeSessionEvents(sessionId: string, signal?: AbortSignal): Promise<Response> {
-  const url = new URL(`${location.origin}${BASE}/sessions/${encodeURIComponent(sessionId)}/events`)
-  return authFetch(new Request(url, {
-    method: 'GET',
-    credentials: 'include',
-    headers: getAuthHeaders(),
-    signal,
-  }))
+  return parseResponse<SessionTaskEntry>(await authFetch(req))
 }
 
 /** 后台子 Agent 任务（含待审批） */
-export interface TaskCatalogEntry {
+export interface SessionTaskEntry {
   /** durable command 受理状态：completed | accepted | rejected | no_op（旧响应缺省） */
   command_status?: string
   command_id?: string
@@ -435,8 +424,8 @@ export interface TaskCatalogEntry {
   progress_count?: number
 }
 
-export async function listSessionTaskCatalog(sessionId: string): Promise<{ tasks: TaskCatalogEntry[] }> {
-  const req = makeRequest('GET', `${location.origin}${BASE}/sessions/${encodeURIComponent(sessionId)}/children/catalog`)
+export async function listSessionTasks(sessionId: string): Promise<{ tasks: SessionTaskEntry[] }> {
+  const req = makeRequest('GET', `${location.origin}${BASE}/sessions/${encodeURIComponent(sessionId)}/tasks`)
   return parseResponse(await authFetch(req))
 }
 
@@ -698,7 +687,7 @@ export async function sendSubagentMessage(
   message: string,
   modelId?: string,
   reasoningEffort?: string,
-): Promise<TaskCatalogEntry> {
+): Promise<SessionTaskEntry> {
   const body: Record<string, string> = { message }
   if (modelId) {
     body.model_id = modelId
@@ -711,7 +700,7 @@ export async function sendSubagentMessage(
     `${location.origin}${BASE}/sessions/${encodeURIComponent(sessionId)}/subagent-messages`,
     body,
   )
-  return parseResponse<TaskCatalogEntry>(await authFetch(req))
+  return parseResponse<SessionTaskEntry>(await authFetch(req))
 }
 
 /**

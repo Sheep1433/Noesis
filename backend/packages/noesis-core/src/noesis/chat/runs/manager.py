@@ -26,8 +26,6 @@ from noesis.chat.runs.models import (
 )
 from noesis.chat.runs.delivery_bus import DeliveryCore
 from noesis.chat.runs.publisher import RunEventPublisher
-from noesis.chat.runs.session_signals import session_signal_bus
-from noesis.chat.runs.user_signals import user_signal_bus
 
 
 class RunNotFound(KeyError):
@@ -532,7 +530,6 @@ class RunManager:
         async with handle.lock:
             handle.status = RunStatus.RUNNING
             generation = self._begin_producer_segment_locked(handle)
-            self._publish_session_signal(handle, RunStatus.RUNNING)
         handle.producer_task = asyncio.create_task(
             self._run_producer(handle, producer, generation), name=f"agent-run:{run_id}"
         )
@@ -540,40 +537,6 @@ class RunManager:
             self._expire_running_run(handle), name=f"agent-run-timeout:{run_id}"
         )
         return handle
-
-    def _publish_session_signal(self, handle: RunHandle, target: RunStatus) -> None:
-        """状态迁移后向 session / user 信令总线投递 hint（run-started / hitl-pending / terminal）。
-
-        start()/resume() 直接置 RUNNING 不走 transition()，须各自调用；
-        信令幂等，重复投递无害——客户端只据它去拉权威状态。session 总线
-        服务同一会话的其它窗口；user 总线服务会话列表（携带 session_id
-        与 status，前端据此 patch 列表行，hint 语义不变）。
-        """
-        if target == RunStatus.RUNNING:
-            signal = {
-                "type": "run-started",
-                "run_id": handle.run_id,
-                "assistant_message_id": handle.assistant_message_id,
-            }
-        elif target == RunStatus.HITL_PENDING:
-            signal = {"type": "run-hitl-pending", "run_id": handle.run_id}
-        elif target in TERMINAL_RUN_STATUSES:
-            signal = {
-                "type": "run-terminal",
-                "run_id": handle.run_id,
-                "status": target.value,
-            }
-        else:
-            return
-        session_signal_bus.publish(handle.user_id, handle.session_id, signal)
-        user_signal_bus.publish(
-            handle.user_id,
-            {
-                **signal,
-                "session_id": handle.session_id,
-                "status": target.value,
-            },
-        )
 
     def _sample_event_loop_lag(self) -> None:
         loop = asyncio.get_running_loop()
@@ -644,7 +607,6 @@ class RunManager:
             handle.limit_error = None
             handle.status = RunStatus.RUNNING
             generation = self._begin_producer_segment_locked(handle)
-            self._publish_session_signal(handle, RunStatus.RUNNING)
             handle.producer_task = asyncio.create_task(
                 self._run_producer(handle, producer, generation),
                 name=f"agent-run-resume:{run_id}",
@@ -814,7 +776,6 @@ class RunManager:
                 self._enter_hitl_pending_locked(handle)
             if target in TERMINAL_RUN_STATUSES and handle.terminal_future is not None:
                 self._mark_terminal_locked(handle, target)
-            self._publish_session_signal(handle, target)
             return True
 
     def _mark_terminal_locked(self, handle: RunHandle, target: RunStatus) -> None:
@@ -1033,8 +994,6 @@ class RunManager:
                         and projection.status == RunStatus.HITL_PENDING
                     ):
                         self._enter_hitl_pending_locked(handle)
-                    if prev_status != projection.status:
-                        self._publish_session_signal(handle, projection.status)
             if terminal_candidate is not None:
                 envelope = terminal_candidate.envelope
             else:
@@ -1184,7 +1143,6 @@ class RunManager:
                 self._fanout(handle, candidate.envelope)
                 handle.pending_terminal = None
                 self._mark_terminal_locked(handle, candidate.status)
-                self._publish_session_signal(handle, candidate.status)
             elif result.outcome == "already_finalized" and result.snapshot is not None:
                 self._metrics["terminal_cas_loser"] += 1
                 handle.authoritative_snapshot = copy.deepcopy(result.snapshot)
@@ -1200,7 +1158,6 @@ class RunManager:
                 )
                 self._fanout(handle, replacement)
                 self._mark_terminal_locked(handle, result.snapshot.status)
-                self._publish_session_signal(handle, result.snapshot.status)
         return result
 
     async def publish_attempt(

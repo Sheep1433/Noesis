@@ -506,54 +506,6 @@ describe('useSSEStream durable run recovery', () => {
 })
 
 
-describe('joinRunIfIdle（user-signal 兜底加入）', () => {
-  beforeEach(() => {
-    vi.clearAllMocks()
-    globalThis.localStorage = new MemoryStorage() as Storage
-  })
-
-  it('新 run 启动信号触发 resumeActiveRun 加入权威流', async () => {
-    api.getActiveRun.mockResolvedValue(snapshot({ run_id: 'run-cont', status: 'running' }))
-    api.subscribeAgentRun.mockResolvedValue(sseResponse([
-      { event: 'run-snapshot', data: snapshot({ run_id: 'run-cont', status: 'completed', snapshot_sequence: 1, finish_reason: 'stop' }) },
-      { event: 'message', data: '[DONE]' },
-    ]))
-    const onFinish = vi.fn()
-    const stream = useSSEStream({ onFinish })
-
-    stream.joinRunIfIdle('session-1', 'run-cont')
-
-    await vi.waitFor(() => {
-      expect(api.getActiveRun).toHaveBeenCalledWith('session-1')
-      expect(onFinish).toHaveBeenCalledTimes(1)
-    })
-  })
-
-  it('同 run 已在流 / 本窗口流式中：跳过（不重复订阅）', async () => {
-    const stream = useSSEStream({ onFinish: vi.fn() })
-    // 先经 joinRunIfIdle 加入 run-cont 并完成
-    api.getActiveRun.mockResolvedValue(snapshot({ run_id: 'run-cont', status: 'completed', finish_reason: 'stop', snapshot_sequence: 1 }))
-    api.subscribeAgentRun.mockResolvedValue(sseResponse([
-      { event: 'run-snapshot', data: snapshot({ run_id: 'run-cont', status: 'completed', snapshot_sequence: 1, finish_reason: 'stop' }) },
-      { event: 'message', data: '[DONE]' },
-    ]))
-    stream.joinRunIfIdle('session-1', 'run-cont')
-    await vi.waitFor(() => expect(api.getActiveRun).toHaveBeenCalled())
-
-    vi.clearAllMocks()
-    // 流式刚结束 currentRunId 仍为 run-cont：重复信号不得再次触发订阅
-    stream.joinRunIfIdle('session-1', 'run-cont')
-    await new Promise((resolve) => setTimeout(resolve, 20))
-    expect(api.getActiveRun).not.toHaveBeenCalled()
-  })
-
-  it('无 run_id 的信号不触发任何请求', () => {
-    const stream = useSSEStream({ onFinish: vi.fn() })
-    stream.joinRunIfIdle('session-1', undefined)
-    expect(api.getActiveRun).not.toHaveBeenCalled()
-  })
-})
-
 describe('409 与 HITL resume 的边界回归', () => {
   beforeEach(() => {
     vi.clearAllMocks()

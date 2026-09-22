@@ -125,9 +125,7 @@ class RunProjection:
                 # 流式输出（不按尾部弹回——会误伤同为 text 类型的前文）
                 part_ids = [str(x) for x in (data.get("part_ids") or []) if x]
                 self.builder.drop_parts(part_ids)
-            elif event.event in {"tool-call-start", "tool-input-start"}:
-                if event.event == "tool-input-start":
-                    return True
+            elif event.event == "tool-input-start":
                 self.builder.append_tool(
                     str(data.get("tool_name") or data.get("name") or "tool"),
                     data.get("input") if isinstance(data.get("input"), dict) else {},

@@ -4,7 +4,6 @@ from fastapi import FastAPI
 from fastapi.responses import JSONResponse
 
 from server.exception_handlers import handle_exception
-from server.middleware.csrf import CsrfMiddleware
 from server.middleware.request_log_context import RequestLogContextMiddleware
 from noesis.config.env import AppConfig, DistributedRunsConfig, MessagingConfig, StreamConfig
 from noesis.config.checkpointer import close_checkpointer, init_checkpointer
@@ -32,18 +31,7 @@ from noesis.agents.background import (
 )
 from noesis.runtime.main_loop import capture_main_loop
 from server.wiring import wire_runtime_observability
-from noesis.services.scheduled_task_scheduler import (
-    start_scheduled_task_scheduler,
-    stop_scheduled_task_scheduler,
-)
-from noesis.services.channels.telegram_runtime import start_telegram_runtime, stop_telegram_runtime
-from noesis.memory.consolidation import (
-    start_memory_consolidator,
-    stop_memory_consolidator,
-)
-from noesis.memory.extraction import start_memory_sweeper, stop_memory_sweeper
 from server.bootstrap.kb import sync_existing_kb_collection_configs
-from noesis.services.run_recovery_service import RunRecoveryService
 from noesis.services.run_service import run_manager, run_bus
 from noesis.services.leader_elector import LeaderElector
 from noesis.services.run_dispatcher import RunDispatcher
@@ -73,80 +61,20 @@ async def lifespan(app: FastAPI):
 
         leader_components: dict = {}
 
-        async def _on_promotion(token) -> None:
-            """leader 晋升回调（含进程启动首例）：leader 面装配 + recovery。
-
-            dispatcher / command consumer / 信令与 run 事件桥 / singleton
-            runtime 都随晋升启动；重入（运行中切主后本进程晋升）时先跑
-            recovery 再起 dispatcher——旧 term 遗留已由四段对账收口。
-            """
-            from noesis.services.run_command_service import RunCommandConsumer
-
-            run_manager.attach_bus(run_bus, token_provider=lambda: elector.token)
-            from noesis.agents.background.jobs import events as bg_run_events
-
-            bg_run_events.configure_run_event_bridge(run_bus, lambda: elector.token)
-            if "command_consumer" not in leader_components:
-                consumer = RunCommandConsumer(
-                    bus=run_bus,
-                    token_provider=lambda: elector.token,
-                    scan_interval_seconds=DistributedRunsConfig.command_scan_interval_seconds,
-                    retention_days=DistributedRunsConfig.command_retention_days,
-                )
-                leader_components["command_consumer"] = consumer
-                resources.push_async_callback(consumer.stop)
-            # ---- 晋升对账（四段）：主 Run → 子代理 Run → 定时任务 → 通知装载
-            async with pg_manager.get_async_session_context() as recovery_db:
-                await RunRecoveryService.recover_orphaned_runs(
-                    recovery_db, current_leader_term=token.term
-                )
-                from noesis.services.subagent_session_service import SubagentSessionService
-
-                orphaned_subagents = await SubagentSessionService.reconcile_orphaned_runs(recovery_db)
-                if orphaned_subagents:
-                    logger.warning("子 Agent 对账：{} 个遗留 run 已标记为中断", orphaned_subagents)
-                from noesis.services.bg_shell_job_service import BgShellJobService
-
-                orphaned_shell = await BgShellJobService.reconcile_orphaned(recovery_db)
-                if orphaned_shell:
-                    logger.warning("后台命令对账：{} 个非终态 shell 任务已收口为 cancelled", orphaned_shell)
-                # 排队重建（仅 child run 行）：queued 任务重启后继续执行，
-                # 按 created_at 升序重建进程内队列并触发 drain
-                from noesis.agents.background.ports import ExecutorPort
-
-                queued_specs = await SubagentSessionService.list_queued_subagent_runs(recovery_db)
-                if queued_specs:
-                    restored = await ExecutorPort.restore_queued(queued_specs)
-                    logger.info("后台任务排队重建：{} 个 queued 任务已恢复", restored)
-                # 晋升对账：遗留 claimed 命令重置回 pending（旧 leader 认领必然
-                # 未完成），随后才启动命令消费——对账先于消费，换主窗口排队
-                # 任务的追加消息不被误翻转
-                from noesis.repositories.agent_run_command_repository import (
-                    AgentRunCommandRepository,
-                )
-
-                await AgentRunCommandRepository(recovery_db).reset_all_claimed()
-                consumer = leader_components.get("command_consumer")
-                if consumer is not None:
-                    await consumer.start()
-                from noesis.services.scheduled_task_service import ScheduledTaskService
-
-                interrupted_runs = await ScheduledTaskService.reconcile_interrupted_runs(recovery_db)
-                if interrupted_runs:
-                    logger.warning("定时任务对账：{} 个遗留 run 已收口为 interrupted", interrupted_runs)
-                from noesis.services.bg_notification_store import (
-                    restore_undelivered_notifications,
-                )
-
-                restored_notices = await restore_undelivered_notifications(recovery_db)
-                if restored_notices:
-                    logger.info("后台通知启动恢复：{} 条未送达通知已装载", restored_notices)
-
         # ---- Leader elector：竞争执行锁（key 不变，滚动升级期新旧互斥）并提交
         # 全局 leadership term。memory 模式第二实例 fail-fast；redis 模式未获锁
         # 的进程以 Web worker 待命 + 周期重竞选，晋升回调承载 leader 面装配
         # （task 2.3/2.4）。
         elector = LeaderElector(cluster_id=DistributedRunsConfig.cluster_id)
+        from server.bootstrap.leader_runtime import build_promotion_callback
+
+        _on_promotion = build_promotion_callback(
+            elector=elector,
+            run_bus=run_bus,
+            run_manager=run_manager,
+            resources=resources,
+            leader_components=leader_components,
+        )
         if DistributedRunsConfig.backend == "redis":
             await elector.run_as_worker(on_promotion=_on_promotion)
         else:
@@ -195,42 +123,14 @@ async def lifespan(app: FastAPI):
         # 进程退出时取消运行中任务并停掉隔离 loop
         resources.callback(shutdown_bg_subagents)
 
-        async def _start_leader_runtime() -> None:
-            """leader 专属 singleton：dispatcher / 调度器 / 信令通道 / 记忆任务。
-
-            后台任务执行面（executor/隔离循环）与 shutdown_bg_subagents 也仅
-            leader 需要——follower 没有注册表可停。
-            """
-            await dispatcher.start()
-            start_scheduled_task_scheduler()
-            resources.push_async_callback(stop_scheduled_task_scheduler)
-            start_telegram_runtime()
-            resources.push_async_callback(stop_telegram_runtime)
-            if MessagingConfig.feishu_runtime_enabled:
-                try:
-                    from noesis.services.channels.feishu_runtime import (
-                        start_feishu_runtime,
-                        stop_feishu_runtime,
-                    )
-
-                    start_feishu_runtime()
-                    resources.push_async_callback(stop_feishu_runtime)
-                except ImportError as exc:
-                    logger.error(
-                        "飞书已启用但 lark-oapi 未安装（uv sync --extra feishu），通道不启动: {}",
-                        exc,
-                    )
-            else:
-                logger.info("feishu runtime disabled (messaging.feishu_runtime_enabled=false)")
-            await start_memory_sweeper()
-            resources.push_async_callback(stop_memory_sweeper)
-            await start_memory_consolidator()
-            resources.push_async_callback(stop_memory_consolidator)
+        from server.bootstrap.leader_runtime import start_leader_singletons
 
         await sync_existing_kb_collection_configs()
         # ---- leader-only singleton runtime（task 2.3）：follower 不运行 ----
         if elector.is_leader:
-            await _start_leader_runtime()
+            await start_leader_singletons(
+                dispatcher=dispatcher, resources=resources
+            )
             role = "execution leader"
         else:
             role = "Web worker (follower)"
@@ -251,7 +151,6 @@ app = FastAPI(
 
 handle_exception(app)
 app.add_middleware(RequestLogContextMiddleware)
-app.add_middleware(CsrfMiddleware)
 
 # 加载路由列表
 controller_list = [
@@ -268,8 +167,21 @@ controller_list = [
     {'router':  mcp_router, 'tags': ['MCP 模块']},
 ]
 
+# 写请求 CSRF：路由器级依赖统一挂载（单一实现）。auth_router 除外——
+# 登录/注册需豁免（可能携带旧 session cookie 而无法提供新 token），
+# 其 logout / logout-all 端点各自显式声明 require_csrf。
+from fastapi import Depends
+
+from server.auth_dependencies import require_csrf as _require_csrf
+
 for controller in controller_list:
-    app.include_router(router=controller.get('router'), tags=controller.get('tags'))
+    router = controller.get('router')
+    csrf_deps = [] if router is auth_router else [Depends(_require_csrf)]
+    app.include_router(
+        router=router,
+        tags=controller.get('tags'),
+        dependencies=csrf_deps,
+    )
 
 
 @app.get('/health', tags=['系统'])

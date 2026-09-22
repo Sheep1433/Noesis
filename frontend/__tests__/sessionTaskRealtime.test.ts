@@ -1,12 +1,12 @@
 // @vitest-environment happy-dom
 
-import type { AgentRunSnapshot, ChatMessageResponse, TaskCatalogEntry } from '@/api/chat'
+import type { AgentRunSnapshot, ChatMessageResponse, SessionTaskEntry } from '@/api/chat'
 import { flushPromises, mount } from '@vue/test-utils'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import BackgroundSubagentCollapse from '@/components/BackgroundSubagentCollapse/index.vue'
 import SubagentConversationDrawer from '@/components/SubagentConversationDrawer/index.vue'
 import { clearQueuedMessages, setQueuedMessages } from '@/components/SubagentConversationView/queuedMessages'
-import { activateChildCatalogSession, createChildCatalogEventSource } from '@/views/chat/childCatalogStream'
+import { activateSessionTaskStream, createSessionTaskEventSource } from '@/views/chat/sessionTaskStream'
 
 const api = vi.hoisted(() => ({
   getSession: vi.fn(),
@@ -76,7 +76,7 @@ function agentRunSnapshot(status: AgentRunSnapshot['status'] = 'completed'): Age
   }
 }
 
-const runningTask: TaskCatalogEntry = {
+const runningTask: SessionTaskEntry = {
   task_id: 'child-session-1',
   session_id: 'parent-session-1',
   run_id: 'run-1',
@@ -189,7 +189,7 @@ describe('子 Agent 标准会话展示', () => {
     }))
     let currentSessionId: string | null = null
 
-    activateChildCatalogSession({
+    activateSessionTaskStream({
       sessionId: 'parent-session-1',
       currentSessionId,
       hasStream: false,
@@ -197,13 +197,13 @@ describe('子 Agent 标准会话展示', () => {
         currentSessionId = sessionId
       },
       openStream: (sessionId) => {
-        createChildCatalogEventSource(sessionId, { onTask, onContinuation: vi.fn() }, factory)
+        createSessionTaskEventSource(sessionId, { onTask, onContinuation: vi.fn() }, factory)
       },
     })
     listeners.get('bg-task')?.({ data: JSON.stringify({ event: 'started', task: runningTask }) } as MessageEvent)
 
     expect(currentSessionId).toBe('parent-session-1')
-    expect(factory).toHaveBeenCalledWith(expect.stringContaining('/sessions/parent-session-1/children/stream'))
+    expect(factory).toHaveBeenCalledWith(expect.stringContaining('/sessions/parent-session-1/tasks/stream'))
     expect(onTask).toHaveBeenCalledWith(runningTask)
   })
 

@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import type { TaskCatalogEntry } from '@/api/chat'
+import type { SessionTaskEntry } from '@/api/chat'
 import { ChevronDownOutline, GitNetworkOutline } from '@vicons/ionicons-v5'
 import { NButton } from 'naive-ui'
 import { computed, onBeforeUnmount, ref, watch } from 'vue'
@@ -10,18 +10,18 @@ import { taskStatusLabel } from '@/utils/taskStatusLabels'
 import { formatDurationMs } from '@/views/chat/messageParts'
 
 const props = defineProps<{
-  tasks: TaskCatalogEntry[]
+  tasks: SessionTaskEntry[]
   focusTaskId?: string | null
 }>()
 
 const emit = defineEmits<{
-  (e: 'decide', payload: { task: TaskCatalogEntry, decisions: Array<{ type: 'approve' | 'reject' }> }): void
-  (e: 'cancel', task: TaskCatalogEntry): void
+  (e: 'decide', payload: { task: SessionTaskEntry, decisions: Array<{ type: 'approve' | 'reject' }> }): void
+  (e: 'cancel', task: SessionTaskEntry): void
   (e: 'changed'): void
 }>()
 
 const show = defineModel<boolean>('show', { default: false })
-const selectedTask = ref<TaskCatalogEntry | null>(null)
+const selectedTask = ref<SessionTaskEntry | null>(null)
 const showDetail = ref(false)
 const selectedTaskResolved = computed(() => {
   if (!selectedTask.value) {
@@ -85,7 +85,7 @@ onBeforeUnmount(() => {
   stopClock()
 })
 
-function taskElapsed(task: TaskCatalogEntry): string {
+function taskElapsed(task: SessionTaskEntry): string {
   const started = wireTimestampMs(task.started_at)
   if (!started || task.status === 'awaiting_approval') {
     return ''
@@ -100,11 +100,11 @@ function taskElapsed(task: TaskCatalogEntry): string {
   return formatDurationMs(Math.max(0, finished - started))
 }
 
-function statusClass(status: TaskCatalogEntry['status']): string {
+function statusClass(status: SessionTaskEntry['status']): string {
   return status.replaceAll('_', '-')
 }
 
-function toggleExpand(task: TaskCatalogEntry): void {
+function toggleExpand(task: SessionTaskEntry): void {
   selectedTask.value = task
   showDetail.value = true
 }
@@ -114,7 +114,7 @@ function closeDetail(): void {
   selectedTask.value = null
 }
 
-function actionPreview(task: TaskCatalogEntry): string {
+function actionPreview(task: SessionTaskEntry): string {
   const first = task.interrupt?.action_requests?.[0]
   if (!first) {
     return task.description

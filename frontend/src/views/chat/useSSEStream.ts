@@ -13,7 +13,6 @@ import {
   resumeAgentRunHitl,
   stopAgentRun,
   subscribeAgentRun,
-  subscribeSessionEvents,
 } from '@/api/chat'
 import { consumeRunStream } from './useRunStreamClient'
 
@@ -62,7 +61,6 @@ export interface SSEStreamOptions {
   /** 发送撞上「会话仍在生成」（409 加入已有 run）时通知宿主：消息已排队，本轮结束后自动重发 */
   onBusyConflict?: () => void
   /** 取某会话历史加载中的 promise；信令触发的加入须等历史就位再 apply snapshot，防止 patch 丢失 */
-  historyReady?: (sessionId: string) => Promise<unknown> | null
 }
 
 
@@ -240,7 +238,6 @@ export function useSSEStream(options: SSEStreamOptions = {}) {
     onFinish,
     onError,
     onBusyConflict,
-    historyReady,
   } = options
 
   const isLoading = ref(false)
@@ -255,8 +252,6 @@ export function useSSEStream(options: SSEStreamOptions = {}) {
   let terminalObserved = false
   /** 409 撞上「会话仍在生成」时排队的消息：本轮终态后自动重发 */
   let queuedSend: { sessionId: string, content: string, extra?: Record<string, unknown> } | null = null
-  let signalSessionId: string | null = null
-  let signalAbort: AbortController | null = null
 
   const frameTable = createFrameHandlerTable(options)
 
@@ -708,77 +703,6 @@ export function useSSEStream(options: SSEStreamOptions = {}) {
    * 收到 run-started 后经 resumeActiveRun 从权威端点取状态，本窗口正在
    * 流式中（isLoading 守卫）或已是同一 run 时跳过，不会重复订阅。
    */
-  function watchSessionSignals(sessionId: string) {
-    if (sessionId === signalSessionId) {
-      return
-    }
-    stopSessionSignals()
-    signalSessionId = sessionId
-    void pumpSessionSignals(sessionId)
-  }
-
-  /**
-   * user-signal 兜底加入：会话信令流丢帧时（浏览器后台标签节流 / 单帧
-   * hint 丢失），会话列表通道收到当前会话的 run-started 仍能加入 run。
-   * 守卫与 session-signal 处理器一致：同 run 已在流、本窗口正在流式中
-   * 则跳过。
-   */
-  function joinRunIfIdle(sessionId: string, runId: string | undefined): void {
-    if (!runId || runId === currentRunId) {
-      return
-    }
-    if (isLoading.value && activeSessionId === sessionId) {
-      return
-    }
-    void resumeActiveRun(sessionId, historyReady?.(sessionId) ?? undefined)
-  }
-
-  function stopSessionSignals() {
-    // 无需清理重连 timer：传输内核的退避等待可被 abort 打断
-    signalAbort?.abort()
-    signalAbort = null
-    signalSessionId = null
-    queuedSend = null
-  }
-
-  async function pumpSessionSignals(sessionId: string) {
-    const controller = new AbortController()
-    signalAbort = controller
-    try {
-      await consumeRunStream({
-        subscribe: (signal) => subscribeSessionEvents(sessionId, signal),
-        onFrame: (event, data) => {
-          if (event !== 'session-signal' || !data) {
-            return
-          }
-          const signal = data as { type?: string, run_id?: string }
-          if (
-            signal.type === 'run-started'
-            && typeof signal.run_id === 'string'
-            && signal.run_id
-            && signal.run_id !== currentRunId
-            && !(isLoading.value && activeSessionId === sessionId)
-          ) {
-            // 该会话历史仍在加载时，等其就位再 apply snapshot（与刷新页路径一致），
-            // 否则 patchAssistantPartsAt 找不到目标行，整轮内容静默丢失
-            void resumeActiveRun(sessionId, historyReady?.(sessionId) ?? undefined)
-          }
-        },
-        isActive: () => signalSessionId === sessionId,
-        // 信令丢失靠 active-run 自愈，重连无限、退避放宽（封顶 30s）
-        maxAttempts: Infinity,
-        backoffMs: (attempt) => Math.min(30_000, 3_000 * 2 ** Math.min(attempt, 3)),
-        // 401/404：登录失效或会话已删，重连无意义，静默退出
-        fatalStatuses: [401, 404],
-        signal: controller.signal,
-      })
-    } finally {
-      if (signalAbort === controller) {
-        signalAbort = null
-      }
-    }
-  }
-
   return {
     isLoading,
     error,
@@ -788,8 +712,5 @@ export function useSSEStream(options: SSEStreamOptions = {}) {
     stopCurrentRun,
     detachSubscription,
     resumeActiveRun,
-    joinRunIfIdle,
-    watchSessionSignals,
-    stopSessionSignals,
   }
 }

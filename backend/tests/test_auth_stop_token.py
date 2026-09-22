@@ -116,12 +116,16 @@ async def test_get_current_user_rejects_missing_cookie(monkeypatch):
 
 
 @pytest.mark.asyncio
-async def test_require_csrf_rejects_bad_header():
+async def test_require_csrf_rejects_bad_header(monkeypatch):
+    """路由器级依赖形态：自取 cookie 校验（携带有效会话 + 错 token → 拒）。"""
     from noesis.errors.exceptions import PermissionException
     from server.auth_dependencies import require_csrf
 
     request = MagicMock()
-    request.state.auth_session = _session("csrf")
+    request.cookies.get.return_value = "raw-session"
     request.headers.get.return_value = "wrong"
+    monkeypatch.setattr(
+        SessionService, "get_valid", AsyncMock(return_value=_session("csrf"))
+    )
     with pytest.raises(PermissionException):
-        await require_csrf(request)
+        await require_csrf(request, AsyncMock())

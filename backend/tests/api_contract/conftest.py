@@ -1,7 +1,7 @@
 """TestClient 级接口契约测试 fixtures。
 
 与 ``tests/api/``（真实服务 + 真实 LLM，``-m integration`` 手动跑）相对：
-这里在进程内挂载 FastAPI 应用，走真实 ``CsrfMiddleware → 认证依赖 → 路由 →
+这里在进程内挂载 FastAPI 应用，走真实 ``路由器级 CSRF 依赖 → 认证依赖 → 路由 →
 异常处理器 → ResponseUtil`` 全链路，仅 mock DB 与外部服务——中间件/路由/序列化
 这些单元测试覆盖不到的层在这里断言。不标记 integration，随门禁常规跑。
 """
@@ -85,13 +85,11 @@ def contract_client() -> Iterator[TestClient]:
             patch.object(SessionService, "get_valid", AsyncMock(return_value=session)),
             patch.object(SessionService, "touch", AsyncMock(return_value=session)),
             patch.object(UserService, "get_user_by_id", AsyncMock(return_value=build_contract_user())),
-            # CSRF 中间件直接引用 pg_manager（非 Depends），必须单独 mock
-            patch("server.middleware.csrf.pg_manager") as csrf_pg,
-            # SSE 端点用 sse_prefetch_db 短命会话（非 Depends），同样单独 mock；
+            # SSE 端点用 sse_prefetch_db 短命会话（非 Depends），单独 mock；
             # 传函数而非实例：每次调用生成全新 context manager，可重入
+            # （CSRF 已收敛为路由器级依赖，get_valid 同样被上方 mock 覆盖）
             patch.object(chat_api, "sse_prefetch_db", _null_db_ctx),
         ):
-            csrf_pg.get_async_session_context.return_value = _null_db_ctx()
             client = TestClient(app)
             client.cookies.set(SessionConfig.cookie_name, "raw-session")
             client.headers["X-CSRF-Token"] = CSRF_TOKEN

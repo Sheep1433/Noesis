@@ -184,6 +184,23 @@ class RunCommandService:
         return result
 
 
+    @classmethod
+    async def stop_shell_job(cls, *, task_id: str, session_id: str, user_id: str) -> dict[str, Any]:
+        """后台命令停止（HTTP 入口的完整用例）：独立会话提交并等待确认。
+
+        命令提交与观察需要一个独立于请求级 session 的事务边界
+        （提交即 commit，等待期间轮询不受请求事务影响），该编排属于
+        Service，API 不持有存储设施句柄。
+        """
+        from noesis.storage.postgres.manager import pg_manager
+
+        async with pg_manager.get_async_session_context() as cmd_db:
+            return await cls.submit_and_wait(
+                cls.submit_shell_stop(task_id, session_id, user_id, cmd_db),
+                db=cmd_db,
+            )
+
+
 class RunCommandConsumer:
     """leader 侧命令 consumer：bus 唤醒 + 周期补扫，认领后重验执行。"""
 

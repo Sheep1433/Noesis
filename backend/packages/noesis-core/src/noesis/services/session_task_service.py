@@ -19,7 +19,7 @@ from noesis.errors.exceptions import ServiceException
 from noesis.services.chat_service import ChatService
 
 
-class AgentCatalogService:
+class SessionTaskService:
     @classmethod
     async def list_for_session(
         cls,
@@ -133,4 +133,4 @@ class ShellJobService:
             raise ServiceException(message=str(exc)) from exc
 
 
-__all__ = ["AgentCatalogService", "ShellJobService"]
+__all__ = ["SessionTaskService", "ShellJobService"]

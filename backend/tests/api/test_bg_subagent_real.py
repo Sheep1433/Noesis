@@ -42,13 +42,13 @@ def _wait_run_terminal(auth_client, run_id: str, *, timeout_seconds: float = 300
 
 def _catalog_tasks(auth_client, session_id: str) -> list[dict]:
     data = auth_client.get(
-        f"/api/chat/sessions/{session_id}/children/catalog"
+        f"/api/chat/sessions/{session_id}/tasks"
     ).json()["data"]
     return data.get("tasks") or []
 
 
 def _wait_subagent_terminal(auth_client, session_id: str) -> dict:
-    """轮询 children/catalog 直到出现 subagent 任务并到终态。"""
+    """轮询 tasks 直到出现 subagent 任务并到终态。"""
     deadline = time.perf_counter() + _CHILD_POLL_TIMEOUT_SECONDS
     last: list[dict] = []
     while time.perf_counter() < deadline:

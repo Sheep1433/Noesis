@@ -188,7 +188,6 @@ async def test_追加消息_endpoint_passes_through_and_maps_not_found(monkeypat
         "send_message",
         AsyncMock(return_value={"session_id": "child-1", "status": "running"}),
     )
-    monkeypatch.setattr(chat_api, "require_csrf", AsyncMock())
     ok = await chat_api.send_subagent_message(
         "child-1",
         SubagentMessageRequest(message="再查一下"),
@@ -231,7 +230,7 @@ async def test_追加消息_endpoint_passes_through_and_maps_not_found(monkeypat
 @pytest.mark.asyncio
 async def test_child_catalog_endpoint_exposes_child_session_identity(monkeypatch) -> None:
     """目录对 UI 只暴露 child session 身份；executor 内部 task id 不外泄。"""
-    from noesis.services.agent_catalog_service import AgentCatalogService
+    from noesis.services.session_task_service import SessionTaskService
 
     payload = {
         "tasks": [
@@ -250,7 +249,7 @@ async def test_child_catalog_endpoint_exposes_child_session_identity(monkeypatch
         ]
     }
     monkeypatch.setattr(
-        AgentCatalogService,
+        SessionTaskService,
         "list_for_session",
         AsyncMock(return_value=payload),
     )

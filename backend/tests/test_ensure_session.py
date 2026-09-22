@@ -1,4 +1,4 @@
-"""PUT /api/chat/sessions/{id}/ensure 单测。"""
+"""PUT /api/chat/sessions/{id}（获取或创建会话）单测。"""
 
 import json
 from unittest.mock import AsyncMock, MagicMock, patch

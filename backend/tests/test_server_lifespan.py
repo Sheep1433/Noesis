@@ -97,9 +97,26 @@ def _patch_lifespan_resources(monkeypatch: pytest.MonkeyPatch) -> dict[str, obje
         "stop_memory_consolidator",
     )
     patched: dict[str, object] = {"pg_manager": pg_manager}
+    # 调度器族已下沉 server/bootstrap/leader_runtime（其函数体内局部 import，
+    # patch 挂在各真实来源模块）
+    import noesis.memory.consolidation as memory_consolidation
+    import noesis.memory.extraction as memory_extraction
+    import noesis.services.channels.telegram_runtime as telegram_runtime
+    import noesis.services.scheduled_task_scheduler as task_scheduler
+
+    _MODULE_OF = {
+        "start_memory_sweeper": memory_extraction,
+        "stop_memory_sweeper": memory_extraction,
+        "start_memory_consolidator": memory_consolidation,
+        "stop_memory_consolidator": memory_consolidation,
+        "stop_scheduled_task_scheduler": task_scheduler,
+        "stop_telegram_runtime": telegram_runtime,
+    }
+
     for name in async_names:
+        target = _MODULE_OF.get(name, server_main)
         mock = AsyncMock(return_value=True)
-        monkeypatch.setattr(server_main, name, mock)
+        monkeypatch.setattr(target, name, mock)
         patched[name] = mock
 
     for name in (
@@ -107,11 +124,16 @@ def _patch_lifespan_resources(monkeypatch: pytest.MonkeyPatch) -> dict[str, obje
         "start_telegram_runtime",
     ):
         mock = MagicMock()
-        monkeypatch.setattr(server_main, name, mock)
+        monkeypatch.setattr(_MODULE_OF.get(name, None) or {
+            "start_scheduled_task_scheduler": task_scheduler,
+            "start_telegram_runtime": telegram_runtime,
+        }[name], name, mock)
         patched[name] = mock
 
+    from noesis.services.run_recovery_service import RunRecoveryService
+
     recover = AsyncMock()
-    monkeypatch.setattr(server_main.RunRecoveryService, "recover_orphaned_runs", recover)
+    monkeypatch.setattr(RunRecoveryService, "recover_orphaned_runs", recover)
     patched["recover"] = recover
     reconcile_subagents = AsyncMock(return_value=0)
     monkeypatch.setattr(SubagentSessionService, "reconcile_orphaned_runs", reconcile_subagents)

@@ -64,16 +64,6 @@ def test_run_routes_replace_legacy_stream_and_stop() -> None:
     assert ("/api/chat/sessions/{session_id}/hitl/resume", "POST") not in paths
 
 
-def test_session_events_route_has_single_signal_owner() -> None:
-    routes = [
-        route
-        for route in chat_router.routes
-        if route.path == "/api/chat/sessions/{session_id}/events"
-    ]
-
-    assert len(routes) == 1
-    assert "信令" in routes[0].summary
-
 
 @pytest.mark.asyncio
 async def test_stop_run_returns_command_envelope(monkeypatch) -> None:
@@ -100,7 +90,6 @@ async def test_stop_run_returns_command_envelope(monkeypatch) -> None:
         "submit_and_wait",
         AsyncMock(return_value={"command_id": "cmd-1", "command_status": "completed"}),
     )
-    monkeypatch.setattr(chat_api, "require_csrf", AsyncMock())
 
     resp = await chat_api.stop_run(
         "run-1",
@@ -149,7 +138,6 @@ async def test_stop_subagent_run_submits_bg_command(monkeypatch) -> None:
     monkeypatch.setattr(
         RunCommandService, "submit_and_wait", staticmethod(fake_submit_and_wait)
     )
-    monkeypatch.setattr(chat_api, "require_csrf", AsyncMock())
 
     resp = await chat_api.stop_run(
         "run-1",
@@ -406,7 +394,7 @@ def test_hitl_payload_is_present_in_authoritative_snapshot() -> None:
     )
     projection.apply(
         WireFrame(
-            event="tool-call-start",
+            event="tool-input-start",
             data={
                 "tool_name": "execute",
                 "tool_call_id": "call-curl",
@@ -453,7 +441,7 @@ def test_hitl_decision_updates_authoritative_tool_part_before_resume() -> None:
     )
     projection.apply(
         WireFrame(
-            event="tool-call-start",
+            event="tool-input-start",
             data={
                 "tool_name": "execute",
                 "tool_call_id": "call-1",
@@ -692,7 +680,7 @@ def test_run_projection_discards_late_tool_result_after_cancel() -> None:
     )
     projection.apply(
         WireFrame(
-            event="tool-call-start",
+            event="tool-input-start",
             data={"tool_name": "remote_write", "tool_call_id": "call-1", "input": {}},
         )
     )
@@ -1173,7 +1161,6 @@ async def test_stop_subagent_run_returns_interrupted_snapshot(monkeypatch) -> No
         "submit_and_wait",
         AsyncMock(return_value={"command_id": "cmd-3", "command_status": "completed"}),
     )
-    monkeypatch.setattr(chat_api, "require_csrf", AsyncMock())
     result = await chat_api.stop_run(
         "run-1",
         http_request=SimpleNamespace(),
@@ -1257,28 +1244,18 @@ async def test_write_endpoints_gate_on_csrf() -> None:
 
     无认证会话的请求在触达业务层之前即被拒绝（403 语义）。
     """
-    from types import SimpleNamespace
+    from unittest.mock import AsyncMock, MagicMock, patch
 
     from noesis.errors.exceptions import PermissionException
-    from noesis.schemas.chat_vo import CreateRunRequest, SubagentMessageRequest
+    from noesis.services.auth.sessions import SessionService
+    from server.auth_dependencies import require_csrf
 
-    user = SimpleNamespace(user_id="u1")
-    db = SimpleNamespace()
-    no_auth = SimpleNamespace(state=SimpleNamespace(auth_session=None), headers={})
-
-    with pytest.raises(PermissionException):
-        await chat_api.create_run(
-            CreateRunRequest(session_id="s1", content="hi", client_request_id="abcdefgh"),
-            http_request=no_auth,
-            current_user=user,
-            db=db,
-        )
-    with pytest.raises(PermissionException):
-        await chat_api.stop_run("run-1", http_request=no_auth, current_user=user, db=db)
-    with pytest.raises(PermissionException):
-        await chat_api.send_subagent_message(
-            "child-1",
-            SubagentMessageRequest(message="hi"),
-            http_request=no_auth,
-            current_user=user,
-        )
+    # 路由器级依赖形态：携带有效会话但无 token → 拒（端点挂载面由
+    # api_contract/test_csrf_mount_guard.py 守卫）
+    request = MagicMock()
+    request.cookies.get.return_value = "raw-session"
+    request.headers.get.return_value = None
+    session = MagicMock(id="s1", user_id="u1")
+    with patch.object(SessionService, "get_valid", AsyncMock(return_value=session)):
+        with pytest.raises(PermissionException):
+            await require_csrf(request, AsyncMock())

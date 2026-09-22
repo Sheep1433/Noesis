@@ -12,9 +12,7 @@ import asyncio
 import pytest
 
 from noesis.chat.runs.bus import InMemoryRunBus
-from noesis.chat.runs.session_signals import SessionSignalBus
 from noesis.chat.runs.signal_bridge import SignalBridge
-from noesis.chat.runs.user_signals import UserSignalBus
 
 
 async def _get(queue, timeout: float = 2.0):
@@ -35,75 +33,6 @@ async def _wait_signal_subscribed(bus, scope: str, key: str) -> None:
             await asyncio.sleep(0)
             return
         await asyncio.sleep(0.005)
-
-
-@pytest.mark.asyncio
-async def test_session_signal_cross_worker_delivery_with_echo_suppression() -> None:
-    """两 worker（各自本地总线+桥）共享一条 bus：A 发布 → B 收到、A 不重复。"""
-    bus = InMemoryRunBus(envelope_payload_max_bytes=64 * 1024)
-    bus_a = SessionSignalBus()
-    bus_b = SessionSignalBus()
-    bridge_a = SignalBridge(bus=bus, origin="worker-a")
-    bridge_b = SignalBridge(bus=bus, origin="worker-b")
-    bus_a.attach_bridge(bridge_a)
-    bus_b.attach_bridge(bridge_b)
-    try:
-        # 两 worker 各一个本地订阅者（模拟各一 Tab）
-        q_a = bus_a.subscribe("user-1", "session-1")
-        q_b = bus_b.subscribe("user-1", "session-1")
-        await _wait_signal_subscribed(bus, "session", "session-1")
-
-        bus_a.publish("user-1", "session-1", {"type": "run-terminal"})
-
-        # B（follower Tab）收到
-        item_b = await _get(q_b)
-        assert item_b["type"] == "run-terminal"
-        # A（发布方本地 Tab）恰好一次：本地 fan-out 一次，回声被抑制
-        item_a = await _get(q_a)
-        assert item_a["type"] == "run-terminal"
-        with pytest.raises(asyncio.TimeoutError):
-            await _get(q_a, timeout=0.2)
-        with pytest.raises(asyncio.TimeoutError):
-            await _get(q_b, timeout=0.2)
-    finally:
-        await bridge_a.close()
-        await bridge_b.close()
-        if q_a is not None:
-            bus_a.unsubscribe("user-1", "session-1", q_a)
-        if q_b is not None:
-            bus_b.unsubscribe("user-1", "session-1", q_b)
-        await bus.close()
-
-
-@pytest.mark.asyncio
-async def test_user_signal_cross_worker_delivery() -> None:
-    bus = InMemoryRunBus(envelope_payload_max_bytes=64 * 1024)
-    bus_a = UserSignalBus()
-    bus_b = UserSignalBus()
-    bridge_a = SignalBridge(bus=bus, origin="worker-a")
-    bridge_b = SignalBridge(bus=bus, origin="worker-b")
-    bus_a.attach_bridge(bridge_a)
-    bus_b.attach_bridge(bridge_b)
-    q_a = q_b = None
-    try:
-        q_a = bus_a.subscribe("user-1")
-        q_b = bus_b.subscribe("user-1")
-        await _wait_signal_subscribed(bus, "user", "user-1")
-
-        bus_b.publish("user-1", {"type": "session-list-changed", "session_id": "s1"})
-
-        assert (await _get(q_a))["type"] == "session-list-changed"
-        assert (await _get(q_b))["type"] == "session-list-changed"  # 本地一次
-        with pytest.raises(asyncio.TimeoutError):
-            await _get(q_a, timeout=0.2)
-    finally:
-        await bridge_a.close()
-        await bridge_b.close()
-        if q_a is not None:
-            bus_a.unsubscribe("user-1", q_a)
-        if q_b is not None:
-            bus_b.unsubscribe("user-1", q_b)
-        await bus.close()
 
 
 @pytest.mark.asyncio
@@ -157,8 +86,9 @@ async def test_bg_events_cross_worker_delivery_and_pump_lifecycle() -> None:
 @pytest.mark.asyncio
 async def test_memory_mode_without_bridge_unchanged() -> None:
     """未装配桥（memory 模式）：纯本地投递，无跨进程副作用。"""
-    bus = SessionSignalBus()
-    q = bus.subscribe("user-1", "session-1")
-    bus.publish("user-1", "session-1", {"type": "x"})
+    from noesis.agents.background.jobs import events as bg_events
+
+    q = bg_events.subscribe_bg_events("session-1", "user-1")
+    bg_events._deliver_local("session-1", {"type": "x"})
     assert (await _get(q))["type"] == "x"
-    bus.unsubscribe("user-1", "session-1", q)
+    bg_events.unsubscribe_bg_events("session-1", q)

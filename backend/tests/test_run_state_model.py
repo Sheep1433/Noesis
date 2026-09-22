@@ -62,7 +62,7 @@ def test_hitl_resume_replay_updates_original_tool_part() -> None:
         "name": "execute",
         "input": {"command": "curl example.com"},
     }
-    projection.apply(WireFrame("tool-call-start", tool_input))
+    projection.apply(WireFrame("tool-input-start", tool_input))
     projection.apply(WireFrame("tool-input-available", tool_input))
     projection.apply(HitlRequired({
         "interrupt_id": "interrupt-1",
