@@ -5,7 +5,8 @@
 import 级约束：
 
   1. agents 不得 import services（应用层编排不属于 Agent 运行时；
-     需要服务能力时经 agents.background.ports 端口反转）
+     需要服务能力时经 agents.background.ports 端口反转。类型注解经
+     TYPE_CHECKING 块引入不算运行时依赖，予以放行）
   2. memory（领域包）不得 import agents / services
   3. repositories 不得 import agents / services
   4. paths（全仓库坐标系）不得 import 任何 noesis 模块（纯函数）
@@ -84,6 +85,40 @@ def _import_targets(node: ast.AST) -> list[str]:
     return names
 
 
+def _is_type_checking_test(test: ast.AST) -> bool:
+    if isinstance(test, ast.Name):
+        return test.id == "TYPE_CHECKING"
+    if isinstance(test, ast.Attribute):
+        return test.attr == "TYPE_CHECKING"
+    return False
+
+
+def _walk_imports(body: list[ast.stmt], type_only: bool,
+                  runtime: list[str], type_imports: list[str]) -> None:
+    """收集 import；TYPE_CHECKING 块内的 import 是类型引用而非运行时边。"""
+    for node in body:
+        if isinstance(node, ast.If) and _is_type_checking_test(node.test):
+            _walk_imports(node.body, True, runtime, type_imports)
+        elif isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef, ast.ClassDef)):
+            # 函数/类体内的 import 是惰性运行时依赖，照常检查
+            _walk_imports(node.body, type_only, runtime, type_imports)
+        elif isinstance(node, ast.Try):
+            _walk_imports(node.body, type_only, runtime, type_imports)
+            for handler in node.handlers:
+                _walk_imports(handler.body, type_only, runtime, type_imports)
+            _walk_imports(node.orelse, type_only, runtime, type_imports)
+            _walk_imports(node.finalbody, type_only, runtime, type_imports)
+        elif isinstance(node, (ast.Import, ast.ImportFrom)):
+            (type_imports if type_only else runtime).extend(_import_targets(node))
+
+
+def _collect_imports(tree: ast.AST) -> tuple[list[str], list[str]]:
+    runtime: list[str] = []
+    type_imports: list[str] = []
+    _walk_imports(tree.body, False, runtime, type_imports)
+    return runtime, type_imports
+
+
 # 已知不覆盖面（声明而非修复）：相对导入（level>0，仓库 noesis 包内为零）、
 # ``from noesis.agents import background`` 等父包形态、动态 ``__import__``。
 # 出现任一形态时本脚本给出假阴性；新增代码请用完整模块路径 import。
@@ -100,9 +135,7 @@ def check(backend_root: Path) -> list[str]:
         if rel.startswith("noesis/") is False:
             continue
         tree = ast.parse(py.read_text(encoding="utf-8"), filename=str(py))
-        targets: list[str] = []
-        for node in ast.walk(tree):
-            targets.extend(_import_targets(node))
+        targets, _type_targets = _collect_imports(tree)
         for rule_name, src_prefix, forbidden, _ in RULES:
             if not rel.startswith(src_prefix):
                 continue

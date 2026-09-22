@@ -762,26 +762,35 @@ def shutdown() -> None:
 class _ExecutorRuntimePort:
     # 单一异步追加消息入口（校验折叠在锁内前置；同步/异步双版本的
     # 端口漂移事故见 ports.py 同名注释）。查询族带 DB 兜底（热集 miss
-    # → DB 投影），经 default() 取最近装配实例
+    # → DB 投影），经 default() 取最近装配实例。签名与 ports.py 的
+    # ExecutorPort 转发逐参一致（tests/test_port_contracts.py 钉住）。
     @staticmethod
-    async def deliver_message(*args: Any, **kwargs: Any) -> Any:
-        return await BackgroundTaskExecutor.default().deliver_message(*args, **kwargs)
+    async def deliver_message(
+        task_id: str,
+        message: str,
+        user_message_id: Optional[str] = None,
+        model_id: Optional[str] = None,
+        reasoning_effort: Optional[str] = None,
+    ) -> dict[str, Any]:
+        return await BackgroundTaskExecutor.default().deliver_message(
+            task_id, message, user_message_id, model_id, reasoning_effort
+        )
 
     @staticmethod
-    async def check_with_fallback(*args: Any, **kwargs: Any) -> Any:
-        return await BackgroundTaskExecutor.default().check_with_fallback(*args, **kwargs)
+    async def check_with_fallback(task_id: str) -> Optional[dict[str, Any]]:
+        return await BackgroundTaskExecutor.default().check_with_fallback(task_id)
 
     @staticmethod
-    async def list_with_fallback(*args: Any, **kwargs: Any) -> Any:
-        return await BackgroundTaskExecutor.default().list_with_fallback(*args, **kwargs)
+    async def list_with_fallback(session_id: str) -> list[dict[str, Any]]:
+        return await BackgroundTaskExecutor.default().list_with_fallback(session_id)
 
     @staticmethod
-    async def cancel_with_fallback(*args: Any, **kwargs: Any) -> Any:
-        return await BackgroundTaskExecutor.default().cancel_with_fallback(*args, **kwargs)
+    async def cancel_with_fallback(task_id: str) -> dict[str, Any]:
+        return await BackgroundTaskExecutor.default().cancel_with_fallback(task_id)
 
     @staticmethod
-    async def restore_queued(*args: Any, **kwargs: Any) -> Any:
-        return await BackgroundTaskExecutor.default().restore_queued(*args, **kwargs)
+    async def restore_queued(specs: list[dict[str, Any]]) -> int:
+        return await BackgroundTaskExecutor.default().restore_queued(specs)
 
     cancel = staticmethod(BackgroundTaskExecutor.cancel)
     subscribe_run_events = staticmethod(subscribe_run_events)
