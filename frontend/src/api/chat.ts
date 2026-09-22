@@ -309,7 +309,7 @@ export interface EnsureSessionParams {
 }
 
 /**
- * 幂等物化会话 PUT /api/chat/sessions/{sessionId}/ensure
+ * 获取或创建会话（幂等 upsert）PUT /api/chat/sessions/{sessionId}
  */
 export async function ensureSession(
   sessionId: string,
@@ -317,7 +317,7 @@ export async function ensureSession(
 ): Promise<ChatSessionResponse> {
   const req = makeRequest(
     'PUT',
-    `${location.origin}${BASE}/sessions/${encodeURIComponent(sessionId)}/ensure`,
+    `${location.origin}${BASE}/sessions/${encodeURIComponent(sessionId)}`,
     params,
   )
   return parseResponse<ChatSessionResponse>(await authFetch(req))
