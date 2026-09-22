@@ -19,16 +19,32 @@ from noesis.services.qa.helpers import (
 
 
 from noesis.chat.delivery.sse import encode_run_event as _encode_run_event
+from noesis.chat.delivery.sse import format_sse
 
+
+def _encode_frames(event):
+    """typed 事件 → 完整 SSE 帧字符串列表（与生产 bytes 帧同形，文本形态便于断言）。"""
+    from noesis.chat.delivery.sse import encode_run_event, format_sse, format_done
+    if type(event).__name__ == "StreamDone":
+        return [format_done()]
+    return [format_sse(name, payload) for name, payload in encode_run_event(event)]
 
 def _raw_sse_lines(bridge, item, builder, ctx):
-    """raw 运行时事件 → SSE 行（与生产主路径同形：map_item 后经统一编码器）。"""
-    return [line for event in bridge.map_item(item, builder, ctx) for line in _encode_run_event(event)]
+    """raw 运行时事件 → SSE 行（与生产主路径同形：map_item 后经统一编码器，bytes 帧转文本行）。"""
+    return [
+        frame
+        for event in bridge.map_item(item, builder, ctx)
+        for frame in _encode_frames(event)
+    ]
 
 
 def _finalize_sse_lines(bridge, finish_reason=None):
     """bridge 终态 → SSE 行（与生产主路径同形：finalize_events 后经统一编码器）。"""
-    return [line for event in bridge.finalize_events(finish_reason=finish_reason) for line in _encode_run_event(event)]
+    return [
+        frame
+        for event in bridge.finalize_events(finish_reason=finish_reason)
+        for frame in _encode_frames(event)
+    ]
 
 
 @pytest.mark.asyncio

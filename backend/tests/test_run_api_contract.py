@@ -191,7 +191,8 @@ async def test_run_stream_consumes_stream_done_without_crashing(monkeypatch) -> 
     chunks = [chunk async for chunk in response.body_iterator]
 
     assert any("run-snapshot" in chunk for chunk in chunks)
-    assert any("[DONE]" in chunk for chunk in chunks)
+    # encode-once：事件帧为发布点 bytes 产物（手工构造 envelope 走编码兜底，同为 bytes）
+    assert any(b"[DONE]" in chunk for chunk in chunks if isinstance(chunk, bytes))
     # 订阅释放走 subscription.close()（API 不再直调 run_manager.unsubscribe）
     close.assert_awaited_once()
 
@@ -522,9 +523,14 @@ def test_sequenced_sse_contains_run_identity() -> None:
         attempt_id=2,
         event=WireFrame(event="text-delta", data={"type": "text-delta", "delta": "hi"}),
     )
-    line = encode_sequenced_event(envelope)[0]
+    frame = encode_sequenced_event(envelope)[0]
+    assert isinstance(frame, bytes)
     payload = json.loads(
-        next(part[5:].strip() for part in line.splitlines() if part.startswith("data:"))
+        next(
+            part[5:].strip()
+            for part in frame.decode("utf-8").splitlines()
+            if part.startswith("data:")
+        )
     )
     assert payload["run_id"] == "run-1"
     assert payload["sequence"] == 9

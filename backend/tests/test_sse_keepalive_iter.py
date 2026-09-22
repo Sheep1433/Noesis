@@ -25,14 +25,14 @@ async def test_keepalive_from_bus_idle_timeout() -> None:
 
     bus = RunEventBus()
     run_id = "run-hb"
-    lines: list[str] = []
+    lines: list[bytes] = []
     task = asyncio.create_task(slow_producer(bus, run_id))
     async for line in iter_sse_from_bus(bus, run_id, keepalive_seconds=0.02):
         lines.append(line)
     await task
 
-    assert any(line.startswith(": keepalive") or line == SSE_COMMENT_KEEPALIVE for line in lines)
-    assert any("text-delta" in line for line in lines)
+    assert any(line == SSE_COMMENT_KEEPALIVE or line.startswith(b": keepalive") for line in lines)
+    assert any(b"text-delta" in line for line in lines)
 
 
 @pytest.mark.asyncio
@@ -51,8 +51,8 @@ async def test_keepalive_disabled_zero_interval() -> None:
         )
     ]
 
-    assert not any(line.startswith(": keepalive") for line in lines)
-    assert any("text-delta" in line for line in lines)
+    assert not any(line.startswith(b": keepalive") for line in lines)
+    assert any(b"text-delta" in line for line in lines)
 
 
 @pytest.mark.asyncio
@@ -94,11 +94,11 @@ async def test_bus_idle_wait_does_not_cancel_slow_producer() -> None:
 
     bus = RunEventBus()
     run_id = "run-prod"
-    lines: list[str] = []
+    lines: list[bytes] = []
     task = asyncio.create_task(slow_producer(bus, run_id))
     async for line in iter_sse_from_bus(bus, run_id, keepalive_seconds=0.03):
         lines.append(line)
     await task
 
     assert not cancelled
-    assert any("ok" in line or "text" in line for line in lines)
+    assert any(b"ok" in line or b"text" in line for line in lines)

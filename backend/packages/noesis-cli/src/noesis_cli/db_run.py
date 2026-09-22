@@ -105,8 +105,9 @@ def _make_pump(
                 elif isinstance(event, RunAborted):
                     terminal.setdefault("error", event.message or "run aborted")
                 if emit_stream:
-                    for line in encode_sequenced_event(item):
-                        out(line)
+                    # encode-once：优先转发发布点产物（bytes），CLI 输出层收 str
+                    for line in item.encoded or encode_sequenced_event(item):
+                        out(line.decode("utf-8") if isinstance(line, bytes) else line)
                 run_manager.record_event_delivered(item)
                 if isinstance(
                     event,
