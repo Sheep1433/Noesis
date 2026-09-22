@@ -72,3 +72,15 @@ def test_write_with_previous_generation_token_still_valid(contract_client) -> No
     with patch.object(SessionService, "revoke", AsyncMock()):
         resp = contract_client.post("/api/auth/logout")
     assert resp.status_code == 200
+
+
+def test_get_with_session_but_no_token_not_rejected(contract_client) -> None:
+    """GET 不做 CSRF 校验（回归：路由器级依赖曾对 GET 也执行，导致
+    未带 token 的认证 GET 被 403——前端 authFetch 仅非 GET 强制带 token）。"""
+    import pytest
+
+    contract_client.headers.pop("X-CSRF-Token", None)
+    # /commands：纯注册表读取，无 DB 依赖——聚焦 CSRF 层的行为
+    resp = contract_client.get("/api/chat/commands")
+    assert resp.status_code != 403
+    assert "会话验证失败" not in str(resp.json().get("msg", ""))

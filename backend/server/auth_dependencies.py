@@ -34,13 +34,17 @@ async def get_current_user(
 async def require_csrf(request: Request, db: AsyncSession = Depends(get_db)) -> None:
     """写请求的 CSRF 依赖（路由器级挂载，单一实现）。
 
-    携带 session cookie 的写请求必须带有效 X-CSRF-Token（会话自取，
+    携带 session cookie 的**写**请求必须带有效 X-CSRF-Token（会话自取，
     不依赖 get_current_user 先行填充）；无 cookie 的请求放行——认证
     约束由各端点的 get_current_user 负责，CSRF 只在"已认证会话被
     跨站冒用"这一威胁面上有意义。豁免端点（登录/注册：用户可能持有
     旧 session cookie 但无法提供新 token）经 router 级 dependencies
-    覆盖表达。
+    覆盖表达。GET/HEAD/OPTIONS 一律跳过——路由器级依赖对全部方法
+    执行，此处必须显式恢复旧中间件的安全方法语义（CSRF 防的是状态
+    变更，GET 无需 token；回归见 test_get_with_session_but_no_token_not_rejected）。
     """
+    if request.method in {"GET", "HEAD", "OPTIONS"}:
+        return
     raw_session = request.cookies.get(SessionConfig.cookie_name)
     if not raw_session:
         return
