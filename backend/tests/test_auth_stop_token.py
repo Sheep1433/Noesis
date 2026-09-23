@@ -2,8 +2,6 @@
 
 from unittest.mock import AsyncMock, MagicMock, patch
 
-from types import SimpleNamespace
-
 import pytest
 from fastapi.testclient import TestClient
 

@@ -7,10 +7,10 @@
 from __future__ import annotations
 
 import copy
-import time
 from dataclasses import dataclass
 from typing import Any
 
+from noesis.ids import now_ms
 from noesis.runtime.logging import logger
 from noesis.chat.delivery.events import (
     HitlRequired,
@@ -26,10 +26,6 @@ from noesis.chat.event_mapping.retrieval import MAX_CROSS_BOUNDARY_SOURCES
 from noesis.chat.message_builder import AssistantMessageBuilder
 from noesis.chat.tool_state import ToolState
 from noesis.chat.runs.models import RunSnapshot, RunStatus
-
-
-def _now_ms() -> int:
-    return int(time.time() * 1000)
 
 
 @dataclass
@@ -334,7 +330,7 @@ class RunProjection:
             error_code=self.error_code,
             user_error_message=self.user_error_message,
             pending_hitl=self.pending_hitl,
-            updated_at=_now_ms(),
+            updated_at=now_ms(),
         )
 
     def persisted_snapshot(self) -> dict[str, Any]:

@@ -19,6 +19,7 @@ from sqlalchemy import func, or_, select, update
 from sqlalchemy.ext.asyncio import AsyncSession
 
 
+from noesis.ids import now_ms
 from noesis.agents.background.jobs.state import run_status_to_task_status
 from noesis.chat.runs.skeleton import (
     build_assistant_skeleton_row,
@@ -33,10 +34,6 @@ from noesis.services.chat_service import ChatService
 from noesis.services.run_recovery_service import mark_running_tools_unknown
 from noesis.storage.postgres.models.chat import TAgentRun, TChatMessage, TChatSession
 from noesis.agents.background.ports import configure_service_port
-
-
-def _now_ms() -> int:
-    return int(time.time() * 1000)
 
 
 # subagent descriptor 当前版本：child session extra["subagent"] 的结构版本，
@@ -132,7 +129,7 @@ class SubagentSessionService:
             RunStatus.RETRYING.value,
             RunStatus.HITL_PENDING.value,
         ]
-        now = _now_ms()
+        now = now_ms()
         result = await db.execute(
             select(TAgentRun.id, TAgentRun.assistant_message_id).where(
                 TAgentRun.origin == "subagent", TAgentRun.status.in_(active),
@@ -353,7 +350,7 @@ class SubagentSessionService:
                     f"追加消息队列已满（{MAX_PENDING_MESSAGES} 条）：请等待当前轮完成后再发，"
                     f"或将多条指示合并为一条"
                 )
-            now = _now_ms()
+            now = now_ms()
             message_id = str(uuid.uuid4())
             _, sequences = await ChatService.reserve_message_sequences(
                 child_session_id, user_id, 1, db,
@@ -642,7 +639,7 @@ class SubagentSessionService:
         )
         parent_run = parent_run_result.scalar_one_or_none()
 
-        now = _now_ms()
+        now = now_ms()
         child_session_id = str(uuid.uuid4())
         run_id = str(uuid.uuid4())
         user_message_id = str(uuid.uuid4())
@@ -759,7 +756,7 @@ class SubagentSessionService:
     async def mark_started(cls, run_id: str, started_at: Optional[int] = None) -> None:
         from noesis.storage.postgres.manager import pg_manager
 
-        now = started_at or _now_ms()
+        now = started_at or now_ms()
         async with pg_manager.get_async_session_context() as db:
             await db.execute(
                 update(TAgentRun)
@@ -779,7 +776,7 @@ class SubagentSessionService:
 
         if not run_id:
             return
-        now = _now_ms()
+        now = now_ms()
         async with pg_manager.get_async_session_context() as db:
             await db.execute(
                 update(TAgentRun)
@@ -814,7 +811,7 @@ class SubagentSessionService:
         session = await ChatService.get_session_by_id(session_id, user_id=user_id, db=db)
         if session is None or session.kind != "subagent":
             raise NotFoundException(message="子会话不存在")
-        now = _now_ms()
+        now = now_ms()
         run_id = str(uuid.uuid4())
         pending_message_id = user_message_id
         user_message_id = pending_message_id or str(uuid.uuid4())
@@ -909,7 +906,7 @@ class SubagentSessionService:
                         attempt_id=1,
                         status=RunStatus.RUNNING,
                         finish_reason=None,
-                        updated_at=_now_ms(),
+                        updated_at=now_ms(),
                     )
                     if stored:
                         await db.commit()
@@ -951,7 +948,7 @@ class SubagentSessionService:
 
         if status not in {RunStatus.COMPLETED, RunStatus.ERROR, RunStatus.PARTIAL, RunStatus.INTERRUPTED}:
             raise ValueError(f"终态不合法: {status.value}")
-        now = _now_ms()
+        now = now_ms()
         async with pg_manager.get_async_session_context() as db:
             run = await AgentRunRepository(db).get(run_id)
             if run is None:
@@ -1153,7 +1150,7 @@ class SubagentSessionService:
                     TAgentRun.id == run_id,
                     TAgentRun.status.in_(cls._ACTIVE_RUN_STATUSES),
                 )
-                .values(error_code="TERMINAL_PERSIST_EXHAUSTED", updated_at=_now_ms())
+                .values(error_code="TERMINAL_PERSIST_EXHAUSTED", updated_at=now_ms())
             )
             await db.commit()
 

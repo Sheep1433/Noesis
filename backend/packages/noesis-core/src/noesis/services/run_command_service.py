@@ -12,6 +12,7 @@ import asyncio
 import time
 from typing import Any, Callable
 
+from noesis.ids import now_ms
 from noesis.runtime.logging import logger
 from noesis.chat.runs.bus import WAKEUP_TOPIC_RUN_COMMAND
 from noesis.errors.exceptions import ConflictException, NotFoundException
@@ -25,10 +26,6 @@ from noesis.storage.postgres.manager import pg_manager
 # 提交后对完成的有界等待（task 5.4）：leader 同进程的常见路径（stop 在
 # cancel grace 内完成）返回 completed；超时返回 accepted，不伪装完成
 _COMMAND_ACK_WAIT_SECONDS = 5.0
-
-
-def _now_ms() -> int:
-    return int(time.time() * 1000)
 
 
 class RunCommandService:

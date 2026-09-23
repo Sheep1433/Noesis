@@ -13,14 +13,11 @@ from typing import Any, Optional
 
 from sqlalchemy import select, update
 
+from noesis.ids import now_ms
 from noesis.agents.background.jobs.state import BgTaskStatus
 from noesis.agents.background.ports import configure_shell_job_port
 from noesis.runtime.logging import logger
 from noesis.storage.postgres.models.bg_task import TBgShellJob
-
-
-def _now_ms() -> int:
-    return int(time.time() * 1000)
 
 
 def _to_seconds(ms: Optional[int]) -> Optional[float]:
@@ -42,7 +39,7 @@ class BgShellJobService:
     ) -> None:
         from noesis.storage.postgres.manager import pg_manager
 
-        now = _now_ms()
+        now = now_ms()
         async with pg_manager.get_async_session_context() as db:
             db.add(TBgShellJob(
                 task_id=task_id,
@@ -59,7 +56,7 @@ class BgShellJobService:
     async def mark_started(cls, task_id: str) -> None:
         from noesis.storage.postgres.manager import pg_manager
 
-        now = _now_ms()
+        now = now_ms()
         async with pg_manager.get_async_session_context() as db:
             await db.execute(
                 update(TBgShellJob)
@@ -138,7 +135,7 @@ class BgShellJobService:
         else:
             ctx = _PseudoCtx(db)
         async with ctx as session:
-            now = _now_ms()
+            now = now_ms()
             result = await session.execute(
                 update(TBgShellJob)
                 .where(TBgShellJob.status.in_([

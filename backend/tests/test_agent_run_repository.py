@@ -199,15 +199,15 @@ async def test_claim_queued_returns_incrementing_epoch() -> None:
     repository = AgentRunRepository(db)
 
     assert await repository.claim_queued(
-        run_id="run-1", owner_instance_id="w-1", owner_term=5, now_ms=100
+        run_id="run-1", owner_instance_id="w-1", now_ms=100
     ) == 1
     # 对账重置（epoch 保留）后再认领：epoch 从上次值继续递增
     assert await repository.claim_queued(
-        run_id="run-1", owner_instance_id="w-2", owner_term=5, now_ms=200
+        run_id="run-1", owner_instance_id="w-2", now_ms=200
     ) == 3
     # owner 已被占用：输家 0
     assert await repository.claim_queued(
-        run_id="run-1", owner_instance_id="w-3", owner_term=5, now_ms=300
+        run_id="run-1", owner_instance_id="w-3", now_ms=300
     ) == 0
 
 
@@ -221,7 +221,7 @@ async def test_claim_queued_writes_epoch_heartbeat_and_owner() -> None:
     repository = AgentRunRepository(db)
 
     epoch = await repository.claim_queued(
-        run_id="run-1", owner_instance_id="w-1", owner_term=7, now_ms=1000
+        run_id="run-1", owner_instance_id="w-1", now_ms=1000
     )
     assert epoch == 2
     stmt = db.execute.await_args.args[0]

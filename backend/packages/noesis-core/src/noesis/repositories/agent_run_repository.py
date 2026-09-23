@@ -134,7 +134,6 @@ class AgentRunRepository:
                 TAgentRun.status == RunStatus.QUEUED.value,
                 TAgentRun.origin != "subagent",
                 TAgentRun.owner_instance_id.is_(None),
-                TAgentRun.owner_term == 0,
             )
             .order_by(TAgentRun.created_at)
             .limit(limit)
@@ -146,7 +145,6 @@ class AgentRunRepository:
         *,
         run_id: str,
         owner_instance_id: str,
-        owner_term: int,
         now_ms: int,
     ) -> int:
         """CAS claim：仅当仍 queued 且未被认领时写入 owner，并递增认领代次。
@@ -154,9 +152,9 @@ class AgentRunRepository:
         返回认领后的 claim_epoch（>0 = 认领成功；0 = 未认领）。epoch 单调
         递增永不归零——对账重置只清 owner/heartbeat，保留 epoch，跨多轮
         重置后旧认领者的 epoch 永不等于当前值（worker-role-split fencing）。
-        ``owner_term`` 为审计字段（历史 leader term），不参与 fencing 判定。
         heartbeat 超时判定只在对账（阶段化分流），claim 永远只见
-        ``queued AND owner IS NULL`` 的行。
+        ``queued AND owner IS NULL`` 的行（owner_term 是纯审计字段，写入
+        惯例置 0，不参与判定）。
         """
         result = await self.db.execute(
             update(TAgentRun)
@@ -164,11 +162,10 @@ class AgentRunRepository:
                 TAgentRun.id == run_id,
                 TAgentRun.status == RunStatus.QUEUED.value,
                 TAgentRun.owner_instance_id.is_(None),
-                TAgentRun.owner_term == 0,
             )
             .values(
                 owner_instance_id=owner_instance_id,
-                owner_term=owner_term,
+                owner_term=0,
                 claim_epoch=TAgentRun.claim_epoch + 1,
                 heartbeat_at=now_ms,
                 updated_at=now_ms,
@@ -227,7 +224,6 @@ class AgentRunRepository:
                 TAgentRun.status == RunStatus.QUEUED.value,
                 TAgentRun.origin != "subagent",
                 TAgentRun.owner_instance_id.is_(None),
-                TAgentRun.owner_term == 0,
             )
             .order_by(TAgentRun.created_at)
             .limit(limit)
@@ -243,7 +239,6 @@ class AgentRunRepository:
             epoch = await self.claim_queued(
                 run_id=run_id,
                 owner_instance_id=owner_instance_id,
-                owner_term=0,
                 now_ms=now_ms,
             )
             if epoch > 0:

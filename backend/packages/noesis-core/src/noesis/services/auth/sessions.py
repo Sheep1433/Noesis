@@ -8,6 +8,7 @@ from dataclasses import dataclass
 
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from noesis.ids import now_ms
 from noesis.config.env import SessionConfig
 from noesis.auth.entities import AuthSession
 from noesis.auth.ports import SessionRepository
@@ -21,10 +22,6 @@ from noesis.auth.policy import (
 )
 from noesis.ids import new_uuid7
 from noesis.repositories.auth_repository import SqlAlchemySessionRepository
-
-
-def _now_ms() -> int:
-    return int(time.time() * 1000)
 
 
 @dataclass(frozen=True)
@@ -47,7 +44,7 @@ class SessionService:
         user_agent: str = "",
         client_ip: str | None = None,
     ) -> IssuedSession:
-        now = _now_ms()
+        now = now_ms()
         raw_session_id = secrets.token_urlsafe(32)
         csrf_token = secrets.token_urlsafe(32)
         idle, absolute = session_expiry(
@@ -79,7 +76,7 @@ class SessionService:
         session = await cls._repository(db).get_by_digest(
             digest_secret(raw_session_id)
         )
-        if session is None or not is_session_valid(session, _now_ms()):
+        if session is None or not is_session_valid(session, now_ms()):
             return None
         return session
 
@@ -87,7 +84,7 @@ class SessionService:
     async def touch(cls, db: AsyncSession, session: AuthSession) -> AuthSession:
         changed = touch_session(
             session,
-            now_ms=_now_ms(),
+            now_ms=now_ms(),
             renewal_window_minutes=SessionConfig.renewal_window_minutes,
             idle_days=SessionConfig.idle_expire_days,
         )
@@ -98,7 +95,7 @@ class SessionService:
 
     @staticmethod
     def remaining_seconds(session: AuthSession) -> int:
-        return remaining_seconds(session, _now_ms())
+        return remaining_seconds(session, now_ms())
 
     @staticmethod
     def verify_csrf(session: AuthSession, token: str | None) -> bool:
@@ -118,18 +115,18 @@ class SessionService:
     @classmethod
     async def revoke(cls, db: AsyncSession, session: AuthSession) -> None:
         if session.revoked_at is None:
-            session.revoked_at = _now_ms()
+            session.revoked_at = now_ms()
             await cls._repository(db).save(session)
             await db.commit()
 
     @classmethod
     async def revoke_all(cls, db: AsyncSession, user_id: str) -> None:
-        await cls._repository(db).revoke_all(user_id, _now_ms())
+        await cls._repository(db).revoke_all(user_id, now_ms())
         await db.commit()
 
     @classmethod
     async def list_active(cls, db: AsyncSession, user_id: str) -> list[AuthSession]:
-        return await cls._repository(db).list_active(user_id, _now_ms())
+        return await cls._repository(db).list_active(user_id, now_ms())
 
     @classmethod
     async def revoke_by_id(cls, db: AsyncSession, user_id: str, session_id: str) -> bool:
@@ -137,7 +134,7 @@ class SessionService:
         session = await repository.get_by_id_for_user(session_id, user_id)
         if session is None:
             return False
-        session.revoked_at = _now_ms()
+        session.revoked_at = now_ms()
         await repository.save(session)
         await db.commit()
         return True

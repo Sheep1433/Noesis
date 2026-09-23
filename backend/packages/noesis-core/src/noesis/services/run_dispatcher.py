@@ -15,11 +15,10 @@ RunService 的心跳协程负责（claim_epoch fencing）。
 from __future__ import annotations
 
 import asyncio
-import time
 
+from noesis.ids import now_ms
 from noesis.chat.runs.bus import (
     RunBus,
-    WAKEUP_TOPIC_RUN_CREATED,
 )
 from noesis.chat.runs.launch_payload import LaunchPayload
 from noesis.runtime.logging import logger
@@ -27,10 +26,6 @@ from noesis.repositories.agent_run_repository import AgentRunRepository
 from noesis.services.run_service import RunService, run_manager
 from noesis.services.user_service import UserService
 from noesis.storage.postgres.manager import pg_manager
-
-
-def _now_ms() -> int:
-    return int(time.time() * 1000)
 
 
 class RunDispatcher:
@@ -119,7 +114,7 @@ class RunDispatcher:
                 claimed = await repository.claim_next_batch(
                     owner_instance_id=self._instance_id,
                     limit=20,
-                    now_ms=_now_ms(),
+                    now_ms=now_ms(),
                     capacity_check=run_manager.check_run_capacity,
                 )
                 await db.commit()

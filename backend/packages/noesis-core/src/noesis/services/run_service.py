@@ -14,6 +14,7 @@ from sqlalchemy import update
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from noesis.ids import now_ms
 from noesis.runtime.logging import logger
 from noesis.config.env import DistributedRunsConfig, StreamConfig
 from noesis.chat.runs.bus import (
@@ -180,10 +181,6 @@ async def _create_session_for_command(
 set_session_factory_provider(lambda: _create_session_for_command)
 
 
-def _now_ms() -> int:
-    return int(time.time() * 1000)
-
-
 class CheckpointGuarded(RuntimeError):
     """checkpoint 被 sequence guard 拒绝（DB last_sequence >= incoming）。
     不是错误——迟到 checkpoint 不应覆盖更新的 DB snapshot。"""
@@ -259,7 +256,7 @@ class RunService:
                 },
             )
 
-        now = _now_ms()
+        now = now_ms()
         run_id = str(uuid.uuid4())
         assistant_message_id = str(uuid.uuid4())
         extra = dict(request.extra or {})
@@ -392,7 +389,7 @@ class RunService:
                 content = handle.state.builder.to_dict()
             await run_manager.stop(run.id)
 
-        now = _now_ms()
+        now = now_ms()
         async with pg_manager.get_async_session_context() as cleanup_db:
             won = await AgentRunRepository(cleanup_db).finalize(
                 run_id=run.id,
@@ -561,7 +558,7 @@ class RunService:
                             run_id=run_id,
                             owner_instance_id=owner_instance_id,
                             claim_epoch=claim_epoch,
-                            now_ms=_now_ms(),
+                            now_ms=now_ms(),
                         )
                         await db.commit()
                 except Exception:
@@ -598,8 +595,8 @@ class RunService:
                 run_id,
                 [RunStatus.QUEUED],
                 RunStatus.RUNNING,
-                started_at=_now_ms(),
-                updated_at=_now_ms(),
+                started_at=now_ms(),
+                updated_at=now_ms(),
             )
             await db.commit()
 
@@ -634,7 +631,7 @@ class RunService:
                         attempt_id=snapshot.attempt_id,
                         status=snapshot.status,
                         finish_reason=snapshot.finish_reason,
-                        updated_at=_now_ms(),
+                        updated_at=now_ms(),
                         claim_epoch=claim_epoch,
                     )
                     if stored:
@@ -682,7 +679,7 @@ class RunService:
                 content=content,
                 last_sequence=candidate.envelope.sequence,
                 snapshot=projection.persisted_snapshot(),
-                finished_at=_now_ms(),
+                finished_at=now_ms(),
                 finish_reason=projection.finish_reason or "stop",
                 error_code=projection.error_code,
                 user_error_message=projection.user_error_message,
@@ -722,7 +719,7 @@ class RunService:
         async with pg_manager.get_async_session_context() as db:
             repository = AgentRunRepository(db)
             content = projection.builder.to_dict()
-            now = _now_ms()
+            now = now_ms()
             if target in {
                 RunStatus.COMPLETED,
                 RunStatus.PARTIAL,
@@ -942,7 +939,7 @@ class RunService:
             assistant_status=ASSISTANT_TERMINAL_STATUS[RunStatus.INTERRUPTED],
             content=content,
             last_sequence=row.last_sequence,
-            finished_at=_now_ms(),
+            finished_at=now_ms(),
             finish_reason="stopped",
             error_code="USER_STOP_FORCE",
             user_error_message="本轮回复已被用户中断。",
@@ -1038,7 +1035,7 @@ class RunService:
             run_id,
             [RunStatus.HITL_PENDING],
             RunStatus.RUNNING,
-            updated_at=_now_ms(),
+            updated_at=now_ms(),
         )
         if not won:
             await db.rollback()
@@ -1065,7 +1062,7 @@ class RunService:
                 run_id,
                 [RunStatus.RUNNING],
                 RunStatus.HITL_PENDING,
-                updated_at=_now_ms(),
+                updated_at=now_ms(),
             )
             await db.commit()
             raise ServiceException(message="继续任务失败，请稍后重试")
