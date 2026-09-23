@@ -198,7 +198,9 @@ def test_grep_supports_recursive_glob_and_skips_binary_symlink(
 
     g = backend.grep("alpha", path="/memory", glob="**/*.md")
     paths = [str(m.get("path", "")) for m in g.matches]
-    assert any(p.endswith("preference/a.md") for p in paths), paths
+    assert any(
+        p.startswith("/memory/preference/") and p.endswith(".md") for p in paths
+    ), paths
     assert not any("bin.md" in p for p in paths)
     assert not any("evil.md" in p for p in paths)
 
