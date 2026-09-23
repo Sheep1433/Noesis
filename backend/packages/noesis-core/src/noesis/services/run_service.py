@@ -523,7 +523,12 @@ class RunService:
         )
         await cls.mark_run_started(run.id)
         if owner_instance_id is not None and claim_epoch is not None:
-            cls._spawn_heartbeat(run.id, owner_instance_id, claim_epoch)
+            # task 引用挂到 handle：asyncio 对无引用的 task 不保证存活
+            #（fire-and-forget 反模式），handle 随 run 出册时一并释放
+            handle = run_manager.get(run.id)
+            handle.heartbeat_task = cls._spawn_heartbeat(
+                run.id, owner_instance_id, claim_epoch
+            )
 
     # 心跳租约（对账侧僵尸判定共用）：容忍事件循环秒级卡顿、远小于用户
     # 可感知的故障切换窗口
@@ -533,7 +538,7 @@ class RunService:
     @classmethod
     def _spawn_heartbeat(
         cls, run_id: str, owner_instance_id: str, claim_epoch: int
-    ) -> None:
+    ) -> "asyncio.Task[None]":
         """持有期间的心跳协程（fire-and-forget，自带全部退出路径）。
 
         - 心跳落空（epoch/owner 不符，run 已被重置/再认领/终态）→ 停掉本地
@@ -580,7 +585,7 @@ class RunService:
                         )
                     return
 
-        asyncio.create_task(_loop(), name=f"agent-run-heartbeat:{run_id}")
+        return asyncio.create_task(_loop(), name=f"agent-run-heartbeat:{run_id}")
 
     @classmethod
     async def mark_run_started(cls, run_id: str) -> None:

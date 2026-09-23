@@ -294,6 +294,7 @@ async def test_recovery_resets_unstarted_run_to_queued(monkeypatch) -> None:
         status="running",
         owner_instance_id="dead-worker",
         owner_term=4,
+        heartbeat_at=None,
         launch_payload={"run_id": "run-unstarted", "content": "hi"},
         claim_epoch=2,
     )
@@ -426,6 +427,7 @@ async def test_recovery_does_not_reset_without_launch_payload(monkeypatch) -> No
         status="running",
         owner_instance_id="dead-worker",
         owner_term=4,
+        heartbeat_at=None,
         launch_payload=None,
         claim_epoch=1,
     )

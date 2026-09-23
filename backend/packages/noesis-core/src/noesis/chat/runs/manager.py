@@ -281,6 +281,9 @@ class RunHandle:
     producer_task: Optional[asyncio.Task[None]] = None
     producer_generation: int = 0
     cancel_requested: bool = False
+    # worker 心跳协程（worker-role-split）：引用挂在 handle 上防 GC
+    #（asyncio 对无引用 task 不保证存活），随 run 终态/出册自然结束
+    heartbeat_task: Optional[asyncio.Task[None]] = None
     # 投递内核（被动数据结构）：sequence 分配、有界重放缓存、连续性重放。
     # 由 RunManager 在创建 handle 时按配置注入；全部访问须持 handle.lock。
     delivery: "DeliveryCore" = field(init=False)
