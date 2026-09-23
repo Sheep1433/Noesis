@@ -773,7 +773,11 @@ class _ExecutorRuntimePort:
         reasoning_effort: Optional[str] = None,
     ) -> dict[str, Any]:
         return await BackgroundTaskExecutor.default().deliver_message(
-            task_id, message, user_message_id, model_id, reasoning_effort
+            task_id=task_id,
+            message=message,
+            user_message_id=user_message_id,
+            model_id=model_id,
+            reasoning_effort=reasoning_effort,
         )
 
     @staticmethod

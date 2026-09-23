@@ -3,6 +3,7 @@
 from fastapi import Depends, Request
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from noesis.auth.entities import AuthSession
 from noesis.config.env import SessionConfig
 from noesis.errors.exceptions import AuthException, PermissionException
 from noesis.schemas.login_vo import CurrentUser
@@ -16,10 +17,16 @@ async def get_current_user(
     request: Request,
     db: AsyncSession = Depends(get_db),
 ) -> CurrentUser:
-    session = await SessionService.get_valid(
-        db,
-        request.cookies.get(SessionConfig.cookie_name),
-    )
+    # require_csrf（路由器级，先执行）已校验并缓存会话时复用——单请求单读。
+    # isinstance 守卫：request.state 上非 AuthSession 的值（Mock/他处写入）
+    # 一律视为无缓存，走正常 get_valid 路径。
+    cached = getattr(request.state, "auth_session", None)
+    session = cached if isinstance(cached, AuthSession) else None
+    if session is None:
+        session = await SessionService.get_valid(
+            db,
+            request.cookies.get(SessionConfig.cookie_name),
+        )
     if session is None:
         raise AuthException(data="", message="登录信息已过期，访问系统资源失败")
 
@@ -63,4 +70,7 @@ async def require_csrf(request: Request, db: AsyncSession = Depends(get_db)) -> 
             data="",
             message="会话验证失败，请刷新页面后重试",
         )
+    # 缓存给 get_current_user 复用（路由器级依赖先于端点级执行）：
+    # 同一请求只查一次会话表（审计 P4 的双读问题）
+    request.state.auth_session = session
 
