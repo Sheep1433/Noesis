@@ -118,6 +118,10 @@ class RunCommandService:
         row = await AgentRunRepository(db).get(run_id, user_id)
         if row is None:
             raise NotFoundException(message="任务不存在")
+        logger.info(
+            "hitl_resume 命令受理 run_id={} interrupt_id={} decisions={} 条",
+            run_id, interrupt_id, len(decision.get("decisions") or []),
+        )
         return await cls._submit(
             db, user_id=user_id, command_type="hitl_resume",
             dedupe_key=f"run:{run_id}:hitl:{interrupt_id}", run_id=run_id,
