@@ -6,8 +6,11 @@
 - 队列满或 publish 失败：丢弃该事件并记 gap 指标（at-most-once 实时面），
   不阻塞 producer、不改变 Run 状态——远端 subscriber 经 sequence gap 检测
   与 snapshot 对账恢复
-- owner term 门控：leadership token 失效（leader 失锁）后停止发布，旧 term
-  事件即使发出也会被订阅端忽略，这里直接丢弃省流量
+- claim epoch 门控（worker-role-split）：``RunEventEnvelope.owner_term``
+  携带该 run 的认领代次（语义自 leader term 迁移）。失去持有（epoch
+  过期/被再认领）由心跳协程停掉本地 run，事件源头随之枯竭——发布侧
+  不再逐条校验（hub 侧 owner_term 过滤机制不变，对 epoch 语义天然
+  兼容：同 owner 值恒等、换 owner 后旧值被滤）
 """
 
 from __future__ import annotations
@@ -31,14 +34,16 @@ class RunEventPublisher:
         *,
         run_id: str,
         bus: Any,
-        token_provider: Callable[[], Any],
+        owner_instance_id: str,
+        claim_epoch: int,
         max_events: int,
         max_bytes: int,
         on_metric: Callable[[str], None] | None = None,
     ) -> None:
         self._run_id = run_id
         self._bus = bus
-        self._token_provider = token_provider
+        self._owner_instance_id = owner_instance_id
+        self._claim_epoch = claim_epoch
         self._max_events = max_events
         self._max_bytes = max_bytes
         self._on_metric = on_metric
@@ -107,11 +112,6 @@ class RunEventPublisher:
         while True:
             envelope = await self._queue.get()
             self._bytes = max(0, self._bytes - envelope.estimated_bytes)
-            token = self._token_provider()
-            if token is None or not getattr(token, "valid", False):
-                # 旧 term 事件订阅端也会忽略；此处直接丢弃
-                self._report("bus_publisher_stale_term")
-                continue
             pairs = sequenced_event_payloads(envelope)
             if not pairs:
                 continue
@@ -119,8 +119,10 @@ class RunEventPublisher:
                 RunEventEnvelope(
                     schema_version=RUN_BUS_SCHEMA_VERSION,
                     run_id=self._run_id,
-                    owner_instance_id=str(token.instance_id),
-                    owner_term=int(token.term),
+                    owner_instance_id=self._owner_instance_id,
+                    # 语义迁移（worker-role-split）：owner_term 携带 claim epoch，
+                    # hub 侧迟到过滤机制对 epoch 天然兼容
+                    owner_term=self._claim_epoch,
                     sequence=envelope.sequence,
                     attempt_id=envelope.attempt_id,
                     event_type=event_type,

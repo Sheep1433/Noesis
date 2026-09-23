@@ -1,4 +1,5 @@
 import asyncio
+import os
 from contextlib import AsyncExitStack, asynccontextmanager
 from fastapi import FastAPI
 from fastapi.responses import JSONResponse
@@ -85,7 +86,9 @@ async def lifespan(app: FastAPI):
 
         dispatcher = RunDispatcher(
             bus=run_bus,
-            token_provider=lambda: elector.token,
+            # worker-role-split：认领者标识为进程实例 ID（pid 确保同机多进程唯一；
+            # Phase 3 入口拆分后各入口沿用同款生成）
+            instance_id=f"{AppConfig.app_name}-worker-{os.getpid()}",
             scan_interval_seconds=DistributedRunsConfig.queued_scan_interval_seconds,
         )
         # dispatcher 停止排在 run_manager drain 之后、elector 放锁之前

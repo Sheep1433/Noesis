@@ -15,16 +15,16 @@
 
 ## 3. 认领循环 worker 化 + fencing 管道（Phase 2）
 
-- [ ] 3.1 `services/run_dispatcher.py`：去 leader 化——`token_provider` 校验移除，认领者标识改为进程实例 ID；容量判定从全局 run_manager 容量改 per-process 配额；bus wake-up + 补扫机制原样保留
-- [ ] 3.2 `chat/runs/manager.py` + `chat/runs/publisher.py`：term/token 逐操作校验替换为 per-run `claim_epoch`——RunHandle 持有认领时 epoch，`apply_event` 拒绝路径（现 `StaleProducerGeneration`）与 publisher 提交前校验改比对 epoch
-- [ ] 3.3 SKIP LOCKED 批量圈行（多 worker 同批 queued 的竞争优化）：`claim_next_batch(limit)` —— `SELECT ... FOR UPDATE SKIP LOCKED` 圈行后逐行 CAS；单 worker 部署路径走原单行 CAS 不变
-- [ ] 3.4 worker 心跳协程：持有期间周期 `heartbeat()`（间隔 lease_ttl/3），随 run 终态/释放停止
-- [ ] 3.5 单测：双模拟 worker 并发认领同批 run 无双跑；epoch 不符事件被拒；心跳随生命周期启停
+- [x] 3.1 `services/run_dispatcher.py`：去 leader 化——`token_provider` 校验移除，认领者标识改为进程实例 ID；容量判定从全局 run_manager 容量改 per-process 配额；bus wake-up + 补扫机制原样保留
+- [x] 3.2 `chat/runs/manager.py` + `chat/runs/publisher.py`：term/token 逐操作校验替换为 per-run `claim_epoch`——RunHandle 持有认领时 epoch，`apply_event` 拒绝路径（现 `StaleProducerGeneration`）与 publisher 提交前校验改比对 epoch
+- [x] 3.3 SKIP LOCKED 批量圈行（多 worker 同批 queued 的竞争优化）：`claim_next_batch(limit)` —— `SELECT ... FOR UPDATE SKIP LOCKED` 圈行后逐行 CAS；单 worker 部署路径走原单行 CAS 不变
+- [x] 3.4 worker 心跳协程：持有期间周期 `heartbeat()`（间隔 lease_ttl/3），随 run 终态/释放停止
+- [x] 3.5 单测：双模拟 worker 并发认领同批 run 无双跑；epoch 不符事件被拒；心跳随生命周期启停
 
 ## 4. 命令消费分片（Phase 2）
 
-- [ ] 4.1 `services/run_command_service.py`：消费扫描加 run 归属过滤——命令 `run_id` 在本进程 handle 注册表命中才认领；未命中跳过（留给 owner worker 或对账重置）；无 run 归属的全局命令路由 control；认领租约机制原样
-- [ ] 4.2 单测：本进程命令消费、他进程命令跳过；owner 崩溃后命令经租约超时重置被对账/新 owner 消费
+- [x] 4.1 `services/run_command_service.py`：消费扫描加 run 归属过滤——命令 `run_id` 在本进程 handle 注册表命中才认领；未命中跳过（留给 owner worker 或对账重置）；无 run 归属的全局命令路由 control；认领租约机制原样
+- [x] 4.2 单测：本进程命令消费、他进程命令跳过；owner 崩溃后命令经租约超时重置被对账/新 owner 消费
 
 ## 5. 三入口拆分（Phase 3）
 

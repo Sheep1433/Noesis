@@ -208,14 +208,17 @@ class RunCommandConsumer:
         self,
         *,
         bus: Any,
-        token_provider: Callable[[], Any],
         scan_interval_seconds: float = 5.0,
         retention_days: float = 7.0,
         cleanup_interval_seconds: float = 3600.0,
         claim_lease_seconds: float = 30.0,
+        shard_filter: Callable[[Any], bool] | None = None,
     ) -> None:
         self._bus = bus
-        self._token_provider = token_provider
+        # worker-role-split 命令分片：worker 注入「命令目标在本进程持有」
+        # 判定（run_manager 注册表 / executor 热集）；None = 不过滤
+        #（单进程部署 / control 消费全局命令）
+        self._shard_filter = shard_filter
         self._scan_interval = scan_interval_seconds
         self._claim_lease_ms = int(max(5.0, claim_lease_seconds) * 1000)
         self._retention_days = retention_days
@@ -248,9 +251,6 @@ class RunCommandConsumer:
                 logger.exception("run command cleanup error")
 
     async def _cleanup_once(self) -> int:
-        token = self._token_provider()
-        if token is None or not getattr(token, "valid", False):
-            return 0
         async with pg_manager.get_async_session_context() as db:
             deleted = await AgentRunCommandRepository(db).cleanup_expired(
                 retention_days=self._retention_days
@@ -300,14 +300,13 @@ class RunCommandConsumer:
                 await asyncio.sleep(self._scan_interval)
 
     async def _consume_once(self) -> int:
-        token = self._token_provider()
-        if token is None or not getattr(token, "valid", False):
-            return 0
         async with pg_manager.get_async_session_context() as db:
             await AgentRunCommandRepository(db).reset_stale_claimed(
                 lease_ms=self._claim_lease_ms,
             )
-            rows = await AgentRunCommandRepository(db).claim_pending()
+            rows = await AgentRunCommandRepository(db).claim_pending(
+                shard_filter=self._shard_filter,
+            )
         for row in rows:
             await self._execute(row)
         return len(rows)

@@ -41,6 +41,7 @@ from noesis.chat.runs import (
     RunManager,
     RunSnapshot,
     RunStatus,
+    TERMINAL_RUN_STATUSES,
     TerminalCandidate,
     TerminalCommitResult,
 )
@@ -419,11 +420,17 @@ class RunService:
         run: TAgentRun,
         payload: LaunchPayload,
         current_user: CurrentUser,
+        *,
+        owner_instance_id: str | None = None,
+        claim_epoch: int | None = None,
     ) -> None:
         """启动已 claim 的 queued Run（dispatcher 调用；幂等，重复启动直接返回）。
 
         run 参数须为 DB 权威行（launch_payload / owner_term 已就位）；
         current_user 由调用方从 DB 用户记录重建，不依赖请求进程上下文。
+        ``owner_instance_id`` / ``claim_epoch`` 为认领上下文（worker-role-split）：
+        传入即启用 fencing（终态/checkpoint 落库带 epoch 条件、心跳协程
+        检测失去持有并自停）；None = 非认领路径（channel 等），行为不变。
         """
         try:
             run_manager.get(run.id)
@@ -442,6 +449,8 @@ class RunService:
             origin=run.origin,
             status=RunStatus.RUNNING,
             attempt_id=run.attempt_id,
+            owner_instance_id=owner_instance_id,
+            claim_epoch=claim_epoch,
         )
         qa_request = payload.to_qa_query_request()
         persist_sink = PersistSink(
@@ -454,6 +463,7 @@ class RunService:
                 request.assistant_message_id,
                 request.snapshot,
                 request.snapshot_sequence,
+                claim_epoch=claim_epoch,
             )
 
         def checkpoint_policy(event: RunEvent, _sequence: int) -> str | None:
@@ -511,8 +521,67 @@ class RunService:
                 if run.qa_type == IntentEnum.SUPER_AGENT_QA.value[0]
                 else None
             ),
+            owner_instance_id=owner_instance_id,
+            claim_epoch=claim_epoch,
         )
         await cls.mark_run_started(run.id)
+        if owner_instance_id is not None and claim_epoch is not None:
+            cls._spawn_heartbeat(run.id, owner_instance_id, claim_epoch)
+
+    _HEARTBEAT_LEASE_TTL_SECONDS = 60.0
+    _HEARTBEAT_INTERVAL_SECONDS = _HEARTBEAT_LEASE_TTL_SECONDS / 3
+
+    @classmethod
+    def _spawn_heartbeat(
+        cls, run_id: str, owner_instance_id: str, claim_epoch: int
+    ) -> None:
+        """持有期间的心跳协程（fire-and-forget，自带全部退出路径）。
+
+        - 心跳落空（epoch/owner 不符，run 已被重置/再认领/终态）→ 停掉本地
+          run（失去持有自停，防僵尸双写），退出；
+        - run 终态 / 出册（KeyError）→ 退出；
+        - 周期 = lease_ttl/3，容忍事件循环卡顿与常规 GC 停顿（60s 租约的
+          依据：远大于繁忙进程的秒级卡顿、远小于用户可感知的故障切换窗口）。
+        """
+
+        async def _loop() -> None:
+            while True:
+                await asyncio.sleep(cls._HEARTBEAT_INTERVAL_SECONDS)
+                try:
+                    handle = run_manager.get(run_id)
+                except KeyError:
+                    return  # 已出册：事实权威在 DB，无需再跳
+                if handle.status in TERMINAL_RUN_STATUSES:
+                    return
+                try:
+                    async with pg_manager.get_async_session_context() as db:
+                        alive = await AgentRunRepository(db).heartbeat(
+                            run_id=run_id,
+                            owner_instance_id=owner_instance_id,
+                            claim_epoch=claim_epoch,
+                            now_ms=_now_ms(),
+                        )
+                        await db.commit()
+                except Exception:
+                    logger.exception("agent_run_heartbeat_failed run_id={}", run_id)
+                    continue  # DB 抖动不等于失去持有：下轮再试
+                if not alive:
+                    logger.warning(
+                        "agent_run_lease_lost run_id={} epoch={} instance_id={} "
+                        "（run 已被重置/再认领），停掉本地执行",
+                        run_id,
+                        claim_epoch,
+                        owner_instance_id,
+                    )
+                    try:
+                        await run_manager.stop(run_id)
+                    except Exception:
+                        logger.exception(
+                            "agent_run_lease_lost_stop_failed run_id={}", run_id
+                        )
+                    return
+
+        asyncio.create_task(_loop(), name=f"agent-run-heartbeat:{run_id}")
 
     @classmethod
     async def mark_run_started(cls, run_id: str) -> None:
@@ -539,9 +608,12 @@ class RunService:
         assistant_message_id: str,
         snapshot: RunSnapshot,
         sequence: int,
+        *,
+        claim_epoch: int | None = None,
     ) -> None:
         """写入 immutable checkpoint snapshot。snapshot 在 apply_event lock 内捕获，
-        与 sequence 绑定。DB UPDATE 带 sequence guard：迟到 checkpoint 不覆盖更新状态。"""
+        与 sequence 绑定。DB UPDATE 带 sequence guard：迟到 checkpoint 不覆盖更新状态；
+        ``claim_epoch`` 非 None 时叠加 fencing guard：被重置/再认领的僵尸写被拒。"""
         deadline = time.monotonic() + StreamConfig.persistence_timeout_seconds
         last_error: Exception | None = None
         content = {"parts": [dict(part) for part in snapshot.parts]}
@@ -561,6 +633,7 @@ class RunService:
                         status=snapshot.status,
                         finish_reason=snapshot.finish_reason,
                         updated_at=_now_ms(),
+                        claim_epoch=claim_epoch,
                     )
                     if stored:
                         await db.commit()
@@ -613,6 +686,7 @@ class RunService:
                 user_error_message=projection.user_error_message,
                 usage=projection.run_usage,
                 model_calls=projection.run_model_calls,
+                claim_epoch=projection.claim_epoch,
             )
             if won:
                 await db.commit()
@@ -669,6 +743,7 @@ class RunService:
                     user_error_message=projection.user_error_message,
                     usage=projection.run_usage,
                     model_calls=projection.run_model_calls,
+                    claim_epoch=projection.claim_epoch,
                 )
                 if not won:
                     await db.rollback()

@@ -11,6 +11,7 @@ import hashlib
 import json
 import time
 import uuid
+from collections.abc import Callable
 
 from sqlalchemy import delete, select, update
 from sqlalchemy.exc import IntegrityError
@@ -119,8 +120,20 @@ class AgentRunCommandRepository:
         )
         return result.scalar_one_or_none()
 
-    async def claim_pending(self, *, limit: int = 20) -> list[TAgentRunCommand]:
-        """认领 pending 命令（FOR UPDATE SKIP LOCKED：多 consumer 安全）。"""
+    async def claim_pending(
+        self,
+        *,
+        limit: int = 20,
+        shard_filter: Callable[[TAgentRunCommand], bool] | None = None,
+    ) -> list[TAgentRunCommand]:
+        """认领 pending 命令（FOR UPDATE SKIP LOCKED：多 consumer 安全）。
+
+        ``shard_filter``（worker-role-split 命令分片）：worker 部署时注入
+        「命令目标 run/任务是否在本进程持有」判定——圈行后 Python 侧过滤，
+        只对通过的行认领；未通过的行锁随本事务提交释放，留给目标 owner
+        worker 的下一轮扫描（或换主对账）。None = 不过滤（单进程/control
+        全局命令消费）。
+        """
         result = await self.db.execute(
             select(TAgentRunCommand)
             .where(TAgentRunCommand.status == "pending")
@@ -129,6 +142,8 @@ class AgentRunCommandRepository:
             .with_for_update(skip_locked=True)
         )
         rows = list(result.scalars().all())
+        if shard_filter is not None:
+            rows = [row for row in rows if shard_filter(row)]
         if rows:
             now = _now_ms()
             await self.db.execute(

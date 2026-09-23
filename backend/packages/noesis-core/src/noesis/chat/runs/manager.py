@@ -341,7 +341,6 @@ class RunManager:
         terminal_retry_interval_seconds: float = 5.0,
         checkpoint_retry_interval_seconds: float = 0.25,
         bus: Any | None = None,
-        token_provider: Any | None = None,
         publisher_queue_max_events: int = 512,
         publisher_queue_max_bytes: int = 1024 * 1024,
         periodic_checkpoint_interval_seconds: float = 15.0,
@@ -382,7 +381,6 @@ class RunManager:
         self.checkpoint_retry_interval_seconds = checkpoint_retry_interval_seconds
         # Run bus 发布面（task 4.2）：None = 未装配（单测），事件只走本地订阅
         self._bus = bus
-        self._token_provider = token_provider
         self.publisher_queue_max_events = publisher_queue_max_events
         self.publisher_queue_max_bytes = publisher_queue_max_bytes
         self.periodic_checkpoint_interval_seconds = periodic_checkpoint_interval_seconds
@@ -415,14 +413,15 @@ class RunManager:
     def _bump_metric(self, name: str) -> None:
         self._metrics[name] = self._metrics.get(name, 0) + 1
 
-    def attach_bus(self, bus: Any, token_provider: Any) -> None:
-        """装配 Run bus 发布面（main.py lifespan 在 leader 选举后调用）。
+    def attach_bus(self, bus: Any) -> None:
+        """装配 Run bus 发布面（main.py lifespan 启动时调用）。
 
         已在跑的 Run 不补建 publisher（重启后新 Run 才跨进程广播）；
-        memory 模式同样装配——两种模式共用同一发布路径。
+        memory 模式同样装配——两种模式共用同一发布路径。publisher 的
+        fencing 值（owner/epoch）随各 Run 的 start() 传入（worker-role-split：
+        全局 leadership token 不再参与发布门控）。
         """
         self._bus = bus
-        self._token_provider = token_provider
 
     async def start(
         self,
@@ -441,6 +440,8 @@ class RunManager:
         terminal_handler: TerminalHandler | None = None,
         checkpoint_handler: CheckpointHandler | None = None,
         max_run_duration_seconds: float | None = None,
+        owner_instance_id: str | None = None,
+        claim_epoch: int | None = None,
     ) -> RunHandle:
         loop = asyncio.get_running_loop()
         handle = RunHandle(
@@ -466,11 +467,16 @@ class RunManager:
             max_buffer_events=self.max_buffer_events,
             max_buffer_bytes=self.max_buffer_bytes,
         )
-        if self._bus is not None and self._token_provider is not None:
+        if (
+            self._bus is not None
+            and owner_instance_id is not None
+            and claim_epoch is not None
+        ):
             handle.publisher = RunEventPublisher(
                 run_id=run_id,
                 bus=self._bus,
-                token_provider=self._token_provider,
+                owner_instance_id=owner_instance_id,
+                claim_epoch=claim_epoch,
                 max_events=self.publisher_queue_max_events,
                 max_bytes=self.publisher_queue_max_bytes,
                 on_metric=self._bump_metric,

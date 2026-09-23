@@ -274,3 +274,50 @@ async def test_checkpoint_with_epoch_fencing_rejects_stale_writer() -> None:
     )
     assert ok is False
     assert db.execute.await_count == 1  # 僵尸写止步于 run 行，未碰消息
+
+
+@pytest.mark.asyncio
+async def test_claim_next_batch_skips_capacity_full_and_collects_epochs() -> None:
+    """批量认领：容量满的行跳过（保持 queued）、通过行收集 (run_id, epoch)。"""
+    db = MagicMock()
+    # ①圈行 SELECT 返回两行 ②③逐行 claim 的 RETURNING
+    rows = MagicMock()
+    rows.all.return_value = [("run-1", "user-1"), ("run-2", "user-2")]
+    db.execute = AsyncMock(
+        side_effect=[
+            rows,
+            SimpleNamespace(rowcount=1, fetchone=lambda: (4,)),
+            SimpleNamespace(rowcount=1, fetchone=lambda: (2,)),
+        ]
+    )
+    repository = AgentRunRepository(db)
+
+    async def capacity_check(user_id: str) -> None:
+        if user_id == "user-2":
+            from noesis.chat.runs import RunCapacityExceeded
+            raise RunCapacityExceeded("user limit")
+
+    claimed = await repository.claim_next_batch(
+        owner_instance_id="w-1", limit=10, now_ms=1, capacity_check=capacity_check
+    )
+    assert claimed == [("run-1", 4)]  # run-2 容量满：不认领，留给其他 worker
+    # 圈行语句带 FOR UPDATE SKIP LOCKED（方言渲染差异：断言语句属性而非字符串）
+    batch_stmt = db.execute.await_args_list[0].args[0]
+    for_update = batch_stmt._for_update_arg
+    assert for_update is not None and for_update.skip_locked
+
+
+@pytest.mark.asyncio
+async def test_claim_next_batch_without_capacity_check_claims_all() -> None:
+    db = MagicMock()
+    rows = MagicMock()
+    rows.all.return_value = [("run-1", "u1")]
+    db.execute = AsyncMock(
+        side_effect=[rows, SimpleNamespace(rowcount=1, fetchone=lambda: (1,))]
+    )
+    repository = AgentRunRepository(db)
+
+    claimed = await repository.claim_next_batch(
+        owner_instance_id="w-1", limit=5, now_ms=1
+    )
+    assert claimed == [("run-1", 1)]

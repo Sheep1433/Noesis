@@ -116,16 +116,19 @@ def build_promotion_callback(
     """
 
     async def _on_promotion(token) -> None:
-        run_manager.attach_bus(run_bus, token_provider=lambda: elector.token)
+        run_manager.attach_bus(run_bus)
         from noesis.agents.background.jobs import events as bg_run_events
 
         bg_run_events.configure_run_event_bridge(run_bus, lambda: elector.token)
         if "command_consumer" not in leader_components:
             consumer = RunCommandConsumer(
                 bus=run_bus,
-                token_provider=lambda: elector.token,
                 scan_interval_seconds=DistributedRunsConfig.command_scan_interval_seconds,
                 retention_days=DistributedRunsConfig.command_retention_days,
+                # worker-role-split 过渡：单进程（memory 模式 / redis leader）
+                # 持有全部 run，不分片；Phase 3 入口拆分后由 worker 注入
+                # 进程内持有判定
+                shard_filter=None,
             )
             leader_components["command_consumer"] = consumer
             resources.push_async_callback(consumer.stop)

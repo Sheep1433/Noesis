@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from collections.abc import Iterable
+from collections.abc import Awaitable, Callable, Iterable
 
 from sqlalchemy import select, update
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -203,6 +203,53 @@ class AgentRunRepository:
         )
         return result.rowcount == 1
 
+    async def claim_next_batch(
+        self,
+        *,
+        owner_instance_id: str,
+        limit: int,
+        now_ms: int,
+        capacity_check: Callable[[str], Awaitable[None]] | None = None,
+    ) -> list[tuple[str, int]]:
+        """worker 批量认领：``FOR UPDATE SKIP LOCKED`` 圈行 + 锁内逐行容量检查 + CAS。
+
+        返回 ``[(run_id, claim_epoch), ...]``（epoch > 0）。SKIP LOCKED 让
+        多 worker 同批 queued 时互不阻塞（正确性由行锁 + CAS 双保险，
+        SKIP LOCKED 只省竞争空转）。容量检查在锁内调用（调用方注入，
+        满则抛异常）：满的行不认领、保持 queued，锁释放后其他 worker
+        仍可认领。subagent run 排除（同 list_claimable_queued 语义）。
+
+        调用方负责 commit（认领与启动解耦：本事务提交后启动在事务外）。
+        """
+        rows = await self.db.execute(
+            select(TAgentRun.id, TAgentRun.user_id)
+            .where(
+                TAgentRun.status == RunStatus.QUEUED.value,
+                TAgentRun.origin != "subagent",
+                TAgentRun.owner_instance_id.is_(None),
+                TAgentRun.owner_term == 0,
+            )
+            .order_by(TAgentRun.created_at)
+            .limit(limit)
+            .with_for_update(skip_locked=True)
+        )
+        claimed: list[tuple[str, int]] = []
+        for run_id, user_id in rows.all():
+            if capacity_check is not None:
+                try:
+                    await capacity_check(str(user_id))
+                except Exception:
+                    continue  # 本进程容量满（全局或该用户）：留给其他 worker/下轮
+            epoch = await self.claim_queued(
+                run_id=run_id,
+                owner_instance_id=owner_instance_id,
+                owner_term=0,
+                now_ms=now_ms,
+            )
+            if epoch > 0:
+                claimed.append((run_id, epoch))
+        return claimed
+
     async def save_checkpoint(
         self,
         *,
@@ -268,8 +315,13 @@ class AgentRunRepository:
         user_error_message: str | None = None,
         snapshot: dict | None = None,
         last_sequence: int | None = None,
+        claim_epoch: int | None = None,
     ) -> bool:
-        """仅对 run 行做终态 CAS，不动 assistant 消息行。调用方负责 commit。"""
+        """仅对 run 行做终态 CAS，不动 assistant 消息行。调用方负责 commit。
+
+        ``claim_epoch`` 非 None 时叠加 fencing 条件（worker-role-split）：
+        epoch 不符（被重置/再认领）的僵尸终态写被拒。
+        """
         if target not in {
             RunStatus.COMPLETED,
             RunStatus.PARTIAL,
@@ -278,9 +330,12 @@ class AgentRunRepository:
         }:
             raise ValueError(f"target is not terminal: {target.value}")
         active = [status.value for status in ACTIVE_RUN_STATUSES]
+        conditions = [TAgentRun.id == run_id, TAgentRun.status.in_(active)]
+        if claim_epoch is not None:
+            conditions.append(TAgentRun.claim_epoch == claim_epoch)
         run_result = await self.db.execute(
             update(TAgentRun)
-            .where(TAgentRun.id == run_id, TAgentRun.status.in_(active))
+            .where(*conditions)
             .values(
                 status=target.value,
                 finish_reason=finish_reason,
@@ -309,6 +364,7 @@ class AgentRunRepository:
         snapshot: dict | None = None,
         usage: dict | None = None,
         model_calls: list | None = None,
+        claim_epoch: int | None = None,
     ) -> bool:
         """同一事务内抢占 run 终态并更新唯一 assistant 行。调用方负责 commit。"""
         won = await self.finalize_run_only(
@@ -320,6 +376,7 @@ class AgentRunRepository:
             user_error_message=user_error_message,
             snapshot=snapshot if snapshot is not None else content,
             last_sequence=last_sequence,
+            claim_epoch=claim_epoch,
         )
         if not won:
             return False

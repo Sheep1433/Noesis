@@ -1,6 +1,7 @@
-"""Run dispatcher 契约：claim 状态机、容量跳过、启动失败收口、唤醒丢失兜底。
+"""Run dispatcher 契约：批量认领（SKIP LOCKED + 容量回调）、启动失败收口、唤醒兜底。
 
-对应 openspec enable-distributed-sse-pubsub task 3.1–3.4。
+对应 openspec worker-role-split task 3.1/3.3（前身为
+enable-distributed-sse-pubsub task 3.1–3.4，leader token 语义已移除）。
 """
 
 from __future__ import annotations
@@ -11,16 +12,10 @@ from unittest.mock import AsyncMock, MagicMock
 
 import pytest
 
-from noesis.chat.runs import RunCapacityExceeded, RunStatus
 from noesis.chat.runs.bus import InMemoryRunBus, WAKEUP_TOPIC_RUN_CREATED
 from noesis.chat.runs.launch_payload import LaunchPayload
-from noesis.services.leader_elector import LeadershipLostError, LeadershipToken
 from noesis.services import run_dispatcher as run_dispatcher_module
 from noesis.services.run_dispatcher import RunDispatcher
-
-
-def _token(term: int = 1) -> LeadershipToken:
-    return LeadershipToken(term=term, instance_id="instance-a", cluster_id="local")
 
 
 def _queued_run(run_id: str = "run-1", user_id: str = "user-1") -> SimpleNamespace:
@@ -40,7 +35,7 @@ def _queued_run(run_id: str = "run-1", user_id: str = "user-1") -> SimpleNamespa
     return SimpleNamespace(
         id=run_id,
         user_id=user_id,
-        status=RunStatus.QUEUED.value,
+        status="queued",
         owner_instance_id=None,
         owner_term=0,
         launch_payload=payload.to_dict(),
@@ -62,21 +57,19 @@ class _DbContext:
 
 @pytest.fixture
 def wiring(monkeypatch):
-    """组装 dispatcher 测试替身：repo / manager / run service / user service。"""
+    """组装 dispatcher 测试替身：repo / run service / user service。"""
     bus = InMemoryRunBus(envelope_payload_max_bytes=64 * 1024)
-    token_holder: dict[str, LeadershipToken | None] = {"token": _token()}
 
     repository = MagicMock()
-    repository.list_claimable_queued = AsyncMock(return_value=[])
-    repository.claim_queued = AsyncMock(return_value=True)
+    repository.claim_next_batch = AsyncMock(return_value=[])
     repository.get = AsyncMock(return_value=None)
 
     started_runs: list[str] = []
     start_calls = AsyncMock()
 
-    async def fake_start_queued_run(run, payload, current_user):
+    async def fake_start_queued_run(run, payload, current_user, **kwargs):
         started_runs.append(run.id)
-        start_calls(run, payload, current_user)
+        await start_calls(run, payload, current_user, **kwargs)
 
     finalize = AsyncMock()
 
@@ -91,7 +84,9 @@ def wiring(monkeypatch):
     monkeypatch.setattr(
         run_dispatcher_module, "AgentRunRepository", lambda _db: repository
     )
-    monkeypatch.setattr(run_dispatcher_module.run_manager, "check_run_capacity", AsyncMock())
+    monkeypatch.setattr(
+        run_dispatcher_module.run_manager, "check_run_capacity", AsyncMock()
+    )
     monkeypatch.setattr(
         run_dispatcher_module.RunService,
         "start_queued_run",
@@ -109,7 +104,7 @@ def wiring(monkeypatch):
     def make_dispatcher(**overrides) -> RunDispatcher:
         kwargs = dict(
             bus=bus,
-            token_provider=lambda: token_holder["token"],
+            instance_id="worker-a",
             scan_interval_seconds=60.0,
         )
         kwargs.update(overrides)
@@ -117,7 +112,6 @@ def wiring(monkeypatch):
 
     return SimpleNamespace(
         bus=bus,
-        token_holder=token_holder,
         repository=repository,
         db=db,
         started_runs=started_runs,
@@ -134,47 +128,33 @@ async def _trigger_scan(dispatcher: RunDispatcher) -> None:
 
 
 @pytest.mark.asyncio
-async def test_scan_claims_and_starts_queued_run(wiring) -> None:
+async def test_scan_claims_and_starts_with_epoch(wiring) -> None:
     run = _queued_run()
-    wiring.repository.list_claimable_queued.return_value = [run]
+    wiring.repository.claim_next_batch.return_value = [("run-1", 3)]
     wiring.repository.get.return_value = run
     dispatcher = wiring.make_dispatcher()
 
     await _trigger_scan(dispatcher)
 
-    kwargs = wiring.repository.claim_queued.await_args.kwargs
-    assert kwargs["run_id"] == "run-1"
-    assert kwargs["owner_instance_id"] == "instance-a"
-    assert kwargs["owner_term"] == 1
+    kwargs = wiring.repository.claim_next_batch.await_args.kwargs
+    assert kwargs["owner_instance_id"] == "worker-a"
+    assert isinstance(kwargs["limit"], int)
     assert isinstance(kwargs["now_ms"], int)
+    # 容量检查经回调注入（锁内逐行判定的接线点）
+    assert kwargs["capacity_check"] is run_dispatcher_module.run_manager.check_run_capacity
+    # 认领上下文（owner + epoch）随启动传递——心跳与 fencing 的输入
+    start_kwargs = wiring.start_calls.await_args.kwargs
+    assert start_kwargs["owner_instance_id"] == "worker-a"
+    assert start_kwargs["claim_epoch"] == 3
     assert wiring.started_runs == ["run-1"]
     wiring.db.commit.assert_awaited_once()
     wiring.finalize.assert_not_awaited()
 
 
 @pytest.mark.asyncio
-async def test_capacity_full_keeps_run_queued(wiring) -> None:
-    """容量满：claim 前跳过，run 保持 queued 等下轮，不收口 error。"""
-    wiring.monkeypatch.setattr(
-        run_dispatcher_module.run_manager,
-        "check_run_capacity",
-        AsyncMock(side_effect=RunCapacityExceeded("full")),
-    )
-    wiring.repository.list_claimable_queued.return_value = [_queued_run()]
-    dispatcher = wiring.make_dispatcher()
-
-    await _trigger_scan(dispatcher)
-
-    wiring.repository.claim_queued.assert_not_awaited()
-    assert wiring.started_runs == []
-    wiring.finalize.assert_not_awaited()
-
-
-@pytest.mark.asyncio
-async def test_claim_loser_skips_start(wiring) -> None:
-    """并发 claim 输家（rowcount=0）：跳过启动，无副作用。"""
-    wiring.repository.list_claimable_queued.return_value = [_queued_run()]
-    wiring.repository.claim_queued.return_value = False
+async def test_claim_loser_batch_empty_skips_start(wiring) -> None:
+    """并发 claim 输家（批量返回空）：跳过启动，无副作用。"""
+    wiring.repository.claim_next_batch.return_value = []
     dispatcher = wiring.make_dispatcher()
 
     await _trigger_scan(dispatcher)
@@ -186,10 +166,10 @@ async def test_claim_loser_skips_start(wiring) -> None:
 async def test_start_failure_after_claim_is_finalized(wiring) -> None:
     """claim 成功但 producer 启动失败：必须收口，不留无 producer 的行。"""
     run = _queued_run()
-    wiring.repository.list_claimable_queued.return_value = [run]
+    wiring.repository.claim_next_batch.return_value = [("run-1", 1)]
     wiring.repository.get.return_value = run
 
-    async def boom(*_args):
+    async def boom(*_args, **_kwargs):
         raise RuntimeError("cannot register producer")
 
     wiring.monkeypatch.setattr(
@@ -207,7 +187,7 @@ async def test_context_rebuild_failure_finalizes(wiring) -> None:
     """payload 损坏 / 用户已删除：claim 已提交，收口 RUN_START_FAILED。"""
     run = _queued_run()
     run.launch_payload = {"schema_version": 99}
-    wiring.repository.list_claimable_queued.return_value = [run]
+    wiring.repository.claim_next_batch.return_value = [("run-1", 1)]
     wiring.repository.get.return_value = run
     dispatcher = wiring.make_dispatcher()
 
@@ -218,35 +198,10 @@ async def test_context_rebuild_failure_finalizes(wiring) -> None:
 
 
 @pytest.mark.asyncio
-async def test_invalid_token_refuses_claim(wiring) -> None:
-    """leadership 失效后拒绝 claim（旧 term 不得继续启动 run）。"""
-    token = _token()
-    token._invalidate()
-    wiring.token_holder["token"] = token
-    wiring.repository.list_claimable_queued.return_value = [_queued_run()]
-    dispatcher = wiring.make_dispatcher()
-
-    # token 失效：scan 顶部短路（不打 DB）；claim 不会被调用
-    await _trigger_scan(dispatcher)
-
-    wiring.repository.list_claimable_queued.assert_not_awaited()
-    wiring.repository.claim_queued.assert_not_awaited()
-
-    # scan 进行中失效（顶部通过后 token 失效）：require_valid 抛错由 scan 兜底记录，
-    # 同样不得 claim
-    wiring.token_holder["token"] = _token()  # 顶部检查通过
-    wiring.monkeypatch.setattr(
-        run_dispatcher_module, "AgentRunRepository", lambda _db: MagicMock(
-            list_claimable_queued=AsyncMock(side_effect=LeadershipLostError)
-        )
-    )
-
-
-@pytest.mark.asyncio
 async def test_wakeup_loss_recovered_by_scan(wiring) -> None:
     """唤醒丢失兜底：不依赖 wakeup，周期补扫也能启动 queued run。"""
     run = _queued_run()
-    wiring.repository.list_claimable_queued.return_value = [run]
+    wiring.repository.claim_next_batch.return_value = [("run-1", 1)]
     wiring.repository.get.return_value = run
     dispatcher = wiring.make_dispatcher(scan_interval_seconds=0.05)
 
@@ -264,7 +219,7 @@ async def test_wakeup_loss_recovered_by_scan(wiring) -> None:
 @pytest.mark.asyncio
 async def test_wakeup_triggers_immediate_scan(wiring) -> None:
     run = _queued_run()
-    wiring.repository.list_claimable_queued.return_value = [run]
+    wiring.repository.claim_next_batch.return_value = [("run-1", 1)]
     wiring.repository.get.return_value = run
     dispatcher = wiring.make_dispatcher(scan_interval_seconds=60.0)
 
@@ -281,14 +236,13 @@ async def test_wakeup_triggers_immediate_scan(wiring) -> None:
 
 @pytest.mark.asyncio
 async def test_no_double_start_on_idempotent_scan(wiring) -> None:
-    """同一 run 重复出现在补扫结果中（claim 已写入）：claim 输家跳过，不双启动。"""
+    """同一 run 重复出现（已被认领）：批量返回空，不双启动。"""
     run = _queued_run()
-    wiring.repository.list_claimable_queued.side_effect = [[run], [run]]
+    wiring.repository.claim_next_batch.side_effect = [[("run-1", 1)], []]
     wiring.repository.get.return_value = run
     dispatcher = wiring.make_dispatcher()
 
     await _trigger_scan(dispatcher)
-    wiring.repository.claim_queued.return_value = False  # 第二轮：已被 claim
     await _trigger_scan(dispatcher)
 
     assert wiring.started_runs == ["run-1"]
