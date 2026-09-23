@@ -74,13 +74,27 @@ main() {
     cd "$BACKEND_DIR" && uv run python -c "from noesis.config.env import AppConfig; print(AppConfig.app_host, AppConfig.app_port)"
   )
 
-  log_info "启动后端三角色 (web :${PORT} / control :8091 / worker :8092) ..."
-  cd "$BACKEND_DIR"
-  uv run uvicorn web:app --host "$HOST" --port "$PORT" &
-  uv run uvicorn control:app --host "$HOST" --port 8091 &
-  uv run uvicorn worker:app --host "$HOST" --port 8092 &
-  BACKEND_PID=$!
-  log_info "Backend started (PID: $BACKEND_PID)"
+  # 双模式（同 dev.sh）：redis → 三角色（web/control/worker，可水平扩展）；
+  # memory → 单进程全干（本地裸机验收，零额外依赖）
+  BUS_MODE=$(grep -E '^NOESIS_RUN_BUS_BACKEND=' "$BACKEND_DIR/.env.prod" 2>/dev/null | cut -d= -f2)
+  BACKEND_PIDS=()
+  if [[ "$BUS_MODE" == "redis" ]]; then
+    log_info "启动后端三角色 (web :${PORT} / control :8091 / worker :8092, bus=redis) ..."
+    cd "$BACKEND_DIR"
+    uv run uvicorn web:app --host "$HOST" --port "$PORT" &
+    BACKEND_PIDS+=($!)
+    uv run uvicorn control:app --host "$HOST" --port 8091 &
+    BACKEND_PIDS+=($!)
+    uv run uvicorn worker:app --host "$HOST" --port 8092 &
+    BACKEND_PIDS+=($!)
+  else
+    log_info "启动后端单进程 (app:app :${PORT}, bus=memory) ..."
+    cd "$BACKEND_DIR"
+    uv run uvicorn app:app --host "$HOST" --port "$PORT" &
+    BACKEND_PIDS+=($!)
+  fi
+  BACKEND_PID="${BACKEND_PIDS[0]}"  # 兼容既有健康检查（web 为关键面）
+  log_info "Backend started (PIDs: ${BACKEND_PIDS[*]})"
   wait_for_backend "启动后"
 
   cd "$FRONTEND_DIR"
@@ -113,7 +127,7 @@ main() {
   log_info "推荐生产部署: ./scripts/run.sh docker（nginx + 静态资源）"
   log_info "按 Ctrl+C 停止应用进程"
 
-  wait "$BACKEND_PID" "$FRONTEND_PID"
+  wait "${BACKEND_PIDS[@]}" "$FRONTEND_PID"
   if [[ -n "$MCP_PID" ]]; then
     wait "$MCP_PID" 2>/dev/null || true
   fi

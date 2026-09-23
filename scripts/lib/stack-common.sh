@@ -208,7 +208,11 @@ stack_cleanup() {
   if [[ -n "$MCP_PID" ]]; then
     kill "$MCP_PID" 2>/dev/null || true
   fi
-  if [[ -n "$BACKEND_PID" ]]; then
+  if [[ -n "${BACKEND_PIDS[*]:-}" ]]; then
+    for pid in "${BACKEND_PIDS[@]}"; do
+      kill "$pid" 2>/dev/null || true
+    done
+  elif [[ -n "$BACKEND_PID" ]]; then
     kill "$BACKEND_PID" 2>/dev/null || true
   fi
   if [[ -n "$FRONTEND_PID" ]]; then
