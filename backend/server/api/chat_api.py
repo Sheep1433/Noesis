@@ -981,7 +981,13 @@ async def resume_hitl_run(
     command = await RunCommandService.submit_and_wait(
         RunCommandService.submit_hitl_resume(
             run_id, str(current_user.user_id), request.interrupt_id,
-            {"interrupt_id": request.interrupt_id, "decisions": request.decisions},
+            # HTTP 边界一次性落 JSON-safe：decisions 此刻是 pydantic 模型
+            # 实例，直传会在 decision_digest / 命令 payload 落库处炸序列化
+            #（2026-09-23 prod 实测：HITL 提交 500）
+            {
+                "interrupt_id": request.interrupt_id,
+                "decisions": [d.model_dump(mode="json") for d in request.decisions],
+            },
             db,
         ),
         db=db,
