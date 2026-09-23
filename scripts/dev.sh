@@ -28,6 +28,7 @@ main() {
   check_command pnpm
 
   start_qdrant
+  start_redis
   start_langfuse
   start_mcp
   start_sandbox_runner
