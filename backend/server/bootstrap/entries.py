@@ -69,9 +69,8 @@ async def _base_resources(resources: AsyncExitStack) -> None:
         await pg_manager.release_migration_lock()
 
 
-def _health_app(role: str) -> FastAPI:
-    """control / worker 的最小 app：只有 /health（角色显式上报）。"""
-    app = FastAPI(title=f"{AppConfig.app_name}-{role}")
+def _add_health_route(app: FastAPI, role: str) -> None:
+    """挂 /health 角色上报端点（control / worker 最小 app 与 all-in-one 共用）。"""
 
     @app.get("/health", tags=["系统"])
     async def health_check():
@@ -97,15 +96,16 @@ def _health_app(role: str) -> FastAPI:
             return JSONResponse(status_code=503, content={**body, "status": "not-ready"})
         return body
 
+
+def _health_app(role: str) -> FastAPI:
+    """control / worker 的最小 app：只有 /health（角色显式上报）。"""
+    app = FastAPI(title=f"{AppConfig.app_name}-{role}")
+    _add_health_route(app, role)
     return app
 
 
-# ---------------------------------------------------------------------------
-# web：全部业务路由 + SSE 转发（无执行面）
-# ---------------------------------------------------------------------------
-
-
-def build_web_app() -> FastAPI:
+def _mount_web_routes(app: FastAPI) -> None:
+    """web 面路由挂载（build_web_app 与 build_all_in_one_app 共用）。"""
     from fastapi import Depends
     from server.api import (
         auth_router,
@@ -124,23 +124,6 @@ def build_web_app() -> FastAPI:
     from server.middleware.request_log_context import RequestLogContextMiddleware
     from server.exception_handlers import handle_exception
 
-    @asynccontextmanager
-    async def lifespan(app: FastAPI):
-        _require_redis_bus()
-        from noesis.knowledge.runtime import close_knowledge_base, init_knowledge_base
-
-        async with AsyncExitStack() as resources:
-            await _base_resources(resources)
-            await init_knowledge_base()
-            resources.push_async_callback(close_knowledge_base)
-            logger.info(f"🚀 {AppConfig.app_name} web 启动成功（无执行面）")
-            yield
-
-    app = _health_app("web")
-    app.title = AppConfig.app_name
-    app.description = f"{AppConfig.app_name}接口文档"
-    app.version = AppConfig.app_version
-    app.router.lifespan_context = lifespan
     handle_exception(app)
     app.add_middleware(RequestLogContextMiddleware)
     # 路由器级 CSRF（单一实现，挂载守卫契约测试钉住）；auth_router 豁免
@@ -161,6 +144,35 @@ def build_web_app() -> FastAPI:
         csrf_deps = [] if router is auth_router else [Depends(_require_csrf)]
         app.include_router(router=router, dependencies=csrf_deps)
 
+
+# ---------------------------------------------------------------------------
+# web：全部业务路由 + SSE 转发（无执行面）
+# ---------------------------------------------------------------------------
+
+
+def build_web_app() -> FastAPI:
+    """web × N：全部业务路由 + SSE 转发（无执行面，三入口形态，redis 强制）。"""
+
+    @asynccontextmanager
+    async def lifespan(app: FastAPI):
+        _require_redis_bus()
+        from noesis.knowledge.runtime import close_knowledge_base, init_knowledge_base
+
+        async with AsyncExitStack() as resources:
+            await _base_resources(resources)
+            await init_knowledge_base()
+            resources.push_async_callback(close_knowledge_base)
+            logger.info(f"🚀 {AppConfig.app_name} web 启动成功（无执行面）")
+            yield
+
+    app = FastAPI(
+        title=AppConfig.app_name,
+        description=f"{AppConfig.app_name}接口文档",
+        version=AppConfig.app_version,
+    )
+    _mount_web_routes(app)
+    _add_health_route(app, "web")
+    app.router.lifespan_context = lifespan
     return app
 
 
@@ -295,9 +307,110 @@ def build_worker_app() -> FastAPI:
     return app
 
 
+# ---------------------------------------------------------------------------
+# all-in-one：单进程全干（本地自用默认形态；memory/redis 总线均可）
+# ---------------------------------------------------------------------------
+
+
+def build_all_in_one_app() -> FastAPI:
+    """单进程全干（本地自用形态）：web 路由 + control + worker 一体。
+
+    与三入口共用全部装配件；唯一区别是不做 redis 强制——按配置用
+    memory（零额外依赖，进程内总线）或 redis（为未来拆分预热）。
+    advisory lock 仍获取：防「手滑起两个 all-in-one」的双执行。
+    """
+
+    @asynccontextmanager
+    async def lifespan(app: FastAPI):
+        from noesis.agents.background import shutdown as shutdown_bg_subagents
+        from noesis.agents.backends.sandbox_lifecycle import shutdown_sandboxes
+        from noesis.config.checkpointer import close_checkpointer, init_checkpointer
+        from noesis.config.env import StreamConfig
+        from noesis.knowledge.runtime import close_knowledge_base, init_knowledge_base
+        from noesis.services.leader_elector import LeaderElector
+        from noesis.services.run_command_service import RunCommandConsumer
+        from noesis.services.run_dispatcher import RunDispatcher
+        from noesis.services.run_service import run_bus, run_manager
+        from noesis.storage.postgres.manager import pg_manager
+        from server.bootstrap.leader_runtime import (
+            CONTROL_RECONCILE_ORDER,
+            WORKER_RECONCILE_ORDER,
+            _control_reconcile_steps,
+            _worker_reconcile_steps,
+            run_reconcile_group,
+            start_control_singletons,
+        )
+
+        instance_id = process_instance_id("all-in-one")
+        async with AsyncExitStack() as resources:
+            await _base_resources(resources)
+            # 防双开：单进程形态下第二个实例同样 fail-fast（memory 总线
+            # 无跨进程感知，双写不可检测，只能靠锁预防）
+            elector = LeaderElector(cluster_id=DistributedRunsConfig.cluster_id)
+            await elector.acquire()
+            resources.push_async_callback(elector.release)
+
+            await init_checkpointer()
+            resources.push_async_callback(close_checkpointer)
+            await init_knowledge_base()
+            resources.push_async_callback(close_knowledge_base)
+            run_manager.attach_bus(run_bus)
+
+            # 对账：control 组（主 run 阶段化 + 定时任务）+ worker 组
+            # （executor 热集 + 命令重置 + 通知装载），顺序同三入口
+            async with pg_manager.get_async_session_context() as recovery_db:
+                await run_reconcile_group(_control_reconcile_steps(recovery_db))
+                await run_reconcile_group(_worker_reconcile_steps(recovery_db))
+            logger.info(
+                "all-in-one 对账完成 control={} worker={}",
+                CONTROL_RECONCILE_ORDER, WORKER_RECONCILE_ORDER,
+            )
+
+            await start_control_singletons(resources=resources)
+
+            # 命令消费：单进程持有全部 run，不过滤
+            consumer = RunCommandConsumer(
+                bus=run_bus,
+                scan_interval_seconds=DistributedRunsConfig.command_scan_interval_seconds,
+                retention_days=DistributedRunsConfig.command_retention_days,
+            )
+            await consumer.start()
+            resources.push_async_callback(consumer.stop)
+
+            dispatcher = RunDispatcher(
+                bus=run_bus,
+                instance_id=instance_id,
+                scan_interval_seconds=DistributedRunsConfig.queued_scan_interval_seconds,
+            )
+            await dispatcher.start()
+            resources.push_async_callback(dispatcher.stop)
+            resources.push_async_callback(shutdown_sandboxes)
+            resources.push_async_callback(
+                run_manager.shutdown,
+                drain_seconds=StreamConfig.run_shutdown_drain_seconds,
+            )
+            resources.callback(shutdown_bg_subagents)
+            logger.info(
+                f"🚀 {AppConfig.app_name} all-in-one 启动成功 "
+                f"instance_id={instance_id} bus={DistributedRunsConfig.backend}"
+            )
+            yield
+
+    app = FastAPI(
+        title=AppConfig.app_name,
+        description=f"{AppConfig.app_name}接口文档",
+        version=AppConfig.app_version,
+    )
+    _mount_web_routes(app)
+    _add_health_route(app, "all-in-one")
+    app.router.lifespan_context = lifespan
+    return app
+
+
 __all__ = [
     "build_web_app",
     "build_control_app",
     "build_worker_app",
+    "build_all_in_one_app",
     "process_instance_id",
 ]

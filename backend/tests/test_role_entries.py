@@ -41,6 +41,20 @@ def test_control_and_worker_apps_are_health_only() -> None:
         assert any(route.path == "/health" for route in app.routes)
 
 
+def test_all_in_one_app_builds_with_memory_bus() -> None:
+    """all-in-one（本地自用形态）：memory 总线合法，业务路由 + /health 在位。
+
+    与三入口（redis 强制）的双模式边界：唯一区别是 build_all_in_one_app
+    不做 redis 强制——单进程内事件不走总线跨进程。
+    """
+    from server.bootstrap.entries import build_all_in_one_app
+
+    app = build_all_in_one_app()
+    paths = {route.path for route in app.routes}
+    assert "/api/chat/runs" in paths
+    assert "/health" in paths
+
+
 def test_memory_bus_fails_fast_for_role_entries() -> None:
     """三入口形态强制 redis bus：memory 模式启动即 ValueError。"""
     from types import SimpleNamespace

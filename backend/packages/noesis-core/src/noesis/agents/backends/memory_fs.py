@@ -63,14 +63,28 @@ class MemoryFilesystemBackend(FilesystemBackend):
             return GrepResult(matches=[])
 
         if base.is_dir():
-            files = sorted(p for p in base.rglob("*") if p.is_file())
+            candidates = sorted(p for p in base.rglob("*") if p.is_file())
         else:
-            files = [base]
+            candidates = [base]
+        root = self.cwd.resolve()
+        files: list[Path] = []
+        for file_path in candidates:
+            # symlink 越界防护：解析后仍在挂载根内才纳入检索
+            try:
+                if not file_path.resolve().is_relative_to(root):
+                    continue
+            except OSError:
+                continue
+            files.append(file_path)
         matches_pattern = compile_keyword_matcher(pattern)
         matches: list[dict] = []
         for file_path in files:
-            if glob is not None and not fnmatch(file_path.name, glob):
-                continue
+            if glob is not None:
+                # 按 posix 相对路径匹配（fnmatch 的 * 可跨目录段）：
+                # 模型惯用的 **/*.md 与单段 *.md 语义都正确
+                rel_posix = str(file_path.relative_to(self.cwd)).replace("\\", "/")
+                if not fnmatch(rel_posix, glob) and not fnmatch(file_path.name, glob):
+                    continue
             try:
                 if file_path.stat().st_size > self.max_file_size_bytes:
                     continue

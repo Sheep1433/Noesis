@@ -54,6 +54,24 @@
 
 待环境项（tasks 4.3/4.4/6.2/6.3 对应）：容量脚本前后对比、Redis 双进程/三进程集成（双 worker 并发认领无双跑、kill -9 后 lease_ttl 收口）、三进程手动验收（信令消费向跨 web、双标签页 SSE 一致性）。
 
+## 追加决策：all-in-one 单进程入口保留（2026-09-23，产品决策）
+
+三入口落地后用户反馈：本地简单自用场景需要零额外依赖的单进程形态——
+「多套方案并行」的禁令针对的是**同一问题域里的死方案**，而 all-in-one
+（memory 总线）与三入口（redis 总线）是**两种部署场景**，共享全部业务
+装配件，属于 RunBus 适配器模式的正常形态。
+
+- 新增 `build_all_in_one_app`（entries.py）：单进程 web 路由 + control
+  singleton + worker 执行面一体，memory/redis 总线均可（memory 为本地
+  默认）；advisory lock 保留（防手滑双开——memory 总线无跨进程感知，
+  双写不可检测，只能靠锁预防）。
+- `app.py` 恢复为 all-in-one 入口；web/control/worker 三入口保持
+  redis fail-fast 不变。
+- dev.sh 按 `NOESIS_RUN_BUS_BACKEND` 分支启动（memory → app.py 单进程；
+  redis → 三进程），dev 栈自动拉起 Redis 容器（start_redis）。
+- 验收追加：app.py + memory 端到端通过（run completed、SSE 7 事件
+  严格递增、run.finished + [DONE]）。
+
 ## 影响
 
 执行面水平扩展路径打通：`--scale worker=N` 容量线性、`--scale web=N` HTTP 面扩展；全局 leader 选举与 term 管道退役（LeaderElector 仅剩 control 启动锁用途，redis 选主分支待清理）；dev/prod 启动从单进程变三进程（run.sh / compose / 文档已同步）。已知行为变化：owner 切换窗口（lease_ttl + 对账周期）内命令延迟增加，`submit_and_wait` 更易走 accepted（语义正确不伪装完成）。
