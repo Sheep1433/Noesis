@@ -133,12 +133,11 @@ def build_web_app() -> FastAPI:
             logger.info(f"🚀 {AppConfig.app_name} web 启动成功（无执行面）")
             yield
 
-    app = FastAPI(
-        title=AppConfig.app_name,
-        description=f"{AppConfig.app_name}接口文档",
-        version=AppConfig.app_version,
-        lifespan=lifespan,
-    )
+    app = _health_app("web")
+    app.title = AppConfig.app_name
+    app.description = f"{AppConfig.app_name}接口文档"
+    app.version = AppConfig.app_version
+    app.router.lifespan_context = lifespan
     handle_exception(app)
     app.add_middleware(RequestLogContextMiddleware)
     # 路由器级 CSRF（单一实现，挂载守卫契约测试钉住）；auth_router 豁免

@@ -528,8 +528,10 @@ class RunService:
         if owner_instance_id is not None and claim_epoch is not None:
             cls._spawn_heartbeat(run.id, owner_instance_id, claim_epoch)
 
-    _HEARTBEAT_LEASE_TTL_SECONDS = 60.0
-    _HEARTBEAT_INTERVAL_SECONDS = _HEARTBEAT_LEASE_TTL_SECONDS / 3
+    # 心跳租约（对账侧僵尸判定共用）：容忍事件循环秒级卡顿、远小于用户
+    # 可感知的故障切换窗口
+    HEARTBEAT_LEASE_TTL_SECONDS = 60.0
+    _HEARTBEAT_INTERVAL_SECONDS = HEARTBEAT_LEASE_TTL_SECONDS / 3
 
     @classmethod
     def _spawn_heartbeat(

@@ -38,8 +38,10 @@
 ## 6. 回归与验收
 
 - [x] 6.1 单测全绿 + `tests/api_contract` + `test_doc_contract` 契约门禁
-- [ ] 6.2 集成（真库，待环境）：双 worker 并发认领无双跑；worker kill -9 → lease_ttl 内对账收口；重置 run 被另一 worker 续跑到终态；停止/HITL 命令经分片消费生效
-- [ ] 6.3 三进程手动验收（待环境）：单 run 双标签页 SSE 一致；断线重连补发；定时任务经 control 触发；通道（Telegram）消息经 control 消费；**双 web 进程下信令消费向**（跨窗口实时刷新）
+- [x] 6.2 集成（真库，2026-09-23 验收通过）：双 worker 并发认领无双跑（4 run 并发 epoch 全=1）；worker kill -9 → lease_ttl+周期对账收口 interrupted/server_restart（已碰世界）；未碰世界 run 重置 queued → 存活 worker 再认领（epoch 1→2）续跑到 completed（358 事件）；停止命令经分片消费生效（owner worker 消费 completed/stopped:partial，非 owner worker 日志零命中）
+  - 验收附带发现并修复：周期对账误杀活跃 run（僵尸判定改 heartbeat 超时）、骨架 snapshot 误判已碰世界（判据改 parts 内容）、web 入口缺 /health
+- [x] 6.3 三进程手动验收（2026-09-23，部分通过）：双 web 双路 SSE 286 事件完全一致（跨 web hub + 多标签页 ✅）；定时任务经 control 准点触发（cron 15:21 → 15:21:27 创建 automation run → worker 认领执行到终态 ✅）；断线重连补发——**部分通过**：终态 run 重连（快照+[DONE] 短路）正常，运行中重连的实时流受存量 redis-py reader bug 阻塞（docs/bug/2026-09-23-redis-pubsub-reader-reconnect-deaf.md，快照兜底路径正常）；Telegram 通道消费未验收（环境无 bot token，通道 disabled）
+  - 双 web 进程下信令消费向：经 hub 的双 web 事件通路已验证（286 事件一致）；信令 channel 消费向未单独验收
 - [x] 6.4 文档：AGENTS/README 启动命令同步；决策记录 `2026-09-23-进程角色三分worker-role-split.md`（chat-streaming.md 部署节归档时一并）
 
 ## 7. 后续（本变更不含）

@@ -49,7 +49,7 @@ async def test_recovery_closes_streaming_assistant_without_run(monkeypatch) -> N
         lambda _db: repository,
     )
 
-    recovered = await RunRecoveryService.recover_orphaned_runs(db)
+    recovered = await RunRecoveryService.recover_orphaned_runs(db, heartbeat_lease_ms=60_000)
 
     assert recovered == 1
     db.commit.assert_awaited_once()
@@ -66,6 +66,7 @@ async def test_recovery_finalizes_interrupted_run(monkeypatch) -> None:
         status="running",
         owner_instance_id="dead-instance",
         owner_term=0,
+        heartbeat_at=None,
     )
     message = SimpleNamespace(content=run.snapshot, status="streaming")
     message_result = MagicMock()
@@ -81,7 +82,7 @@ async def test_recovery_finalizes_interrupted_run(monkeypatch) -> None:
     repository.finalize = AsyncMock(return_value=True)
     monkeypatch.setattr(run_recovery_service, "AgentRunRepository", lambda _db: repository)
 
-    recovered = await RunRecoveryService.recover_orphaned_runs(db)
+    recovered = await RunRecoveryService.recover_orphaned_runs(db, heartbeat_lease_ms=60_000)
 
     assert recovered == 1
     repository.finalize.assert_awaited_once()
@@ -103,6 +104,7 @@ async def test_recovery_keeps_unclaimed_queued_runs(monkeypatch) -> None:
         status="queued",
         owner_instance_id=None,
         owner_term=0,
+        heartbeat_at=None,
     )
     running_old_term = SimpleNamespace(
         id="run-running",
@@ -113,6 +115,7 @@ async def test_recovery_keeps_unclaimed_queued_runs(monkeypatch) -> None:
         status="running",
         owner_instance_id="dead-instance",
         owner_term=2,
+        heartbeat_at=None,
     )
     message_result = MagicMock()
     message_result.scalar_one_or_none.return_value = SimpleNamespace(
@@ -134,9 +137,7 @@ async def test_recovery_keeps_unclaimed_queued_runs(monkeypatch) -> None:
         lambda _db: repository,
     )
 
-    recovered = await RunRecoveryService.recover_orphaned_runs(
-        db, current_leader_term=3
-    )
+    recovered = await RunRecoveryService.recover_orphaned_runs(db, heartbeat_lease_ms=60_000)
 
     # 只收口旧任期 running run；queued 未 claim 的存活
     finalized_ids = [call.kwargs["run_id"] for call in repository.finalize.await_args_list]
@@ -145,20 +146,27 @@ async def test_recovery_keeps_unclaimed_queued_runs(monkeypatch) -> None:
 
 
 @pytest.mark.asyncio
-async def test_recovery_skips_current_term_runs(monkeypatch) -> None:
-    """本任期 claim 的 Run 防御性跳过（新 leader 上任时不应出现）。"""
+async def test_recovery_skips_live_heartbeat_runs(monkeypatch) -> None:
+    """心跳存活的 run 跳过（worker 正常执行中——周期对账的安全前提）。
+
+    2026-09-23 实测教训：周期对账若按「已认领即孤儿」收口，control 每
+    30s 误杀一批正在执行的 run。僵尸判定唯一依据是 heartbeat 超时。
+    """
+    import time
     from types import SimpleNamespace
     from unittest.mock import AsyncMock, MagicMock
 
-    current_term_run = SimpleNamespace(
-        id="run-current",
+    now_ms = int(time.time() * 1000)
+    live_run = SimpleNamespace(
+        id="run-live",
         origin="web",
-        assistant_message_id="assistant-current",
+        assistant_message_id="assistant-live",
         snapshot={"parts": []},
         last_sequence=1,
         status="running",
-        owner_instance_id="this-instance",
+        owner_instance_id="healthy-worker",
         owner_term=5,
+        heartbeat_at=now_ms - 5_000,  # 5 秒前刚心跳：租约内存活
     )
     orphan_result = MagicMock()
     orphan_result.scalars.return_value.all.return_value = []
@@ -166,7 +174,7 @@ async def test_recovery_skips_current_term_runs(monkeypatch) -> None:
     db.execute = AsyncMock(return_value=orphan_result)
     db.commit = AsyncMock()
     repository = MagicMock()
-    repository.list_non_terminal = AsyncMock(return_value=[current_term_run])
+    repository.list_non_terminal = AsyncMock(return_value=[live_run])
     repository.finalize = AsyncMock(return_value=True)
     monkeypatch.setattr(
         "noesis.services.run_recovery_service.AgentRunRepository",
@@ -174,7 +182,7 @@ async def test_recovery_skips_current_term_runs(monkeypatch) -> None:
     )
 
     recovered = await RunRecoveryService.recover_orphaned_runs(
-        db, current_leader_term=5
+        db, heartbeat_lease_ms=60_000
     )
 
     repository.finalize.assert_not_awaited()
@@ -193,6 +201,7 @@ async def test_recovery_skips_subagent_runs(monkeypatch) -> None:
         status="running",
         owner_instance_id=None,
         owner_term=0,
+        heartbeat_at=None,
     )
     orphan_result = MagicMock()
     orphan_result.scalars.return_value.all.return_value = []
@@ -207,7 +216,7 @@ async def test_recovery_skips_subagent_runs(monkeypatch) -> None:
         lambda _db: repository,
     )
 
-    recovered = await RunRecoveryService.recover_orphaned_runs(db)
+    recovered = await RunRecoveryService.recover_orphaned_runs(db, heartbeat_lease_ms=60_000)
 
     repository.finalize.assert_not_awaited()
     assert recovered == 0
@@ -227,6 +236,7 @@ async def test_recovery_run_only_finalize_for_poisoned_message(monkeypatch) -> N
         status="running",
         owner_instance_id="dead-instance",
         owner_term=0,
+        heartbeat_at=None,
     )
     # SELECT 消息：已终态 error（automation/channel 链路写入方只写了消息未收 run）
     message_result = MagicMock()
@@ -249,7 +259,7 @@ async def test_recovery_run_only_finalize_for_poisoned_message(monkeypatch) -> N
         lambda _db: repository,
     )
 
-    recovered = await RunRecoveryService.recover_orphaned_runs(db)
+    recovered = await RunRecoveryService.recover_orphaned_runs(db, heartbeat_lease_ms=60_000)
 
     repository.finalize.assert_not_awaited()
     repository.finalize_run_only.assert_awaited_once()
@@ -302,7 +312,7 @@ async def test_recovery_resets_unstarted_run_to_queued(monkeypatch) -> None:
     )
 
     recovered = await RunRecoveryService.recover_orphaned_runs(
-        db, current_leader_term=5
+        db, heartbeat_lease_ms=60_000
     )
 
     assert recovered == 1
@@ -315,6 +325,49 @@ async def test_recovery_resets_unstarted_run_to_queued(monkeypatch) -> None:
     assert compiled.params["heartbeat_at"] is None
     assert "claim_epoch" not in compiled.params
     assert "claim_epoch" not in str(resize := reset_stmt) or "claim_epoch=(" in resize  # 仅出现在自增/条件，不作为赋值
+
+
+@pytest.mark.asyncio
+async def test_recovery_resets_skeleton_snapshot_run(monkeypatch) -> None:
+    """create_run 落库即写 {"parts": []} 骨架——骨架不算碰世界，仍走重置。
+
+    2026-09-23 实测回归：容器 truthy 判定让未启动 run 被误收口。
+    """
+    skeleton = SimpleNamespace(
+        id="run-skeleton",
+        origin="web",
+        assistant_message_id="assistant-skeleton",
+        snapshot={"parts": []},
+        last_sequence=0,
+        status="running",
+        owner_instance_id="dead-worker",
+        owner_term=4,
+        launch_payload={"run_id": "run-skeleton", "content": "hi"},
+        claim_epoch=2,
+        heartbeat_at=None,
+    )
+    orphan_result = MagicMock()
+    orphan_result.scalars.return_value.all.return_value = []
+    reset_update = SimpleNamespace(rowcount=1)
+    db = MagicMock()
+    db.execute = AsyncMock(side_effect=[reset_update, orphan_result])
+    db.commit = AsyncMock()
+    repository = MagicMock()
+    repository.list_non_terminal = AsyncMock(return_value=[skeleton])
+    repository.finalize = AsyncMock()
+    monkeypatch.setattr(
+        "noesis.services.run_recovery_service.AgentRunRepository",
+        lambda _db: repository,
+    )
+
+    recovered = await RunRecoveryService.recover_orphaned_runs(
+        db, heartbeat_lease_ms=60_000
+    )
+
+    assert recovered == 1
+    assert repository.finalize.await_count == 0
+    reset_stmt = db.execute.await_args_list[0].args[0]
+    assert reset_stmt.compile().params["status"] == "queued"
 
 
 @pytest.mark.asyncio
@@ -351,7 +404,7 @@ async def test_recovery_does_not_reset_started_run(monkeypatch) -> None:
     )
 
     recovered = await RunRecoveryService.recover_orphaned_runs(
-        db, current_leader_term=5
+        db, heartbeat_lease_ms=60_000
     )
 
     assert recovered == 1
@@ -395,7 +448,7 @@ async def test_recovery_does_not_reset_without_launch_payload(monkeypatch) -> No
     )
 
     recovered = await RunRecoveryService.recover_orphaned_runs(
-        db, current_leader_term=5
+        db, heartbeat_lease_ms=60_000
     )
 
     assert recovered == 1

@@ -27,8 +27,12 @@ def _control_reconcile_steps(recovery_db) -> list[tuple[str, Callable[[], Awaita
 
     async def _main_runs() -> int:
         from noesis.services.run_recovery_service import RunRecoveryService
+        from noesis.services.run_service import RunService
 
-        await RunRecoveryService.recover_orphaned_runs(recovery_db)
+        await RunRecoveryService.recover_orphaned_runs(
+            recovery_db,
+            heartbeat_lease_ms=int(RunService.HEARTBEAT_LEASE_TTL_SECONDS * 1000),
+        )
         return 0
 
     async def _scheduled_task_runs() -> int:
@@ -119,10 +123,18 @@ CONTROL_RECONCILE_ORDER = _names(_control_reconcile_steps)
 WORKER_RECONCILE_ORDER = _names(_worker_reconcile_steps)
 
 
-async def start_control_singletons(*, resources: AsyncExitStack) -> None:
-    """control 专属 singleton：调度器、信令通道、记忆任务。
+# 周期对账间隔：lease_ttl（60s）的一半——僵尸 run 的收口延迟上界
+# = lease_ttl 超时判定 + 本间隔。产品逻辑常量（非部署参数）：与心跳
+# 租约配套定档，两部署实例该值理应相同。
+PERIODIC_RECONCILE_INTERVAL_SECONDS = 30.0
 
-    advisory lock 防双开由调用方（entries）在启动前获取。
+
+async def start_control_singletons(*, resources: AsyncExitStack) -> None:
+    """control 专属 singleton：周期对账、调度器、信令通道、记忆任务。
+
+    advisory lock 防双开由调用方（entries）在启动前获取。周期对账
+    （design §2.2）：运行期 heartbeat 超时的僵尸 run 由本循环收口/
+    重置，不等 control 重启。
     """
     from noesis.config.env import MessagingConfig
     from noesis.services.scheduled_task_scheduler import (
@@ -163,3 +175,29 @@ async def start_control_singletons(*, resources: AsyncExitStack) -> None:
     resources.push_async_callback(stop_memory_sweeper)
     await start_memory_consolidator()
     resources.push_async_callback(stop_memory_consolidator)
+
+    # 周期对账：僵尸判定（heartbeat 超时）+ 阶段化分流，与启动对账共用
+    # 同一步骤工厂——单一人（谁持有状态谁对账的 control 面）。
+    import asyncio
+
+    async def _periodic_reconcile() -> None:
+        from noesis.storage.postgres.manager import pg_manager
+
+        while True:
+            await asyncio.sleep(PERIODIC_RECONCILE_INTERVAL_SECONDS)
+            try:
+                async with pg_manager.get_async_session_context() as db:
+                    await run_reconcile_group(_control_reconcile_steps(db))
+            except asyncio.CancelledError:
+                raise
+            except Exception:
+                logger.exception("control 周期对账失败")
+
+    reconcile_task = asyncio.create_task(
+        _periodic_reconcile(), name="control-periodic-reconcile"
+    )
+
+    def _cancel_reconcile() -> None:
+        reconcile_task.cancel()
+
+    resources.callback(_cancel_reconcile)
