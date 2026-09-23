@@ -34,8 +34,11 @@ def _require_redis_bus() -> None:
     """三入口形态强制 redis bus（事件/唤醒跨进程），memory 模式 fail-fast。"""
     if DistributedRunsConfig.backend != "redis":
         raise ValueError(
-            "worker-role-split 三入口形态要求 NOESIS_RUN_BUS_BACKEND=redis"
-            "（事件与唤醒需跨进程；memory 进程内总线仅单进程部署合法）"
+            "三入口形态（web/control/worker）要求 NOESIS_RUN_BUS_BACKEND=redis"
+            "（事件与唤醒需跨进程；memory 进程内总线仅单进程部署合法）。"
+            "最小配置：backend/.env 设 NOESIS_RUN_BUS_BACKEND=redis、"
+            "REDIS_URL=redis://localhost:6379、NOESIS_CLUSTER_ID=<集群名>，"
+            "并确保 Redis 在跑（scripts/run.sh dev 会随栈拉起）。"
         )
 
 
