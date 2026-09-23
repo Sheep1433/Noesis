@@ -133,14 +133,11 @@ services:
     command: ["python", "control.py"]
     env_file:
       - .env.docker
-    environment:
-      <<: *backend_env
-    volumes:
-      <<: *backend_volumes
+    environment: *backend_env
+    volumes: *backend_volumes
     extra_hosts:
       - "host.docker.internal:host-gateway"
-    depends_on:
-      <<: *backend_depends
+    depends_on: *backend_depends
     healthcheck:
       <<: *backend_health
       test: ["CMD", "python", "-c", "import urllib.request,sys; sys.exit(0 if urllib.request.urlopen('http://127.0.0.1:8091/health', timeout=4).status == 200 else 1)"]
@@ -153,14 +150,11 @@ services:
     command: ["python", "worker.py"]
     env_file:
       - .env.docker
-    environment:
-      <<: *backend_env
-    volumes:
-      <<: *backend_volumes
+    environment: *backend_env
+    volumes: *backend_volumes
     extra_hosts:
       - "host.docker.internal:host-gateway"
-    depends_on:
-      <<: *backend_depends
+    depends_on: *backend_depends
     healthcheck:
       <<: *backend_health
       test: ["CMD", "python", "-c", "import urllib.request,sys; sys.exit(0 if urllib.request.urlopen('http://127.0.0.1:8092/health', timeout=4).status == 200 else 1)"]
