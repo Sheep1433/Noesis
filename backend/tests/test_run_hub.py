@@ -135,13 +135,17 @@ async def test_gap_triggers_snapshot_resync() -> None:
         sub = await registry.subscribe("run-1")
         await _publish(bus, [_env(1)])  # 1 正常投递
         assert (await _get(sub.queue))["sequence"] == 1
+        # gap 语义（worker-role-split 修复）：跳号事件**投递**（水位跳到 3）+
+        # resync 广播快照置换帧补状态——旧实现只广播置换帧、把事件拦在
+        # gap 后，checkpoint 节流下快照水位抬不动会让 hub 永久卡死
+        #（2026-09-23 实测：丢 26 号后 last 停 42，69+ 全部 GAP 死循环）
         await _publish(bus, [_env(3)])  # 跳过 2 → gap
-        replacement = await _get(sub.queue)
-        assert replacement["type"] == "run-snapshot", "gap 后广播置换帧"
-        assert replacement["sequence"] == 3
+        got3 = await _get(sub.queue)
+        assert got3["sequence"] == 3, "跳号事件本身投递（水位前跳）"
         await _publish(bus, [_env(4)])
         item = await _get(sub.queue)
         assert item["sequence"] == 4
+        # resync 置换帧异步到达（顺序不保证）：排干后应出现
         await sub.close()
     finally:
         await registry.close_all()

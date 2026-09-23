@@ -143,7 +143,15 @@ class RunHub:
                 if sequence <= self._last_sequence:
                     continue  # 已含在 snapshot / 已对账
                 if sequence > self._last_sequence + 1:
+                    # gap：丢过号（Pub/Sub at-most-once 的正常态）。触发 resync
+                    # 广播快照置换帧补状态，同时把水位**跳到当前序号**继续向前——
+                    # 否则 checkpoint（2s 节流）永远落后发布前沿，resync 重读的
+                    # 快照 sequence 抬不动水位，后续每条事件都被 gap 判定拦下，
+                    # hub 永久卡死（2026-09-23 实测定位：丢 26 号后 last 停在
+                    # 42，69+ 的事件全部 GAP 死循环，订阅者零产出）。
                     self._schedule_resync()
+                    self._last_sequence = sequence
+                    self._broadcast(dict(envelope.payload))
                     continue
                 self._last_sequence = sequence
                 if int(envelope.owner_term) > self._owner_term:
