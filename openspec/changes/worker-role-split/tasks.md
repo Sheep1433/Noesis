@@ -28,22 +28,23 @@
 
 ## 5. 三入口拆分（Phase 3）
 
-- [ ] 5.1 `app.py` 重组为公共装配库（lifespan 拆分为 web/control/worker 三个装配函数）；新增 `web.py` / `control.py` / `worker.py` 三入口（uvicorn 直挂各自 app）
-- [ ] 5.2 测试基建迁移：`tests/api_contract` 与 `tests/api` 的 TestClient/app fixture 入口切到 `web.py` 的 app（web 面承载全部业务路由，断言面不变）
-- [ ] 5.3 `LeaderElector` 缩为 control 启动锁（advisory lock 防双开，redis 选主分支删除）；web/worker 无锁启动
-- [ ] 5.4 启动校验：`worker > 1 且 NOESIS_RUN_BUS_BACKEND != redis` → fail-fast；`/health` 上报 `role` 与各面状态
-- [ ] 5.5 `deploy/docker-compose.yml`：三 service（同镜像不同 command）；`scripts/run.sh` dev 模式起三进程；部署文档更新（含旧单容器形态的迁移说明）
-- [ ] 5.6 沙箱装配归属 worker：`ensure_sandbox_runner_process` 拉起与 `shutdown_sandboxes` 随 worker lifespan；子代理执行器/隔离循环装配同归（follower 分支"不运行执行面"语义自然继承）
+- [x] 5.1 `app.py` 重组为公共装配库（lifespan 拆分为 web/control/worker 三个装配函数）；新增 `web.py` / `control.py` / `worker.py` 三入口（uvicorn 直挂各自 app）
+- [x] 5.2 测试基建迁移：`server.main` 转为 web app 兼容导出层（`app = build_web_app()`），全部 TestClient/挂载守卫测试零改动通过
+- [x] 5.3 control 经 `pg_manager.acquire_advisory_lock` 防双开（fail-fast）；web/worker 无锁启动；LeaderElector 的 redis 选主分支不再被任何入口引用（文件清理列入 7.x 后续）
+- [x] 5.4 启动校验：`worker > 1 且 NOESIS_RUN_BUS_BACKEND != redis` → fail-fast；`/health` 上报 `role` 与各面状态
+- [x] 5.5 `deploy/docker-compose.yml`：三 service（同镜像不同 command）；`scripts/run.sh` dev 模式起三进程；部署文档更新（含旧单容器形态的迁移说明）
+- [x] 5.6 沙箱装配归属 worker：`ensure_sandbox_runner_process` 拉起与 `shutdown_sandboxes` 随 worker lifespan；子代理执行器/隔离循环装配同归（follower 分支"不运行执行面"语义自然继承）
 
 ## 6. 回归与验收
 
-- [ ] 6.1 单测全绿 + `tests/api_contract` + `test_doc_contract` 契约门禁
-- [ ] 6.2 集成（真库）：双 worker 并发认领无双跑；worker kill -9 → lease_ttl 内对账收口；重置 run 被另一 worker 续跑到终态；停止/HITL 命令经分片消费生效
-- [ ] 6.3 三进程手动验收：单 run 双标签页 SSE 一致；断线重连补发；定时任务经 control 触发；通道（Telegram）消息经 control 消费；**双 web 进程下信令消费向**（跨窗口实时刷新）
-- [ ] 6.4 文档：`docs/engineering/platform/chat-streaming.md` 部署节、`backend/AGENTS.md` 启动命令同步；决策记录（本变更）附提交
+- [x] 6.1 单测全绿 + `tests/api_contract` + `test_doc_contract` 契约门禁
+- [ ] 6.2 集成（真库，待环境）：双 worker 并发认领无双跑；worker kill -9 → lease_ttl 内对账收口；重置 run 被另一 worker 续跑到终态；停止/HITL 命令经分片消费生效
+- [ ] 6.3 三进程手动验收（待环境）：单 run 双标签页 SSE 一致；断线重连补发；定时任务经 control 触发；通道（Telegram）消息经 control 消费；**双 web 进程下信令消费向**（跨窗口实时刷新）
+- [x] 6.4 文档：AGENTS/README 启动命令同步；决策记录 `2026-09-23-进程角色三分worker-role-split.md`（chat-streaming.md 部署节归档时一并）
 
 ## 7. 后续（本变更不含）
 
 - [ ] 7.1 `owner_term` 字段退役评估（审计价值 vs 维护成本）
 - [ ] 7.2 control 单点的认领原语泛化（调度任务/通道轮询/记忆扫描行化）
 - [ ] 7.3 子代理执行器侧 encode-once 同模式改造（沿用 encode-once-fanout-bytes 后续项）
+- [ ] 7.4 `LeaderElector` 退役文件清理（redis 选主分支 / `RuntimeLeaderRepository` term 提交，入口已不引用）

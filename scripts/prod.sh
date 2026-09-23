@@ -74,9 +74,11 @@ main() {
     cd "$BACKEND_DIR" && uv run python -c "from noesis.config.env import AppConfig; print(AppConfig.app_host, AppConfig.app_port)"
   )
 
-  log_info "启动后端 (uvicorn, reload=off) ${HOST}:${PORT} ..."
+  log_info "启动后端三角色 (web :${PORT} / control :8091 / worker :8092) ..."
   cd "$BACKEND_DIR"
-  uv run uvicorn app:app --host "$HOST" --port "$PORT" &
+  uv run uvicorn web:app --host "$HOST" --port "$PORT" &
+  uv run uvicorn control:app --host "$HOST" --port 8091 &
+  uv run uvicorn worker:app --host "$HOST" --port 8092 &
   BACKEND_PID=$!
   log_info "Backend started (PID: $BACKEND_PID)"
   wait_for_backend "启动后"

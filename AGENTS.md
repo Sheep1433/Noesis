@@ -35,7 +35,7 @@ Noesis/
 | 容器部署 | `deploy/docker-compose.yml`、`deploy/backend/Dockerfile`、`deploy/frontend/Dockerfile` |
 | 前端应用 | `frontend/src/main.ts`、`frontend/src/views/chat.vue` |
 | 前端 SSE | `frontend/src/views/chat/useSSEStream.ts` |
-| 后端启动 | `backend/app.py`、`backend/server/main.py` |
+| 后端启动 | `backend/web.py`、`backend/control.py`、`backend/worker.py`（三角色入口） |
 | 后端核心包 | `backend/packages/noesis-core/src/noesis/`（distribution：`noesis-core`） |
 | 问答编排 | `backend/packages/noesis-core/src/noesis/services/qa/` |
 | Agent 工厂 | `backend/packages/noesis-core/src/noesis/factory.py` |
@@ -70,7 +70,7 @@ run 内容流事件清单（message-start、reasoning/text/tool-input 系列、s
 ## 开发验证
 
 ```bash
-cd backend && uv run app.py     # 后端改动后必跑
+cd backend && uv run web.py     # 后端改动后必跑（另需 control.py / worker.py，见 README）
 cd frontend && pnpm lint        # 前端按影响范围 lint / build
 python3 scripts/change-scope.py # 任何 diff 审查/选检查的起点（影响面 + 各层 owning checks）
 ```
@@ -80,7 +80,7 @@ python3 scripts/change-scope.py # 任何 diff 审查/选检查的起点（影响
 
 ### 接口测试执行步骤（后端）
 
-1. **起服务**：`cd backend && uv run app.py`（需 PostgreSQL / noesis_langgraph DB / Qdrant / 有效 MODEL_API_KEY；sandbox-runner 由启动自动拉起，8090）。
+1. **起服务**：`cd backend` 后起三进程 `uv run web.py` / `uv run control.py` / `uv run worker.py`（需 PostgreSQL / noesis_langgraph DB / Qdrant / Redis / 有效 MODEL_API_KEY，`NOESIS_RUN_BUS_BACKEND=redis`；sandbox-runner 由 worker 自动拉起，8090）。
 2. **分层执行**（按目的选层，均可独立跑）：
 
    | 层 | 命令（backend/ 下） | 规模与耗时 |
