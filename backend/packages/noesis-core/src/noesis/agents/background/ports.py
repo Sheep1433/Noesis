@@ -287,7 +287,9 @@ class ContinuationPort:
 
     @staticmethod
     async def schedule_maybe_continue(session_id: str, user_id: str) -> None:
-        return await _continuation().schedule_maybe_continue(session_id, user_id)
+        # 注册的实现是模块级函数（bg_continuation_service.schedule_maybe_continue），
+        # 直接调用——不是带方法的对象
+        return await _continuation()(session_id, user_id)
 
 
 # --------------------------------------------------------------------------
