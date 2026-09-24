@@ -81,3 +81,65 @@ def test_check_async_task_subagent_running_has_no_output_tail() -> None:
     }
     text = _format_task(task)
     assert "运行中输出尾部" not in text
+
+
+def test_wrap_command_empty_uses_noop_placeholder() -> None:
+    """空命令以 : 占位——(  ) 是语法错误（退出码 2），旧行为退出码 0。"""
+    wrapped = _wrap_command_for_log("", "bg-empty")
+    assert "( : )" in wrapped
+
+
+def test_read_log_tail_docker_uses_exec_tail(monkeypatch) -> None:
+    """docker 分支：经 runner exec API 跑 tail（有界读、文本输出），
+    不走 file-read API（其 base64 编码会把非 UTF-8 日志变乱码）。"""
+    import httpx as real_httpx
+
+    calls: list[dict] = []
+
+    class _FakeResponse:
+        status_code = 200
+
+        def json(self):
+            return {"output": "line-41\nline-42\n", "exit_code": 0, "truncated": False}
+
+    class _FakeClient:
+        def __init__(self, **_kw):
+            pass
+
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *exc):
+            return False
+
+        def post(self, url, **kw):
+            calls.append({"url": url, "json": kw.get("json")})
+            return _FakeResponse()
+
+    from noesis.agents.backends.docker_exec import DockerExecSandboxBackend
+
+    class _DockerLike(DockerExecSandboxBackend):
+        """不调 __init__（绕开 runner 连接），仅承载 isinstance 分支。"""
+
+    backend = _DockerLike.__new__(_DockerLike)  # 跳过 __init__：无 runner 状态
+    entry = SimpleNamespace(
+        task=SimpleNamespace(user_id="u1", session_id="s1"),
+        shell_backend=backend,
+    )
+
+
+    # kernel 函数体内 from noesis.config.env import SandboxConfig——
+    # env.SandboxConfig 是冻结实例，patch 整个名字
+    import noesis.config.env as env_mod
+
+    monkeypatch.setattr(env_mod, "SandboxConfig", SimpleNamespace(runner_url="http://runner:8090"))
+    monkeypatch.setattr(env_mod, "sandbox_runner_headers", lambda: {})
+    monkeypatch.setattr(real_httpx, "Client", _FakeClient)
+
+    tail = _read_log_tail(entry, ".task-outputs/bg-3.log", 4096)
+    assert "line-42" in tail
+    assert len(calls) == 1
+    sent = calls[0]["json"]
+    assert sent["command"].startswith("tail -c ")
+    assert "/workspace/.task-outputs/bg-3.log" in sent["command"]
+    assert sent["exec_dir"] == "/workspace"

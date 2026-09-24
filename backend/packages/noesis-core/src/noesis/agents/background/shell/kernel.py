@@ -48,7 +48,10 @@ def _wrap_command_for_log(command: str, task_id: str) -> str:
     """命令包装：子 shell 执行 + 输出重定向到工作区内日志文件。
 
     子 shell 保证原命令的退出码就是 wrapped 的退出码（无管道吞码）。
+    空命令以 `:` 占位——`(  )` 是语法错误（退出码 2），旧行为退出码 0。
     """
+    if not command.strip():
+        command = ":"
     return (
         f"mkdir -p .task-outputs && ( {command} ) "
         f"> .task-outputs/{task_id}.log 2>&1"
@@ -68,20 +71,26 @@ def _read_log_tail(entry: "_TaskEntry", log_rel: str, max_chars: int) -> str:
     from noesis.paths import resolve_read_container_path
 
     if isinstance(entry.shell_backend, DockerExecSandboxBackend):
+        # 经 runner exec API 跑 tail：服务端只读尾部 N 字节（整文件 get_archive
+        # 会随日志增长无界放大），且文本输出不经过 file-read 的 base64 编码
         import httpx
 
-        container_path = resolve_read_container_path(f"/workspace/{log_rel}")
-        url = f"{SandboxConfig.runner_url.rstrip('/')}{sandbox_api_path(task.user_id, task.session_id)}/files/read"
+        container_path = f"/workspace/{log_rel}"
+        url = f"{SandboxConfig.runner_url.rstrip('/')}{sandbox_api_path(task.user_id, task.session_id)}/exec"
         with httpx.Client(timeout=10.0) as client:
             resp = client.post(
                 url,
                 headers=sandbox_runner_headers(),
-                json={"file": container_path},
+                json={
+                    "command": f"tail -c {max_chars * 4} {container_path} 2>/dev/null || true",
+                    "exec_dir": "/workspace",
+                    "timeout": 10,
+                },
             )
         if resp.status_code >= 400:
             return ""
         data = resp.json()
-        return str(data.get("content", "") or "")[-max_chars:]
+        return str(data.get("output", "") or "")[-max_chars:]
     # local backend（LocalShellBackend 继承 FilesystemBackend，自带 cwd
     # = 工作区根）：从 backend 自身解析日志路径，与写入侧（命令 cwd）
     # 永远同源
@@ -126,10 +135,15 @@ async def _poll_shell_output(entry: "_TaskEntry", log_rel: str) -> None:
             from noesis.agents.background.ports import ShellJobPort
             from noesis.runtime.main_loop import run_on_main_loop
 
-            run_on_main_loop(
+            fut = run_on_main_loop(
                 ShellJobPort.update_output_tail(task.task_id, tail),
                 name=f"bg-shell-output-flush:{task.task_id}",
             )
+            if fut is not None:
+                fut.add_done_callback(
+                    lambda f, tid=task.task_id: (not f.cancelled() and f.exception())
+                    and logger.warning("bg shell output flush failed task_id={} err={}", tid, f.exception())
+                )
         except Exception:  # noqa: BLE001
             logger.debug("bg shell output flush failed task_id={}", task.task_id)
 

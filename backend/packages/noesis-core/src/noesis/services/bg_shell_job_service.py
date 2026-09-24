@@ -105,7 +105,13 @@ class BgShellJobService:
         async with pg_manager.get_async_session_context() as db:
             await db.execute(
                 update(TBgShellJob)
-                .where(TBgShellJob.task_id == task_id)
+                .where(
+                    TBgShellJob.task_id == task_id,
+                    # 终态守卫：迟到的最后一次 flush 不覆盖终态事实行
+                    TBgShellJob.status.in_([
+                        BgTaskStatus.QUEUED.value, BgTaskStatus.RUNNING.value,
+                    ]),
+                )
                 .values(output_tail=tail)
             )
             await db.commit()
