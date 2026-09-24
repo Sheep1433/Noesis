@@ -244,6 +244,19 @@ class ScheduledTaskService:
         row = result.scalar_one_or_none()
         return _to_dict(row) if row else None
 
+    @staticmethod
+    def _llm_error_hint(exc: Exception) -> str:
+        """LLM 调用失败的用户面提示：不含 SDK 异常类名，按类型给可操作指向。"""
+        text = str(exc)
+        name = type(exc).__name__
+        if "Authentication" in name or "401" in text or "INVALID_TOKEN" in text:
+            return "模型认证失败，请检查平台默认模型的 API 凭据配置"
+        if "RateLimit" in name or "429" in text:
+            return "模型限流，请稍后重试"
+        if "Connection" in name or "Connect" in name:
+            return "模型服务连接失败，请检查网络与网关地址"
+        return "模型不可用，请稍后重试或联系管理员检查默认模型配置"
+
     @classmethod
     async def parse_natural_language(cls, text: str) -> Dict[str, Any]:
         """把自然语言（如「每周一早上9点收集网上资料整理AI Agent最新进展」）解析成定时任务草稿。
@@ -271,7 +284,7 @@ class ScheduledTaskService:
             content = getattr(resp, "text", "") or str(resp)
         except Exception as e:
             logger.exception("scheduled task NL parse LLM call failed")
-            raise ValueError(f"解析失败，模型不可用或被限流：{type(e).__name__}") from e
+            raise ValueError(f"解析失败，{_llm_error_hint(e)}") from e
         data = _extract_json_object(content)
         if data is None:
             raise ValueError("解析失败，请直接编辑表单")
