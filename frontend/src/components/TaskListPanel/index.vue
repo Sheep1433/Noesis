@@ -172,6 +172,10 @@ watch([() => props.focusTaskId, () => props.tasks], ([taskId]) => {
           </div>
           <code class="shell-task-detail__command">{{ selectedTaskResolved.command || selectedTaskResolved.description }}</code>
           <pre v-if="selectedTaskResolved.result || selectedTaskResolved.error" class="shell-task-detail__output">{{ selectedTaskResolved.result || selectedTaskResolved.error }}</pre>
+          <template v-else-if="selectedTaskResolved.output_tail">
+            <span class="shell-task-detail__empty">运行中——最新输出尾部（持续更新）：</span>
+            <pre class="shell-task-detail__output">{{ selectedTaskResolved.output_tail }}</pre>
+          </template>
           <span v-else class="shell-task-detail__empty">命令仍在运行，输出完成后会显示在这里。</span>
         </div>
         <SubagentConversationView

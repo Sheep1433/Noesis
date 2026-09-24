@@ -409,6 +409,10 @@ class ShellJobPort:
         return await _shell_jobs().mark_started(task_id)
 
     @staticmethod
+    async def update_output_tail(task_id: str, tail: str) -> None:
+        return await _shell_jobs().update_output_tail(task_id=task_id, tail=tail)
+
+    @staticmethod
     async def mark_terminal(
         *,
         task_id: str,

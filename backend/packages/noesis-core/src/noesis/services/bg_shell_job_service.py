@@ -98,6 +98,19 @@ class BgShellJobService:
             await db.commit()
 
     @classmethod
+    async def update_output_tail(cls, task_id: str, tail: str) -> None:
+        """运行中输出尾部快照 flush（执行进程周期调用；幂等覆盖写）。"""
+        from noesis.storage.postgres.manager import pg_manager
+
+        async with pg_manager.get_async_session_context() as db:
+            await db.execute(
+                update(TBgShellJob)
+                .where(TBgShellJob.task_id == task_id)
+                .values(output_tail=tail)
+            )
+            await db.commit()
+
+    @classmethod
     async def get_task(cls, task_id: str) -> Optional[dict[str, Any]]:
         from noesis.storage.postgres.manager import pg_manager
 
@@ -166,6 +179,7 @@ class BgShellJobService:
             "subagent_type": None,
             "status": row.status,
             "result": row.result_tail,
+            "output_tail": row.output_tail,
             "error": row.error,
             "started_at": _to_seconds(row.started_at),
             "completed_at": _to_seconds(row.completed_at),

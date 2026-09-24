@@ -98,7 +98,12 @@ def _format_task(task: dict[str, Any], *, output_budget: int | None = None) -> s
     pending_status = BgTaskStatus(status)
     if pending_status in _CHECK_PENDING_HINT:
         hint = _CHECK_PENDING_HINT[pending_status]
-        return f"[{public_id}] {hint}（description: {task['description']}）"
+        text = f"[{public_id}] {hint}（description: {task['description']}）"
+        # shell 任务的运行中输出尾部快照（流式 flush 到 output_tail）
+        tail = task.get("output_tail")
+        if tail:
+            text += f"\n\n[运行中输出尾部]\n{tail}"
+        return text
     partial = task.get("result")
     if status == BgTaskStatus.CANCELLED.value:
         head = f"[{public_id}] cancelled（{task.get('stop_reason') or 'cancelled'}）" if partial else f"[{public_id}] cancelled"
@@ -414,9 +419,10 @@ class AsyncSubagentToolsMiddleware(
             coroutine=acheck_async_task,
             name="check_async_task",
             description=(
-                "查询后台任务状态并收取结果（completed 时返回最终小结）。"
+                "查询后台任务状态并收取结果（completed 时返回最终小结；"
+                "shell 命令运行中会附最新输出尾部，可中途查看进度）。"
                 "由任务终态的 [系统通知] 驱动调用；启动后不要反复轮询——"
-                "确需中途了解进度用 list_async_tasks。"
+                "确需中途了解进度用 list_async_tasks 或对 shell 任务查输出尾部。"
             ),
         )
         cancel = StructuredTool.from_function(

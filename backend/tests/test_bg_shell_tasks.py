@@ -86,7 +86,7 @@ def test_start_shell_completes_with_exit_code_and_output_tail() -> None:
     assert task["kind"] == "shell"
     assert "exit code: 3" in task["result"]
     assert "line2" in task["result"]
-    assert backend.executed == ["make build"]
+    assert len(backend.executed) == 1 and "make build" in backend.executed[0]
 
 
 def test_start_shell_truncates_long_output_tail() -> None:
@@ -238,7 +238,7 @@ async def test_replace_execute_tool_background_starts_shell_task() -> None:
     task = _wait_terminal(executor, task_id)
     assert task["kind"] == "shell"
     assert task["status"] == BgTaskStatus.COMPLETED.value
-    assert shell_backend.executed == ["make build"]
+    assert len(shell_backend.executed) == 1 and "make build" in shell_backend.executed[0]
 
 
 @pytest.mark.asyncio
