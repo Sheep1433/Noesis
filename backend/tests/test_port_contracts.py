@@ -80,3 +80,23 @@ def test_impl_matches_port(port_cls, impl_resolver: Callable[[str], object]) -> 
             f"{port_cls.__name__}.{name} 的实现签名与转发签名不符："
             f"{port_shape} != {impl_shape}"
         )
+
+
+def test_continuation_port_dispatches_to_registered_impl() -> None:
+    """续跑端口把调用派发给注册的实现函数（回归：方法误调用曾静默断掉续跑）。"""
+    import asyncio
+
+    calls: list[tuple] = []
+
+    async def _stub(session_id: str, user_id: str) -> None:
+        calls.append((session_id, user_id))
+
+    from noesis.agents.background import ports
+
+    original = ports._CONTINUATION
+    ports.configure_continuation_port(_stub)
+    try:
+        asyncio.run(ports.ContinuationPort.schedule_maybe_continue("s-1", "u-1"))
+    finally:
+        ports.configure_continuation_port(original)
+    assert calls == [("s-1", "u-1")]
