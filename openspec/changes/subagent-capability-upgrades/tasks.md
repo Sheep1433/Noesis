@@ -3,7 +3,7 @@
 ## 1. 子代理角色体系
 
 - [ ] 1.1 `agents/background/subagent/roles.py`：`SubagentRole` 扩展 `tool_allowlist: tuple[str, ...] | None`（None=继承 general 全集）、`prompt_profile: str | None`；不设 memory_read_only 字段——后台角色记忆恒只读是平台不变式（见 1.4），恒 True 的 bool 是死配置；`general` 角色声明不变（行为零变化）
-- [ ] 1.2 内置 `read-only` 角色：非文件系统工具白名单 = {web_search, web_fetch, search_memory（文件变体，loop 安全）, search_sessions, search_history（依赖 5.3 桥接解锁）}；文件系统工具（read_file/ls/glob/grep/write_file/edit_file/execute）由 FilesystemMiddleware 生成、不在 `worker_tools` 清单里——read-only 角色的文件面裁剪走中间件级过滤（`_bg_worker_factory` 的 filesystem hook 新增按角色剔除 write_file/edit_file/execute，参照既有 `guard_worker_filesystem_tools` 的工具定位方式；5.3 未落地前白名单先不含两个检索工具）
+- [ ] 1.2 内置 `read-only` 角色：非文件系统工具白名单 = {web_search, web_fetch, search_memory（文件变体，loop 安全）, search_sessions, search_history（依赖 5.3 桥接解锁）}；文件系统工具（read_file/ls/glob/grep/write_file/edit_file/execute）由 FilesystemMiddleware 生成、不在 `worker_tools` 清单里——read-only 角色的文件面裁剪走中间件级过滤（`_bg_worker_factory` 的 filesystem hook 新增按角色剔除 write_file/edit_file/execute，参照既有 `guard_worker_filesystem_tools` 的工具定位方式）
 - [ ] 1.3 角色装配：`_bg_worker_factory` 消费角色声明（tool_allowlist 过滤非 fs 工具 + prompt_profile 选 prompt + fs 面按 1.2 剔除）；`subagent_type` 参数与 registry 分发已存在，仅核对未知类型的错误文案
 - [ ] 1.4 不变式钉住：后台角色一律 `create_agent_backend(memory_read_only=True)`——记忆可写角色不存在（无 HITL 通道 = 无审批 = 不得写）；单测断言任何角色派单的 /memory 路由只读
 - [ ] 1.5 单测：read-only 派单的工具面断言（无 execute / write_file / edit_file / task 族；有 search_memory / search_sessions——与 1.2 白名单及 5.3 进度一致）；未知 subagent_type 拒绝；general 行为零变化回归
@@ -20,6 +20,7 @@
 
 - [ ] 3.1 `super_agent.py`：删除 `sync_subagents` 清单与 `create_noesis_agent(subagents=...)` 挂载（super_agent 场景的同步 task 是早期调试通道；实际派单唯一入口是 `start_async_task`，其 `run_in_background=False` 前台模式已内建 shield 超时自动转后台，能力覆盖 task 工具且多出子会话/投影/通知三样）——`sync_subagent_tools` 与编译配置一并清理；注意 `sync_subagent_model` 兼作主 Agent 的 `model=` 参数，删除后回退 `get_llm(model_id)`（等价）；`fault_operation.py` 的同步 general-purpose 是正式功能，**保留**
 - [ ] 3.2 配套清理：`services/mention_resolve_service.py` 的 SUPER_AGENT_QA mention 指引仍在引导模型"优先使用 `task` 且 subagent_type=task-worker"——删除 task 后成幽灵指引，改为引导 `start_async_task`（顺带修正过时的 `task-worker` 角色名为现行注册角色）；无测试钉住同步挂载（test_noesis_stack_assembly 用自建 fixture 测 stack 通用能力，且 `fault_operation.py:132` 仍用 subagents 参数，stack 的 subagents 支持不删），无需测试更新
+
 ## 4. 文档与验收
 
 - [ ] 4.1 `docs/engineering/subagent-sessions.md` 补三能力说明；工具描述文案与实现同步
@@ -31,3 +32,9 @@
 - [ ] 5.2 `agents/tools/history_search_tool.py`：工具参数新增 `created_at_from` / `created_at_to`（ISO 8601 日期字符串，模型友好），工具层转 ms 后下发；解析失败返回明确错误而非静默忽略
 - [ ] 5.3 worker 桥接：两个检索工具的 DB 协程经 `run_on_main_loop` 桥到主 loop（主 loop 未注册时回退当前 loop 直连，同 `_db_on_main_loop` 形态）；`super_agent.py` 的 `_loop_bound_tools` 移除 search_history / search_sessions（收敛为只剩 ask_user）；`worker_tools` 装配恢复两个检索工具
 - [ ] 5.4 单测：时间过滤命中/边界/时区转换；桥接路径在无主 loop 时回退直连；worker 工具面断言更新（read-only 与 general 均含两个检索工具）
+
+## 6. 后台 shell 任务输出流式可读（同日追加）
+
+- [ ] 6.1 kernel 流式捕获 + 环形缓冲 + flush 循环 + migration（`bg_shell_job.output_tail`）
+- [ ] 6.2 check_async_task 运行中快照 + 投影透传 + 前端实时日志
+- [ ] 6.3 行为验收（三进程 redis 形态）：运行中 check_async_task 可见 line-N 推进（line-4→16→28）、web 面（follower）GET /tasks 可见 output_tail（311 字符）、终态 result_tail 正常（line-40 / exit 0）
