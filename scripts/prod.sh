@@ -73,6 +73,10 @@ main() {
   read -r HOST PORT < <(
     cd "$BACKEND_DIR" && uv run python -c "from noesis.config.env import AppConfig; print(AppConfig.app_host, AppConfig.app_port)"
   )
+  # 端口预检：最常见失败原因是「已运行的后端实例占着端口 + 持有 advisory lock」
+  if lsof -nP -iTCP:"$PORT" -sTCP:LISTEN 2>/dev/null | grep -q LISTEN; then
+    die "端口 ${PORT} 已被占用（大概率是仍在运行的旧后端实例）。先停掉它（kill 占用进程）再启动。"
+  fi
 
   # 双模式（同 dev.sh）：redis → 三角色（web/control/worker，可水平扩展）；
   # memory → 单进程全干（本地裸机验收，零额外依赖）
@@ -108,7 +112,11 @@ main() {
   cd "$FRONTEND_DIR"
   log_info "构建前端 (pnpm build) ..."
   pnpm build
-  wait_for_backend "构建后"
+  if ! wait_for_backend "构建后"; then
+    log_error "后端在构建期间退出，最近日志："
+    tail -15 "$BACKEND_LOG" >&2
+    exit 1
+  fi
 
   log_info "启动前端预览 ${FRONTEND_PORT} (pnpm preview, /api → 127.0.0.1:${PORT}) ..."
   export FRONTEND_PREVIEW_PORT="$FRONTEND_PORT"
