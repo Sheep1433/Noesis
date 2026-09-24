@@ -18,6 +18,7 @@ import httpx
 from sqlalchemy import and_, select, update
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from noesis.ids import now_ms
 from noesis.config.secrets import (
     SecretCipher,
     SecretEncryptionUnavailable,
@@ -37,10 +38,6 @@ from noesis.storage.postgres.models.user_llm import (
 )
 
 _ALLOWED_API_TYPES = {"openai", "deepseek", "qwen", "minimax", "opencode"}
-
-
-def _now_ms() -> int:
-    return int(time.time() * 1000)
 
 
 def _encrypt_api_key(raw: str) -> tuple[Optional[str], Optional[str]]:
@@ -143,7 +140,7 @@ class UserLLMService:
         slug: str = "",
         enabled: bool = True,
     ) -> Dict[str, Any]:
-        now = _now_ms()
+        now = now_ms()
         cipher, suffix = _encrypt_api_key(api_key)
         if not cipher:
             raise ServiceException(message="API Key 不能为空")
@@ -182,7 +179,7 @@ class UserLLMService:
         api_key_action: str = "keep",
     ) -> Dict[str, Any]:
         provider = await UserLLMService._get_provider(db, user_id, provider_id)
-        now = _now_ms()
+        now = now_ms()
         if name is not None and name.strip():
             provider.name = name.strip()
         if slug is not None and slug.strip():
@@ -215,7 +212,7 @@ class UserLLMService:
         db: AsyncSession, *, user_id: str, provider_id: str
     ) -> None:
         provider = await UserLLMService._get_provider(db, user_id, provider_id)
-        now = _now_ms()
+        now = now_ms()
         await db.execute(
             update(TUserLLMProvider)
             .where(TUserLLMProvider.id == provider_id)
@@ -301,7 +298,7 @@ class UserLLMService:
         await UserLLMService._ensure_model_id_free(
             db, user_id, normalized, provider_id=provider_id
         )
-        now = _now_ms()
+        now = now_ms()
         entry = TUserLLMModel(
             id=str(uuid.uuid4()),
             user_id=user_id,
@@ -349,7 +346,7 @@ class UserLLMService:
             entry.temperature = temperature
         if context_window is not None:
             entry.context_window = int(context_window or 0)
-        entry.updated_at = _now_ms()
+        entry.updated_at = now_ms()
         await db.commit()
         return UserLLMService._model_view(db_entry=entry, api_type=None)
 
@@ -375,7 +372,7 @@ class UserLLMService:
                     TUserLLMModel.deleted_at.is_(None),
                 )
             )
-            .values(deleted_at=_now_ms())
+            .values(deleted_at=now_ms())
         )
         await db.commit()
 
@@ -471,7 +468,7 @@ class UserLLMService:
             available = await UserLLMService.list_resolvable_model_ids(db, user_id=user_id)
             if normalized not in available:
                 raise NotFoundException(message=f"模型不存在: {normalized}")
-        now = _now_ms()
+        now = now_ms()
         row = await db.get(TUserLLMPreference, user_id)
         if row is None:
             row = TUserLLMPreference(

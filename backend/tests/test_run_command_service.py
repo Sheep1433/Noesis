@@ -164,7 +164,7 @@ def _patch_pg(monkeypatch, db):
 @pytest.mark.asyncio
 async def test_consumer_executes_stop_and_marks_completed(monkeypatch):
     bus = InMemoryRunBus(envelope_payload_max_bytes=65536)
-    consumer = RunCommandConsumer(bus=bus, token_provider=lambda: _token())
+    consumer = RunCommandConsumer(bus=bus)
     stopped = {}
 
     class _Snap:
@@ -205,7 +205,7 @@ async def test_consumer_bg_task_stop_no_op_when_unknown(monkeypatch):
     from noesis.agents.background.jobs import registry as bg_registry_mod
 
     bus = InMemoryRunBus(envelope_payload_max_bytes=65536)
-    consumer = RunCommandConsumer(bus=bus, token_provider=lambda: _token())
+    consumer = RunCommandConsumer(bus=bus)
 
     def fake_get(task_id):
         return None
@@ -236,7 +236,7 @@ async def test_consumer_bg_task_stop_no_op_when_unknown(monkeypatch):
 @pytest.mark.asyncio
 async def test_consumer_skips_when_token_invalid():
     bus = InMemoryRunBus(envelope_payload_max_bytes=65536)
-    consumer = RunCommandConsumer(bus=bus, token_provider=lambda: _token(valid=False))
+    consumer = RunCommandConsumer(bus=bus)
     assert await consumer._consume_once() == 0, "失锁后不得认领执行"
     await bus.close()
 
@@ -245,7 +245,7 @@ async def test_consumer_skips_when_token_invalid():
 async def test_consumer_scan_falls_back_without_wakeup(monkeypatch):
     """wake-up 丢失兜底：consumer 循环在超时后仍执行补扫。"""
     bus = InMemoryRunBus(envelope_payload_max_bytes=65536)
-    consumer = RunCommandConsumer(bus=bus, token_provider=lambda: _token(), scan_interval_seconds=0.05)
+    consumer = RunCommandConsumer(bus=bus, scan_interval_seconds=0.05)
     calls = {"n": 0}
 
     async def fake_consume():
@@ -270,7 +270,7 @@ async def test_consumer_scan_falls_back_without_wakeup(monkeypatch):
 async def test_duplicate_stop_single_side_effect(monkeypatch):
     """重复 stop 命令（同 dedupe_key）：consumer 只执行一次副作用。"""
     bus = InMemoryRunBus(envelope_payload_max_bytes=65536)
-    consumer = RunCommandConsumer(bus=bus, token_provider=lambda: _token())
+    consumer = RunCommandConsumer(bus=bus)
     stop_calls = {"n": 0}
 
     class _Snap:
@@ -316,7 +316,7 @@ async def test_expired_hitl_command_is_noop(monkeypatch):
     from noesis.errors.exceptions import ConflictException
 
     bus = InMemoryRunBus(envelope_payload_max_bytes=65536)
-    consumer = RunCommandConsumer(bus=bus, token_provider=lambda: _token())
+    consumer = RunCommandConsumer(bus=bus)
     from noesis.repositories import agent_run_command_repository as repo_mod
     from noesis.services import run_service as run_service_mod
 
@@ -356,7 +356,7 @@ async def test_cleanup_deletes_only_expired_terminal(monkeypatch):
 
     bus = InMemoryRunBus(envelope_payload_max_bytes=65536)
     consumer = RunCommandConsumer(
-        bus=bus, token_provider=lambda: _token(),
+        bus=bus,
         retention_days=7.0, cleanup_interval_seconds=3600.0,
     )
     now = _now_ms()

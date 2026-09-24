@@ -14,6 +14,7 @@ from typing import List, Optional, Tuple
 from sqlalchemy import and_, delete, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from noesis.ids import now_ms
 from noesis.config.env import ChatAttachmentConfig
 from noesis.config.user_data_paths import (
     ensure_session_attachments_dir,
@@ -42,12 +43,8 @@ _IMAGE_MIME_TYPES = frozenset({
 _UNSAFE_NAME_RE = re.compile(r'[\\/:*?"<>|]')
 
 
-def _now_ms() -> int:
-    return int(time.time() * 1000)
-
-
 def _expires_at_ms() -> int:
-    return _now_ms() + ChatAttachmentConfig.ttl_days * 24 * 3600 * 1000
+    return now_ms() + ChatAttachmentConfig.ttl_days * 24 * 3600 * 1000
 
 
 def _sanitize_filename(name: str) -> str:
@@ -151,7 +148,7 @@ class ChatAttachmentService:
 
     @classmethod
     def _is_expired(cls, row: TChatAttachment) -> bool:
-        return row.expires_at <= _now_ms()
+        return row.expires_at <= now_ms()
 
     @classmethod
     async def _ensure_session_owned(
@@ -172,7 +169,7 @@ class ChatAttachmentService:
 
     @classmethod
     async def lazy_delete_expired(cls, session_id: str, db: AsyncSession) -> int:
-        now = _now_ms()
+        now = now_ms()
         result = await db.execute(
             select(TChatAttachment).where(
                 and_(
@@ -348,7 +345,7 @@ class ChatAttachmentService:
             preview = f"图片 {safe_name}"
             preview_base64 = build_image_preview_base64(content, resolved_mime or "")
 
-        now = _now_ms()
+        now = now_ms()
         row = TChatAttachment(
             id=attachment_id,
             session_id=session_id,
@@ -405,7 +402,7 @@ class ChatAttachmentService:
         await cls._ensure_session_owned(session_id, user_id, db)
         await cls.lazy_delete_expired(session_id, db)
 
-        now = _now_ms()
+        now = now_ms()
         result = await db.execute(
             select(TChatAttachment)
             .where(
@@ -481,7 +478,7 @@ class ChatAttachmentService:
         user_id: str,
         db: AsyncSession,
     ) -> List[TChatAttachment]:
-        now = _now_ms()
+        now = now_ms()
         result = await db.execute(
             select(TChatAttachment).where(
                 and_(
@@ -540,7 +537,7 @@ class ChatAttachmentService:
         user_id: str,
         db: AsyncSession,
     ) -> List[TChatAttachment]:
-        now = _now_ms()
+        now = now_ms()
         result = await db.execute(
             select(TChatAttachment).where(
                 and_(

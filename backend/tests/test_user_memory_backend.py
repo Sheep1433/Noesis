@@ -180,3 +180,37 @@ def test_grep_supports_regex_alternation(users_root: Path) -> None:
     assert any("upcoming wedding" in str(m.get("text", "")) for m in g.matches), (
         f"正则交替模式未命中: {g.matches}"
     )
+
+
+def test_grep_supports_recursive_glob_and_skips_binary_symlink(
+    users_root: Path,
+) -> None:
+    """模型惯用的 **/*.md 必须命中；二进制文件跳过；越界 symlink 不进检索。"""
+    import os
+
+    MemoryStore.upsert_entry(
+        "u1", memory_type="preference", label="命名", body="_alpha_body_", sources=[])
+    (users_root / "u1" / "memory" / "preference" / "bin.md").write_bytes(
+        b"\xff\xfe\x00binary_alpha")
+    evil = users_root / "u1" / "memory" / "preference" / "evil.md"
+    evil.symlink_to("/etc/hostname")
+    backend = _backend(users_root)
+
+    g = backend.grep("alpha", path="/memory", glob="**/*.md")
+    paths = [str(m.get("path", "")) for m in g.matches]
+    assert any(
+        p.startswith("/memory/preference/") and p.endswith(".md") for p in paths
+    ), paths
+    assert not any("bin.md" in p for p in paths)
+    assert not any("evil.md" in p for p in paths)
+
+
+def test_legacy_migration_overwrites_empty_target(users_root: Path) -> None:
+    """老布局有内容而新位置是空文件时，迁移仍发生（内容不滞留丢失）。"""
+    u = users_root / "u1"
+    (u / "memory").mkdir(parents=True)
+    (u / "memory" / "AGENTS.md").write_text("", encoding="utf-8")
+    (u / "AGENTS.md").write_text("老布局内容", encoding="utf-8")
+
+    ensure_user_memory_files("u1")
+    assert "老布局内容" in (u / "memory" / "AGENTS.md").read_text(encoding="utf-8")

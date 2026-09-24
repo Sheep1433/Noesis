@@ -7,10 +7,10 @@
 from __future__ import annotations
 
 import copy
-import time
 from dataclasses import dataclass
 from typing import Any
 
+from noesis.ids import now_ms
 from noesis.runtime.logging import logger
 from noesis.chat.delivery.events import (
     HitlRequired,
@@ -28,10 +28,6 @@ from noesis.chat.tool_state import ToolState
 from noesis.chat.runs.models import RunSnapshot, RunStatus
 
 
-def _now_ms() -> int:
-    return int(time.time() * 1000)
-
-
 @dataclass
 class RunProjection:
     run_id: str
@@ -45,6 +41,11 @@ class RunProjection:
     finish_reason: str | None = None
     error_code: str | None = None
     user_error_message: str | None = None
+    # worker-role-split fencing：认领上下文（None = 非认领路径启动，不设防）。
+    # 终态/checkpoint 落库时作为 WHERE 条件，epoch 不符（被重置/再认领）
+    # 的僵尸写被 DB 拒绝；心跳协程同据其判定失去持有。
+    owner_instance_id: str | None = None
+    claim_epoch: int | None = None
     cancel_requested: bool = False
     pending_hitl: dict[str, Any] | None = None
 
@@ -74,6 +75,8 @@ class RunProjection:
             user_error_message=self.user_error_message,
             cancel_requested=self.cancel_requested,
             pending_hitl=copy.deepcopy(self.pending_hitl),
+            owner_instance_id=self.owner_instance_id,
+            claim_epoch=self.claim_epoch,
         )
         cloned.builder.load_from_content_dict(copy.deepcopy(self.builder.to_dict()))
         return cloned
@@ -327,7 +330,7 @@ class RunProjection:
             error_code=self.error_code,
             user_error_message=self.user_error_message,
             pending_hitl=self.pending_hitl,
-            updated_at=_now_ms(),
+            updated_at=now_ms(),
         )
 
     def persisted_snapshot(self) -> dict[str, Any]:

@@ -26,3 +26,8 @@ def new_uuid7() -> str:
         | random_b
     )
     return str(uuid.UUID(int=value))
+
+
+def now_ms() -> int:
+    """当前 Unix 时间（毫秒整数）——数据库时间戳字段的统一取时入口。"""
+    return int(time.time() * 1000)

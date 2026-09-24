@@ -14,6 +14,7 @@ from sqlalchemy import update
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from noesis.ids import now_ms
 from noesis.runtime.logging import logger
 from noesis.config.env import DistributedRunsConfig, StreamConfig
 from noesis.chat.runs.bus import (
@@ -41,6 +42,7 @@ from noesis.chat.runs import (
     RunManager,
     RunSnapshot,
     RunStatus,
+    TERMINAL_RUN_STATUSES,
     TerminalCandidate,
     TerminalCommitResult,
 )
@@ -179,10 +181,6 @@ async def _create_session_for_command(
 set_session_factory_provider(lambda: _create_session_for_command)
 
 
-def _now_ms() -> int:
-    return int(time.time() * 1000)
-
-
 class CheckpointGuarded(RuntimeError):
     """checkpoint 被 sequence guard 拒绝（DB last_sequence >= incoming）。
     不是错误——迟到 checkpoint 不应覆盖更新的 DB snapshot。"""
@@ -258,7 +256,7 @@ class RunService:
                 },
             )
 
-        now = _now_ms()
+        now = now_ms()
         run_id = str(uuid.uuid4())
         assistant_message_id = str(uuid.uuid4())
         extra = dict(request.extra or {})
@@ -391,7 +389,7 @@ class RunService:
                 content = handle.state.builder.to_dict()
             await run_manager.stop(run.id)
 
-        now = _now_ms()
+        now = now_ms()
         async with pg_manager.get_async_session_context() as cleanup_db:
             won = await AgentRunRepository(cleanup_db).finalize(
                 run_id=run.id,
@@ -419,11 +417,17 @@ class RunService:
         run: TAgentRun,
         payload: LaunchPayload,
         current_user: CurrentUser,
+        *,
+        owner_instance_id: str | None = None,
+        claim_epoch: int | None = None,
     ) -> None:
         """启动已 claim 的 queued Run（dispatcher 调用；幂等，重复启动直接返回）。
 
         run 参数须为 DB 权威行（launch_payload / owner_term 已就位）；
         current_user 由调用方从 DB 用户记录重建，不依赖请求进程上下文。
+        ``owner_instance_id`` / ``claim_epoch`` 为认领上下文（worker-role-split）：
+        传入即启用 fencing（终态/checkpoint 落库带 epoch 条件、心跳协程
+        检测失去持有并自停）；None = 非认领路径（channel 等），行为不变。
         """
         try:
             run_manager.get(run.id)
@@ -442,6 +446,8 @@ class RunService:
             origin=run.origin,
             status=RunStatus.RUNNING,
             attempt_id=run.attempt_id,
+            owner_instance_id=owner_instance_id,
+            claim_epoch=claim_epoch,
         )
         qa_request = payload.to_qa_query_request()
         persist_sink = PersistSink(
@@ -454,6 +460,7 @@ class RunService:
                 request.assistant_message_id,
                 request.snapshot,
                 request.snapshot_sequence,
+                claim_epoch=claim_epoch,
             )
 
         def checkpoint_policy(event: RunEvent, _sequence: int) -> str | None:
@@ -511,8 +518,74 @@ class RunService:
                 if run.qa_type == IntentEnum.SUPER_AGENT_QA.value[0]
                 else None
             ),
+            owner_instance_id=owner_instance_id,
+            claim_epoch=claim_epoch,
         )
         await cls.mark_run_started(run.id)
+        if owner_instance_id is not None and claim_epoch is not None:
+            # task 引用挂到 handle：asyncio 对无引用的 task 不保证存活
+            #（fire-and-forget 反模式），handle 随 run 出册时一并释放
+            handle = run_manager.get(run.id)
+            handle.heartbeat_task = cls._spawn_heartbeat(
+                run.id, owner_instance_id, claim_epoch
+            )
+
+    # 心跳租约（对账侧僵尸判定共用）：容忍事件循环秒级卡顿、远小于用户
+    # 可感知的故障切换窗口
+    HEARTBEAT_LEASE_TTL_SECONDS = 60.0
+    _HEARTBEAT_INTERVAL_SECONDS = HEARTBEAT_LEASE_TTL_SECONDS / 3
+
+    @classmethod
+    def _spawn_heartbeat(
+        cls, run_id: str, owner_instance_id: str, claim_epoch: int
+    ) -> "asyncio.Task[None]":
+        """持有期间的心跳协程（fire-and-forget，自带全部退出路径）。
+
+        - 心跳落空（epoch/owner 不符，run 已被重置/再认领/终态）→ 停掉本地
+          run（失去持有自停，防僵尸双写），退出；
+        - run 终态 / 出册（KeyError）→ 退出；
+        - 周期 = lease_ttl/3，容忍事件循环卡顿与常规 GC 停顿（60s 租约的
+          依据：远大于繁忙进程的秒级卡顿、远小于用户可感知的故障切换窗口）。
+        """
+
+        async def _loop() -> None:
+            while True:
+                await asyncio.sleep(cls._HEARTBEAT_INTERVAL_SECONDS)
+                try:
+                    handle = run_manager.get(run_id)
+                except KeyError:
+                    return  # 已出册：事实权威在 DB，无需再跳
+                if handle.status in TERMINAL_RUN_STATUSES:
+                    return
+                try:
+                    async with pg_manager.get_async_session_context() as db:
+                        alive = await AgentRunRepository(db).heartbeat(
+                            run_id=run_id,
+                            owner_instance_id=owner_instance_id,
+                            claim_epoch=claim_epoch,
+                            now_ms=now_ms(),
+                        )
+                        await db.commit()
+                except Exception:
+                    logger.exception("agent_run_heartbeat_failed run_id={}", run_id)
+                    continue  # DB 抖动不等于失去持有：下轮再试
+                if not alive:
+                    logger.warning(
+                        "agent_run_lease_lost run_id={} epoch={} instance_id={} "
+                        "（run 已被重置/再认领），停掉本地执行",
+                        run_id,
+                        claim_epoch,
+                        owner_instance_id,
+                    )
+                    try:
+                        await run_manager.stop(run_id)
+                    except Exception:
+                        logger.exception(
+                            "agent_run_lease_lost_stop_failed run_id={}", run_id
+                        )
+                    return
+
+        return asyncio.create_task(_loop(), name=f"agent-run-heartbeat:{run_id}")
 
     @classmethod
     async def mark_run_started(cls, run_id: str) -> None:
@@ -527,8 +600,8 @@ class RunService:
                 run_id,
                 [RunStatus.QUEUED],
                 RunStatus.RUNNING,
-                started_at=_now_ms(),
-                updated_at=_now_ms(),
+                started_at=now_ms(),
+                updated_at=now_ms(),
             )
             await db.commit()
 
@@ -539,9 +612,12 @@ class RunService:
         assistant_message_id: str,
         snapshot: RunSnapshot,
         sequence: int,
+        *,
+        claim_epoch: int | None = None,
     ) -> None:
         """写入 immutable checkpoint snapshot。snapshot 在 apply_event lock 内捕获，
-        与 sequence 绑定。DB UPDATE 带 sequence guard：迟到 checkpoint 不覆盖更新状态。"""
+        与 sequence 绑定。DB UPDATE 带 sequence guard：迟到 checkpoint 不覆盖更新状态；
+        ``claim_epoch`` 非 None 时叠加 fencing guard：被重置/再认领的僵尸写被拒。"""
         deadline = time.monotonic() + StreamConfig.persistence_timeout_seconds
         last_error: Exception | None = None
         content = {"parts": [dict(part) for part in snapshot.parts]}
@@ -560,7 +636,8 @@ class RunService:
                         attempt_id=snapshot.attempt_id,
                         status=snapshot.status,
                         finish_reason=snapshot.finish_reason,
-                        updated_at=_now_ms(),
+                        updated_at=now_ms(),
+                        claim_epoch=claim_epoch,
                     )
                     if stored:
                         await db.commit()
@@ -607,12 +684,13 @@ class RunService:
                 content=content,
                 last_sequence=candidate.envelope.sequence,
                 snapshot=projection.persisted_snapshot(),
-                finished_at=_now_ms(),
+                finished_at=now_ms(),
                 finish_reason=projection.finish_reason or "stop",
                 error_code=projection.error_code,
                 user_error_message=projection.user_error_message,
                 usage=projection.run_usage,
                 model_calls=projection.run_model_calls,
+                claim_epoch=projection.claim_epoch,
             )
             if won:
                 await db.commit()
@@ -646,7 +724,7 @@ class RunService:
         async with pg_manager.get_async_session_context() as db:
             repository = AgentRunRepository(db)
             content = projection.builder.to_dict()
-            now = _now_ms()
+            now = now_ms()
             if target in {
                 RunStatus.COMPLETED,
                 RunStatus.PARTIAL,
@@ -669,6 +747,7 @@ class RunService:
                     user_error_message=projection.user_error_message,
                     usage=projection.run_usage,
                     model_calls=projection.run_model_calls,
+                    claim_epoch=projection.claim_epoch,
                 )
                 if not won:
                     await db.rollback()
@@ -865,7 +944,7 @@ class RunService:
             assistant_status=ASSISTANT_TERMINAL_STATUS[RunStatus.INTERRUPTED],
             content=content,
             last_sequence=row.last_sequence,
-            finished_at=_now_ms(),
+            finished_at=now_ms(),
             finish_reason="stopped",
             error_code="USER_STOP_FORCE",
             user_error_message="本轮回复已被用户中断。",
@@ -961,7 +1040,7 @@ class RunService:
             run_id,
             [RunStatus.HITL_PENDING],
             RunStatus.RUNNING,
-            updated_at=_now_ms(),
+            updated_at=now_ms(),
         )
         if not won:
             await db.rollback()
@@ -988,7 +1067,7 @@ class RunService:
                 run_id,
                 [RunStatus.RUNNING],
                 RunStatus.HITL_PENDING,
-                updated_at=_now_ms(),
+                updated_at=now_ms(),
             )
             await db.commit()
             raise ServiceException(message="继续任务失败，请稍后重试")

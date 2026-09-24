@@ -52,6 +52,72 @@ def _wakeup_pattern(cluster_id: str) -> str:
     return f"noesis:{cluster_id}:wakeup:*"
 
 
+class _SubGroup:
+    """一个 channel 的独立订阅组：专属 pubsub 连接 + 专属 reader task。
+
+    引用计数（组内 queue 数）归零即关闭整条连接——退订的连接不进入
+    任何复用路径，后续订阅走全新连接，规避共享连接的 reader 失聪。
+    """
+
+    def __init__(self, *, client: Any, channel: str, on_message, on_stale) -> None:
+        self._client = client
+        self._channel = channel
+        self._on_message = on_message
+        self._on_stale = on_stale
+        self.pubsub = client.pubsub()
+        self.reader: asyncio.Task | None = None
+        self.closed = False
+
+    async def start(self) -> None:
+        await self.pubsub.connect()
+        await self.pubsub.subscribe(self._channel)
+        self.reader = asyncio.create_task(
+            self._read_loop(), name=f"run-bus-sub-reader:{self._channel[-16:]}"
+        )
+
+    async def _read_loop(self) -> None:
+        while not self.closed:
+            try:
+                message = await self.pubsub.get_message(
+                    timeout=1.0, ignore_subscribe_messages=True
+                )
+                if message is not None:
+                    self._on_message(message)
+            except asyncio.CancelledError:
+                raise
+            except Exception:
+                if self.closed:
+                    return
+                # 断连（服务端踢连接/网络闪断）：重连并重放本组订阅——
+                # 窗口内消息丢失由上层 sequence gap / snapshot 兜底
+                #（at-most-once 契约）
+                logger.warning("run bus 订阅组 reader 断连，退避重试 channel={}", self._channel)
+                await asyncio.sleep(1.0)
+                try:
+                    await self.pubsub.connect()
+                    await self.pubsub.subscribe(self._channel)
+                except Exception:  # noqa: BLE001
+                    logger.warning("run bus 订阅组重连失败 channel={}", self._channel)
+                    await asyncio.sleep(1.0)
+
+    async def close(self) -> None:
+        if self.closed:
+            return
+        self.closed = True
+        reader = self.reader
+        self.reader = None
+        if reader is not None and not reader.done():
+            reader.cancel()
+            try:
+                await reader
+            except (asyncio.CancelledError, Exception):
+                pass
+        try:
+            await self.pubsub.aclose()
+        except Exception:  # noqa: BLE001
+            pass
+
+
 class RedisRunBus:
     """RunBus 的 Redis Pub/Sub 实现（跨进程广播；恢复与终态权威在 PostgreSQL）。"""
 
@@ -61,12 +127,18 @@ class RedisRunBus:
         self._envelope_payload_max_bytes = envelope_payload_max_bytes
         self._pubsub: Any = None
         self._reader: asyncio.Task | None = None
-        # run_id -> 本地订阅 queue 集合；空集合时 UNSUBSCRIBE 底层 channel
+        # run_id -> 本地订阅 queue 集合
         self._run_queues: dict[str, set[asyncio.Queue]] = {}
         # (scope, key) -> 信令订阅 queue 集合（同 run channel 生命周期）
         self._signal_queues: dict[tuple[str, str], set[asyncio.Queue]] = {}
-        # channel -> ("run", run_id) | ("signal", scope, key)（reader 分发用）
-        self._channels: dict[str, tuple] = {}
+        # channel -> 订阅组（per-subscription 连接模型的组注册表）：
+        # 共享 pubsub 连接上「同连接快速 UNSUBSCRIBE→SUBSCRIBE 同一 channel」
+        # 会触发 redis-py asyncio reader 失聪（服务端订阅与连接均正常、消息
+        # 可达，仅 reader 的 get_message 永不返回——2026-09-23 实测定位，
+        # 四种就地修复均无效）。run/信令订阅改为**每组独立 pubsub 连接 +
+        # 独立 reader**，从结构上消除该序列（退订即整连接关闭，永不复用）。
+        # 共享连接仅保留 wakeup pattern 订阅（订阅一次不退订，无触发序列）。
+        self._channels: dict[str, "_SubGroup"] = {}
         self._wakeup_queues: set[asyncio.Queue] = set()
         # wakeup pattern 订阅确认 future：所有 wakeup 订阅者经 ready() 等待
         # （subscribe-first：确认后发布的唤醒保证可见）
@@ -124,20 +196,13 @@ class RedisRunBus:
                 await asyncio.sleep(_RECONNECT_BACKOFF_SECONDS)
 
     def _dispatch(self, message: Mapping[str, Any]) -> None:
+        """共享连接 reader 的分发（仅 wakeup pattern——run/信令已走订阅组）。"""
         msg_type = message.get("type")
-        if msg_type == "message":
-            channel = str(message.get("channel") or "")
-            target = self._channels.get(channel)
-            if target is None:
-                return
-            if target[0] == "run":
-                self._fanout_run(target[1], message.get("data"))
-            else:
-                self._fanout_signal(target[1], target[2], message.get("data"))
-        elif msg_type == "pmessage":
-            channel = str(message.get("channel") or "")
-            topic = channel.rsplit(":", 1)[-1] if channel else ""
-            self._fanout_wakeup(topic, message.get("data"))
+        if msg_type != "pmessage":
+            return
+        channel = str(message.get("channel") or "")
+        topic = channel.rsplit(":", 1)[-1] if channel else ""
+        self._fanout_wakeup(topic, message.get("data"))
 
     def _fanout_signal(self, scope: str, key: str, data: Any) -> None:
         try:
@@ -206,13 +271,20 @@ class RedisRunBus:
             await self._client.publish(channel, json.dumps(envelope.to_dict()))
 
     async def subscribe_run_events(self, run_id: str) -> BusSubscription:
-        await self._ensure_pubsub()
         queue: asyncio.Queue = asyncio.Queue(maxsize=_SUB_QUEUE_MAX)
         channel = _run_channel(self._cluster_id, run_id)
-        if channel not in self._channels:
-            # SUBSCRIBE 的 Redis ack 即 ready 语义：确认后发布的事件保证可见
-            await self._pubsub.subscribe(channel)
-            self._channels[channel] = ("run", run_id)
+        group = self._channels.get(channel)
+        if group is None or group.closed:
+            # per-subscription 连接：新组独立 pubsub 连接（不与任何退订
+            # 历史共享连接状态）。SUBSCRIBE 的 Redis ack 即 ready 语义。
+            group = _SubGroup(
+                client=self._client,
+                channel=channel,
+                on_message=lambda msg: self._on_group_message("run", run_id, msg),
+                on_stale=self._drop_stale_group,
+            )
+            self._channels[channel] = group
+            await group.start()
         self._run_queues.setdefault(run_id, set()).add(queue)
 
         async def _release() -> None:
@@ -221,14 +293,29 @@ class RedisRunBus:
                 queues.discard(queue)
                 if not queues:
                     self._run_queues.pop(run_id, None)
-                    if not self._closed and channel in self._channels:
-                        self._channels.pop(channel, None)
-                        try:
-                            await self._pubsub.unsubscribe(channel)
-                        except Exception:  # noqa: BLE001
-                            logger.warning("run bus unsubscribe 失败 channel={}", channel)
+                    await self._close_group(channel)
 
         return _RedisSubscription(queue, _release)
+
+    async def _close_group(self, channel: str) -> None:
+        """引用归零：关闭并注销整条订阅组连接（连接不复用——reader 失聪
+        的触发序列在结构上不可能出现）。"""
+        group = self._channels.get(channel)
+        if group is None or group.closed:
+            return
+        self._channels.pop(channel, None)
+        await group.close()
+
+    def _drop_stale_group(self, channel: str) -> None:
+        """reader 异常退出的死组：从注册表移除（后续订阅建新组新连接）。"""
+        self._channels.pop(channel, None)
+
+    def _on_group_message(self, kind: str, key: Any, message: Mapping[str, Any]) -> None:
+        """订阅组 reader 的消息回调（kind='run' 直接扇出；信令走解析）。"""
+        if message.get("type") != "message":
+            return
+        if kind == "run":
+            self._fanout_run(key, message.get("data"))
 
     async def publish_signal(
         self, scope: str, key: str, payload: Mapping[str, str], *, origin: str = ""
@@ -247,12 +334,18 @@ class RedisRunBus:
         )
 
     async def subscribe_signals(self, scope: str, key: str) -> SignalSubscription:
-        await self._ensure_pubsub()
         queue: asyncio.Queue = asyncio.Queue(maxsize=_SUB_QUEUE_MAX)
         channel = _signal_channel(self._cluster_id, scope, key)
-        if channel not in self._channels:
-            await self._pubsub.subscribe(channel)
-            self._channels[channel] = ("signal", scope, key)
+        group = self._channels.get(channel)
+        if group is None or group.closed:
+            group = _SubGroup(
+                client=self._client,
+                channel=channel,
+                on_message=lambda msg: self._on_signal_message(scope, key, msg),
+                on_stale=self._drop_stale_group,
+            )
+            self._channels[channel] = group
+            await group.start()
         self._signal_queues.setdefault((scope, key), set()).add(queue)
 
         async def _release() -> None:
@@ -261,14 +354,14 @@ class RedisRunBus:
                 queues.discard(queue)
                 if not queues:
                     self._signal_queues.pop((scope, key), None)
-                    if not self._closed and channel in self._channels:
-                        self._channels.pop(channel, None)
-                        try:
-                            await self._pubsub.unsubscribe(channel)
-                        except Exception:  # noqa: BLE001
-                            logger.warning("run bus signal unsubscribe 失败 channel={}", channel)
+                    await self._close_group(channel)
 
         return SignalSubscription(queue, _release)
+
+    def _on_signal_message(self, scope: str, key: str, message: Mapping[str, Any]) -> None:
+        if message.get("type") != "message":
+            return
+        self._fanout_signal(scope, key, message.get("data"))
 
     async def wakeup(self, topic: str, payload: Mapping[str, str]) -> None:
         if self._closed:
@@ -315,6 +408,9 @@ class RedisRunBus:
         if self._closed:
             return
         self._closed = True
+        # 关闭全部订阅组（独立连接各自释放）
+        for channel in list(self._channels):
+            await self._close_group(channel)
         if self._reader is not None and not self._reader.done():
             self._reader.cancel()
             try:

@@ -14,6 +14,7 @@ from typing import Any
 from sqlalchemy import delete, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from noesis.ids import now_ms
 from noesis.agents.background import notifications
 from noesis.agents.background.ports import configure_notification_store
 from noesis.runtime.logging import logger
@@ -22,10 +23,6 @@ from noesis.storage.postgres.models.bg_task import TBgTaskNotification
 # 未送达通知的保留上限：会话长期无 run 消费（已删除/废弃）时行在此窗口后
 # 由恢复入口清理，防表无限增长
 _RETENTION_MS = 30 * 24 * 60 * 60 * 1000
-
-
-def _now_ms() -> int:
-    return int(time.time() * 1000)
 
 
 class BgNotificationStore:
@@ -40,7 +37,7 @@ class BgNotificationStore:
                 id=str(notice["id"]),
                 session_id=session_id,
                 payload=notice,
-                created_at=_now_ms(),
+                created_at=now_ms(),
             ))
             await db.commit()
 
@@ -75,7 +72,7 @@ async def restore_undelivered_notifications(db: AsyncSession | None = None) -> i
 
 
 async def _restore_with_session(db: AsyncSession) -> int:
-    now = _now_ms()
+    now = now_ms()
     expired = await db.execute(
         delete(TBgTaskNotification).where(
             TBgTaskNotification.created_at < now - _RETENTION_MS

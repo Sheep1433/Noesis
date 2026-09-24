@@ -21,6 +21,9 @@ def register_runtime_ports() -> None:
     from noesis.services.bg_notification_store import (  # noqa: F401
         BgNotificationStore,
     )
+    from noesis.services.bg_shell_job_service import (  # noqa: F401
+        BgShellJobService,
+    )
 
 
 __all__ = ["register_runtime_ports"]

@@ -28,16 +28,33 @@ main() {
   check_command pnpm
 
   start_qdrant
+  start_redis
   start_langfuse
   start_mcp
   start_sandbox_runner
 
-  log_info "启动后端 (app.py, reload 见 config.yaml) ..."
-  cd "$BACKEND_DIR"
-  uv run app.py &
-  BACKEND_PID=$!
-  log_info "Backend started (PID: $BACKEND_PID)"
-
+  # worker-role-split：三进程形态（web 8089 / control 8091 / worker 8092）
+  # bus 强制 redis——dev 环境需本地 redis（redis-server 或 docker）
+  # 双模式：NOESIS_RUN_BUS_BACKEND=redis → 三进程（web/control/worker）；
+  # memory → 单进程全干（app.py，零额外依赖，本地自用默认）
+  BUS_MODE=$(grep -E '^NOESIS_RUN_BUS_BACKEND=' "$BACKEND_DIR/.env" 2>/dev/null | cut -d= -f2)
+  if [[ "$BUS_MODE" == "redis" ]]; then
+    log_info "启动后端三角色 (web/control/worker, bus=redis) ..."
+    cd "$BACKEND_DIR"
+    uv run web.py &
+    WEB_PID=$!
+    uv run control.py &
+    CONTROL_PID=$!
+    uv run worker.py &
+    WORKER_PID=$!
+    log_info "Backend roles started (web=$WEB_PID control=$CONTROL_PID worker=$WORKER_PID)"
+  else
+    log_info "启动后端单进程 (app.py, bus=memory) ..."
+    cd "$BACKEND_DIR"
+    uv run app.py &
+    BACKEND_PID=$!
+    log_info "Backend started (PID: $BACKEND_PID)"
+  fi
   log_info "启动前端 dev server ..."
   cd "$FRONTEND_DIR"
   pnpm dev &
@@ -62,7 +79,7 @@ main() {
   log_info "=========================================="
   log_info "按 Ctrl+C 停止应用进程"
 
-  wait "$BACKEND_PID" "$FRONTEND_PID"
+  wait "$WEB_PID" "$FRONTEND_PID"
   if [[ -n "$MCP_PID" ]]; then
     wait "$MCP_PID" 2>/dev/null || true
   fi

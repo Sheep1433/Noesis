@@ -76,7 +76,7 @@ def test_cookie_lifetime_uses_the_stricter_server_expiry(monkeypatch):
     session = _session()
     session.idle_expires_at = 2_000
     session.absolute_expires_at = 1_500
-    monkeypatch.setattr("noesis.services.auth.sessions._now_ms", lambda: 1_000)
+    monkeypatch.setattr("noesis.ids.now_ms", lambda: 1_000)
     assert SessionService.remaining_seconds(session) == 0
 
 

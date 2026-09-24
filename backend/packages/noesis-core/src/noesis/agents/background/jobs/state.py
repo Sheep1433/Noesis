@@ -83,6 +83,8 @@ class BackgroundTask:
     context_snapshot: Optional[dict[str, Any]] = None
     status: BgTaskStatus = BgTaskStatus.RUNNING
     result: Optional[str] = None
+    # 运行中输出尾部快照（shell 任务流式 flush，≤4KB；subagent 任务为 None）
+    output_tail: Optional[str] = None
     error: Optional[str] = None
     # 协作停止请求的终止原因（cancelled / timed_out）；非 None 即停止已受理
     stop_reason: Optional[str] = None
@@ -117,6 +119,7 @@ class BackgroundTask:
             "command": self.command,
             "status": self.status.value,
             "result": self.result,
+            "output_tail": self.output_tail,
             "error": self.error,
             "stop_reason": self.stop_reason,
             "started_at": self.started_at,
