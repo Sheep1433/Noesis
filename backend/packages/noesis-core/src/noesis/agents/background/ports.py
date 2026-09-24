@@ -289,11 +289,15 @@ def _continuation() -> Any:
 
 
 class ContinuationPort:
-    """任务终态后唤醒主 Agent（60s 去抖 + 连续唤醒上限由实现负责）。"""
+    """任务终态后唤醒主 Agent（60s 去抖 + 连续唤醒上限由实现负责）。
+
+    注册的实现是模块级函数（bg_continuation_service.schedule_maybe_continue），
+    直接调用——不是带方法的对象。
+    """
 
     @staticmethod
     async def schedule_maybe_continue(session_id: str, user_id: str) -> None:
-        return await _continuation().schedule_maybe_continue(session_id, user_id)
+        return await _continuation()(session_id, user_id)
 
 
 # --------------------------------------------------------------------------

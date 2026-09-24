@@ -116,8 +116,8 @@ async def _poll_shell_output(entry: "_TaskEntry", log_rel: str) -> None:
             tail = await asyncio.to_thread(
                 _read_log_tail, entry, log_rel, _OUTPUT_TAIL_SNAPSHOT_CHARS,
             )
-        except Exception:  # noqa: BLE001
-            logger.debug("bg shell output poll failed task_id={}", task.task_id)
+        except Exception as exc:  # noqa: BLE001
+            logger.debug("bg shell output poll failed task_id={} err={}", task.task_id, exc)
             continue
         if not tail:
             continue
