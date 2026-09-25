@@ -12,6 +12,7 @@ from noesis.chat.delivery.events import (
 )
 from noesis.chat.delivery.sse import encode_run_event
 from noesis.chat.delivery.sse import encode_filtered
+from noesis.chat.delivery.sse import format_sse
 from noesis.chat.event_mapping.mapper import RuntimeEventMapper
 from noesis.chat.message_builder import AssistantMessageBuilder
 from noesis.chat.event_mapping.langgraph_bridge import LangGraphSseBridge
@@ -65,10 +66,10 @@ def test_encode_roundtrip_text_delta() -> None:
         ctx,
     )
     assert events
-    lines: list[str] = []
+    frames: list[str] = []
     for ev in events:
-        lines.extend(encode_filtered(ev))
-    joined = "".join(lines)
+        frames.extend(format_sse(name, payload) for name, payload in encode_filtered(ev))
+    joined = "".join(frames)
     assert "text-delta" in joined or "text-start" in joined
     assert "hello" in joined
 
@@ -78,14 +79,11 @@ def test_finalize_emits_done() -> None:
     mapper = RuntimeEventMapper(bridge)
     events = mapper.finalize(finish_reason="stop")
     assert any(isinstance(e, StreamDone) for e in events)
-    lines = []
-    for ev in events:
-        lines.extend(encode_run_event(ev) if not isinstance(ev, StreamDone) else encode_filtered(ev))
-    # StreamDone via encode_filtered
-    lines2 = []
-    for ev in events:
-        lines2.extend(encode_filtered(ev))
-    assert any("[DONE]" in x for x in lines2)
+    # StreamDone 经 encode_filtered 的哨兵对 → [DONE] 帧
+    done_frames = [
+        name for ev in events for name, _ in encode_filtered(ev) if name == "__done__"
+    ]
+    assert done_frames
 
 
 def test_finish_reason_maps_to_correct_terminal_semantics() -> None:

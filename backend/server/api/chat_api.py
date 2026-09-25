@@ -896,8 +896,9 @@ async def stream_run(
         try:
             if after_sequence > 0 and subscription.replay:
                 for envelope in subscription.replay:
-                    for line in encode_sequenced_event(envelope):
-                        yield line
+                    # encode-once：envelope.encoded 为发布点产物，直接转发
+                    for frame in envelope.encoded or ():
+                        yield frame
             else:
                 yield format_sse(
                     "run-snapshot",
@@ -917,8 +918,8 @@ async def stream_run(
                     continue
                 if isinstance(item, SlowSubscriber):
                     return
-                for line in encode_sequenced_event(item):
-                    yield line
+                for frame in item.encoded or encode_sequenced_event(item):
+                    yield frame
                 run_manager.record_event_delivered(item)
                 if isinstance(
                     item.event,

@@ -7,7 +7,7 @@ import copy
 import json
 import time
 from collections.abc import Awaitable, Callable
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 from typing import Any, Optional
 
 from noesis.runtime.logging import logger
@@ -109,9 +109,17 @@ class SequencedRunEvent:
     checkpoint_snapshot: RunSnapshot | None = None
     checkpoint_kind: str | None = None
     created_at_monotonic: float = field(default_factory=time.monotonic)
+    # 发布点一次编码的 SSE 帧字节（encode-once fanout）：扇出路径共享同一
+    # bytes 引用，订阅消费侧纯转发。StreamDone 的 [DONE] 帧也在此列；
+    # 检查点/落库消费方继续读 event 字段，不经编码产物。
+    encoded: tuple[bytes, ...] | None = None
 
     @property
     def estimated_bytes(self) -> int:
+        # encoded 存在时按帧字节精确计量（含帧头开销 +64）——比 json.dumps
+        # 估算更准，原先被低估的大事件会更早触发慢订阅者隔离（方向正确）
+        if self.encoded is not None:
+            return sum(len(frame) for frame in self.encoded) + 64
         try:
             return (
                 len(
@@ -815,6 +823,9 @@ class RunManager:
         """在 lock 内分配 sequence、写 buffer。无 I/O await，不 fan-out。
 
         如果 checkpoint_policy 命中，在同一 lock 内复制 immutable snapshot 并附加到 envelope。
+        encode-once：envelope 构造即完成 SSE 编码（纯函数）——commit 进
+        buffer 与 fan-out 的都是携带 encoded bytes 的同一实例，订阅队列、
+        重放缓存、bus publisher 三方共享一次编码产物。
         """
         checkpoint_snapshot: RunSnapshot | None = None
         checkpoint_kind: str | None = None
@@ -825,7 +836,9 @@ class RunManager:
                 checkpoint_snapshot = copy.deepcopy(
                     handle.snapshot_provider(sequence, handle.status, handle.attempt_id)
                 )
-        envelope = SequencedRunEvent(
+        from noesis.chat.delivery.sse import encode_sequenced_event
+
+        probe = SequencedRunEvent(
             run_id=handle.run_id,
             sequence=handle.delivery.next_sequence,
             attempt_id=handle.attempt_id,
@@ -833,6 +846,8 @@ class RunManager:
             checkpoint_snapshot=checkpoint_snapshot,
             checkpoint_kind=checkpoint_kind,
         )
+        encoded = tuple(encode_sequenced_event(probe))
+        envelope = replace(probe, encoded=encoded) if encoded else probe
         # 即使普通输出已经触及上限，也必须允许 RunError / RunAborted
         # 投递终态，否则 producer 已经被限流后，终态事件还会再次触发同一个异常。
         terminal_event = isinstance(event, (RunCompleted, RunAborted, RunError))
@@ -880,7 +895,12 @@ class RunManager:
                 pass
 
     def _assign_and_fanout(self, handle: RunHandle, event: Any) -> SequencedRunEvent:
-        """在 lock 内分配 sequence、写 buffer、fan-out。无 I/O await。"""
+        """在 lock 内分配 sequence、写 buffer、fan-out。无 I/O await。
+
+        encode-once 在 _assign_and_buffer 构造点完成：fan-out 投递的
+        envelope 携带 encoded bytes，订阅队列与 bus publisher 共享同一
+        编码产物，消费侧不再逐连接序列化。
+        """
         envelope = self._assign_and_buffer(handle, event)
         self._fanout(handle, envelope)
         return envelope

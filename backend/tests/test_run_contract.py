@@ -167,12 +167,13 @@ class TestSSEFrameContract:
             attempt_id=2,
             event=event,
         )
-        lines = encode_sequenced_event(envelope)
-        assert len(lines) == 1
-        line = lines[0]
-        assert "event: text-delta" in line
+        frames = encode_sequenced_event(envelope)
+        assert len(frames) == 1
+        frame = frames[0]
+        assert isinstance(frame, bytes)
+        assert frame.startswith(b"event: text-delta\n")
         # 解析 data JSON 验证注入字段
-        data_raw = line.split("data: ", 1)[1].strip()
+        data_raw = frame.split(b"data: ", 1)[1].strip()
         payload = json.loads(data_raw)
         assert payload["run_id"] == "run-1"
         assert payload["sequence"] == 7
@@ -183,69 +184,65 @@ class TestSSEFrameContract:
         envelope = SequencedRunEvent(
             run_id="run-1", sequence=1, attempt_id=1, event=StreamDone()
         )
-        lines = encode_sequenced_event(envelope)
-        assert lines == [format_done()]
+        frames = encode_sequenced_event(envelope)
+        assert frames == [format_done().encode("utf-8")]
 
     def test_encode_hitl_required(self) -> None:
         event = HitlRequired(payload={"kind": "approval", "interrupt_id": "ix"})
-        lines = encode_run_event(event)
-        assert len(lines) == 1
-        assert "event: hitl-required" in lines[0]
-        data = json.loads(lines[0].split("data: ", 1)[1].strip())
-        assert data["kind"] == "approval"
+        pairs = encode_run_event(event)
+        assert pairs == [("hitl-required", {"kind": "approval", "interrupt_id": "ix", "type": "hitl-required"})]
 
     def test_encode_terminal_events_as_run_finished(self) -> None:
         """终态词汇统一：completed / aborted / error 均编码 run.finished，RunPaused 走 run-status。"""
-        event = RunCompleted(finish_reason="stop", usage={"input": 5})
-        lines = encode_run_event(event)
-        assert "event: run.finished" in lines[0]
-        data = json.loads(lines[0].split("data: ", 1)[1].strip())
+        pairs = encode_run_event(RunCompleted(finish_reason="stop", usage={"input": 5}))
+        assert pairs[0][0] == "run.finished"
+        data = pairs[0][1]
         assert data["type"] == "run.finished"
         assert data["status"] == "completed"
         assert data["finish_reason"] == "stop"
         assert data["usage"] == {"input": 5}
 
-        lines = encode_run_event(RunAborted(reason="stopped"))
-        data = json.loads(lines[0].split("data: ", 1)[1].strip())
+        pairs = encode_run_event(RunAborted(reason="stopped"))
+        data = pairs[0][1]
         assert data["status"] == "interrupted"
         assert data["finish_reason"] == "stopped"
 
-        lines = encode_run_event(RunError(message="生成失败", finish_reason="error"))
-        data = json.loads(lines[0].split("data: ", 1)[1].strip())
+        pairs = encode_run_event(RunError(message="生成失败", finish_reason="error"))
+        data = pairs[0][1]
         assert data["status"] == "error"
         assert data["finish_reason"] == "error"
         assert data["error"] == "生成失败"
 
-        lines = encode_run_event(
+        pairs = encode_run_event(
             RunPaused(reason="hitl_pending", finish_reason="hitl_pending", usage={})
         )
-        assert "event: run-status" in lines[0]
-        data = json.loads(lines[0].split("data: ", 1)[1].strip())
-        assert data["status"] == "hitl_pending"
+        assert pairs[0][0] == "run-status"
+        assert pairs[0][1]["status"] == "hitl_pending"
 
     def test_parse_sse_roundtrip_run_finished(self) -> None:
-        """编码→解码往返：run.finished 三态还原为对应 typed 终态事件。"""
+        """编码→解码往返：双产物 bytes 帧 parse 回 typed 终态事件。"""
         for event, expected_type in (
             (RunCompleted(finish_reason="stop", usage={"input": 5}), RunCompleted),
             (RunAborted(reason="stopped"), RunAborted),
             (RunError(message="生成失败", finish_reason="error"), RunError),
         ):
-            lines = encode_run_event(event)
-            events = parse_sse_line_to_event(lines[0])
+            pairs = encode_run_event(event)
+            frame = format_sse(pairs[0][0], pairs[0][1])
+            events = parse_sse_line_to_event(frame)
             assert len(events) == 1
             assert isinstance(events[0], expected_type)
 
-        lines = encode_run_event(
+        pairs = encode_run_event(
             RunPaused(reason="hitl_pending", finish_reason="hitl_pending", usage={})
         )
-        events = parse_sse_line_to_event(lines[0])
+        events = parse_sse_line_to_event(format_sse(pairs[0][0], pairs[0][1]))
         assert len(events) == 1
         assert isinstance(events[0], RunPaused)
 
     def test_parse_sse_roundtrip_text_delta(self) -> None:
         original = WireFrame(event="text-delta", data={"type": "text-delta", "text_delta": "roundtrip"})
-        lines = encode_run_event(original)
-        events = parse_sse_line_to_event(lines[0])
+        pairs = encode_run_event(original)
+        events = parse_sse_line_to_event(format_sse(pairs[0][0], pairs[0][1]))
         assert len(events) == 1
         assert isinstance(events[0], WireFrame)
         assert events[0].event == "text-delta"
@@ -413,19 +410,17 @@ class TestModelCallsContract:
 
     def test_encode_finish_includes_model_calls_only_when_non_empty(self) -> None:
         calls = [{"step": 1, "model": "m-a"}]
-        lines = encode_run_event(RunCompleted(finish_reason="stop", usage={}, model_calls=calls))
-        data = json.loads(lines[0].split("data: ", 1)[1].strip())
-        assert data["model_calls"] == calls
+        pairs = encode_run_event(RunCompleted(finish_reason="stop", usage={}, model_calls=calls))
+        assert pairs[0][1]["model_calls"] == calls
         # 空明细不占字段：finish 帧保持旧契约形状
         bare = encode_run_event(RunCompleted(finish_reason="stop", usage={}))
-        bare_data = json.loads(bare[0].split("data: ", 1)[1].strip())
-        assert "model_calls" not in bare_data
+        assert "model_calls" not in bare[0][1]
 
     def test_parse_sse_roundtrip_finish_model_calls(self) -> None:
         calls = [{"step": 2, "model": "m-a", "finish_reason": "length"}]
         original = RunCompleted(finish_reason="length_stop", usage={"steps": 2}, model_calls=calls)
-        lines = encode_run_event(original)
-        events = parse_sse_line_to_event(lines[0])
+        pairs = encode_run_event(original)
+        events = parse_sse_line_to_event(format_sse(pairs[0][0], pairs[0][1]))
         assert isinstance(events[0], RunCompleted)
         assert events[0].model_calls == calls
         assert events[0].finish_reason == "length_stop"
