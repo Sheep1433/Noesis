@@ -15,6 +15,7 @@ from sqlalchemy import and_, delete, func, select, update
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.exc import IntegrityError
 
+from noesis.ids import now_ms
 from noesis.runtime.logging import logger
 from noesis.config.code_enum import IntentEnum
 from noesis.storage.postgres.models.scheduled_task import TUserScheduledTask
@@ -41,10 +42,6 @@ _AUTOMATION_MODE_PROMPT = """<automation_mode>
 # 自然语言解析允许的频率映射，用于把中文习惯表达归一成 cron。
 _WEEKDAY_CN = {"一": 1, "二": 2, "三": 3, "四": 4, "五": 5, "六": 6, "日": 7, "天": 7}
 _WEEKDAY_EN = {"mon": 1, "tue": 2, "wed": 3, "thu": 4, "fri": 5, "sat": 6, "sun": 7}
-
-
-def _now_ms() -> int:
-    return int(time.time() * 1000)
 
 
 def _truncate(text: str, limit: int) -> str:
@@ -86,7 +83,7 @@ def validate_cron_expr(expr: str, timezone: str = "Asia/Shanghai") -> None:
 
 def compute_next_run_ms(cron_expr: str, timezone: str, *, after_ms: Optional[int] = None) -> int:
     tz = ZoneInfo(timezone)
-    base = datetime.fromtimestamp((after_ms or _now_ms()) / 1000.0, tz=tz)
+    base = datetime.fromtimestamp((after_ms or now_ms()) / 1000.0, tz=tz)
     nxt = croniter(cron_expr, base).get_next(datetime)
     return int(nxt.timestamp() * 1000)
 
@@ -247,12 +244,26 @@ class ScheduledTaskService:
         row = result.scalar_one_or_none()
         return _to_dict(row) if row else None
 
+    @staticmethod
+    def _llm_error_hint(exc: Exception, model_target: str = "平台默认模型") -> str:
+        """LLM 调用失败的用户面提示：不含 SDK 异常类名，按类型给可操作指向。"""
+        text = str(exc)
+        name = type(exc).__name__
+        if "Authentication" in name or "401" in text or "INVALID_TOKEN" in text:
+            return f"模型认证失败，请检查 {model_target} 的 API 凭据配置"
+        if "RateLimit" in name or "429" in text:
+            return "模型限流，请稍后重试"
+        if "Connection" in name or "Connect" in name:
+            return "模型服务连接失败，请检查网络与网关地址"
+        return "模型不可用，请稍后重试或联系管理员检查模型配置"
+
     @classmethod
-    async def parse_natural_language(cls, text: str) -> Dict[str, Any]:
+    async def parse_natural_language(cls, text: str, *, user_id: str, db: Any) -> Dict[str, Any]:
         """把自然语言（如「每周一早上9点收集网上资料整理AI Agent最新进展」）解析成定时任务草稿。
 
         仅产出 name / cron_expr / prompt，qa_type 固定 SuperAgent、时区固定 Asia/Shanghai、单任务单会话、不投递。
-        后端用 validate_cron_expr 二次校验。LLM 调用失败（限流/配置）时原样暴露错误，不静默兜底。
+        后端用 validate_cron_expr 二次校验。模型解析与任务执行同链路：用户设置的默认模型优先，
+        无则平台默认——解析与执行因此用同一个模型。LLM 调用失败（限流/配置）时原样暴露错误，不静默兜底。
         """
         raw = (text or "").strip()
         if not raw:
@@ -267,14 +278,27 @@ class ScheduledTaskService:
             f"\n用户输入：{raw}"
         )
         from noesis.llm.factory import get_llm
+        from noesis.llm.runtime_snapshot import set_runtime_model_snapshots
+        from noesis.services.user_llm_service import UserLLMService
 
-        llm = get_llm()
+        # 与任务执行同链路：用户设置的默认模型优先，无则平台默认
+        model_id = await UserLLMService.get_default_model(db, user_id=str(user_id))
+        hint_target = "平台默认模型"
+        if model_id:
+            snapshots = await UserLLMService.resolve_runtime_snapshots(
+                db, user_id=str(user_id), model_id=model_id
+            )
+            if not snapshots:
+                raise ValueError("解析失败：你配置的默认模型不可用，请检查设置页的模型配置")
+            set_runtime_model_snapshots(snapshots)
+            hint_target = f"你配置的模型（{model_id}）"
+        llm = get_llm(model_id=model_id)
         try:
             resp = await llm.ainvoke(prompt)
             content = getattr(resp, "text", "") or str(resp)
         except Exception as e:
             logger.exception("scheduled task NL parse LLM call failed")
-            raise ValueError(f"解析失败，模型不可用或被限流：{type(e).__name__}") from e
+            raise ValueError(f"解析失败，{_llm_error_hint(e, hint_target)}") from e
         data = _extract_json_object(content)
         if data is None:
             raise ValueError("解析失败，请直接编辑表单")
@@ -314,7 +338,7 @@ class ScheduledTaskService:
             session_id = await cls._provision_bound_session(db, uid, name, qa_type)
             session_binding = f"session:{session_id}"
         await cls._validate_targets(db, uid, session_binding, delivery)
-        now = _now_ms()
+        now = now_ms()
         row = TUserScheduledTask(
             id=str(uuid.uuid4()),
             user_id=uid,
@@ -380,7 +404,7 @@ class ScheduledTaskService:
             row.delivery = str(payload["delivery"])
         validate_cron_expr(row.cron_expr, row.timezone)
         await cls._validate_targets(db, uid, row.session_binding, row.delivery)
-        now = _now_ms()
+        now = now_ms()
         row.next_run_at = compute_next_run_ms(row.cron_expr, row.timezone, after_ms=now)
         row.updated_at = now
         if commit:
@@ -395,7 +419,7 @@ class ScheduledTaskService:
         uid = str(user_id)
         result = await db.execute(update(TUserScheduledTask).where(
             and_(TUserScheduledTask.id == task_id, TUserScheduledTask.user_id == uid, TUserScheduledTask.deleted_at.is_(None))
-        ).values(enabled=False, deleted_at=_now_ms(), updated_at=_now_ms()))
+        ).values(enabled=False, deleted_at=now_ms(), updated_at=now_ms()))
         await db.commit()
         return (result.rowcount or 0) > 0
 
@@ -426,7 +450,7 @@ class ScheduledTaskService:
         idem = idempotency_key or str(uuid.uuid4())
         # 先建 queued 记录并提交，拿到 run id 立即返回；执行交给后台任务。
         run = await cls._create_run_record(db, row, trigger_source="manual", idempotency_key=idem)
-        now = _now_ms()
+        now = now_ms()
         row.last_status = run.status
         row.last_error = run.error_message
         row.last_run_at = now
@@ -449,7 +473,7 @@ class ScheduledTaskService:
         existing = existing_result.scalar_one_or_none()
         if existing is not None:
             return existing
-        now = _now_ms()
+        now = now_ms()
         run = TUserScheduledTaskRun(id=str(uuid.uuid4()), task_id=row.id, user_id=row.user_id, status="queued", trigger_source=trigger_source, retry_of=retry_of, idempotency_key=idempotency_key, created_at=now)
         db.add(run)
         try:
@@ -565,7 +589,7 @@ class ScheduledTaskService:
     ) -> TUserScheduledTaskRun:
         """执行主体 + 等待交付链收口 + 终态判定（手动触发 / 调度 / 重试共用）。"""
         run.status = "running"
-        run.started_at = _now_ms()
+        run.started_at = now_ms()
         await db.commit()
         await db.refresh(run)
         await db.refresh(row)
@@ -611,8 +635,8 @@ class ScheduledTaskService:
                 run.delivery_result = {"status": "suppressed", "target": row.delivery}
             else:
                 run.delivery_result = await cls._deliver_run_notification(row, run)
-        run.finished_at = _now_ms()
-        now = _now_ms()
+        run.finished_at = now_ms()
+        now = now_ms()
         row.last_status = run.status
         row.last_error = run.error_message
         row.last_run_at = now
@@ -675,7 +699,7 @@ class ScheduledTaskService:
     @staticmethod
     async def cleanup_runs(db: AsyncSession, user_id: str, *, retention_days: int = 30, max_records: int = 1000) -> int:
         uid = str(user_id)
-        cutoff = _now_ms() - retention_days * 24 * 60 * 60 * 1000
+        cutoff = now_ms() - retention_days * 24 * 60 * 60 * 1000
         ids_result = await db.execute(
             select(TUserScheduledTaskRun.id)
             .where(TUserScheduledTaskRun.user_id == uid)
@@ -701,7 +725,7 @@ class ScheduledTaskService:
     ) -> int:
         uid = str(user_id)
         binding = f"session:{session_id}"
-        now = _now_ms()
+        now = now_ms()
         result = await db.execute(
             update(TUserScheduledTask)
             .where(
@@ -740,7 +764,7 @@ class ScheduledTaskService:
         cancelled/interrupted）不动；须在调度器启动前调用（lifespan
         leader-only 对账块）。
         """
-        now = _now_ms()
+        now = now_ms()
         result = await db.execute(
             update(TUserScheduledTaskRun)
             .where(TUserScheduledTaskRun.status.in_(["queued", "running"]))
@@ -770,7 +794,7 @@ class ScheduledTaskService:
     @staticmethod
     async def claim_due_tasks(db: AsyncSession, *, limit: int = 20) -> List[TUserScheduledTask]:
         """抢占到期任务（Postgres FOR UPDATE SKIP LOCKED）。"""
-        now = _now_ms()
+        now = now_ms()
         result = await db.execute(
             select(TUserScheduledTask)
             .where(

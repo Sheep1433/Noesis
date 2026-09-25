@@ -12,6 +12,7 @@ import asyncio
 import time
 from typing import Any, Callable
 
+from noesis.ids import now_ms
 from noesis.runtime.logging import logger
 from noesis.chat.runs.bus import WAKEUP_TOPIC_RUN_COMMAND
 from noesis.errors.exceptions import ConflictException, NotFoundException
@@ -25,10 +26,6 @@ from noesis.storage.postgres.manager import pg_manager
 # 提交后对完成的有界等待（task 5.4）：leader 同进程的常见路径（stop 在
 # cancel grace 内完成）返回 completed；超时返回 accepted，不伪装完成
 _COMMAND_ACK_WAIT_SECONDS = 5.0
-
-
-def _now_ms() -> int:
-    return int(time.time() * 1000)
 
 
 class RunCommandService:
@@ -121,6 +118,10 @@ class RunCommandService:
         row = await AgentRunRepository(db).get(run_id, user_id)
         if row is None:
             raise NotFoundException(message="任务不存在")
+        logger.info(
+            "hitl_resume 命令受理 run_id={} interrupt_id={} decisions={} 条",
+            run_id, interrupt_id, len(decision.get("decisions") or []),
+        )
         return await cls._submit(
             db, user_id=user_id, command_type="hitl_resume",
             dedupe_key=f"run:{run_id}:hitl:{interrupt_id}", run_id=run_id,
@@ -208,14 +209,17 @@ class RunCommandConsumer:
         self,
         *,
         bus: Any,
-        token_provider: Callable[[], Any],
         scan_interval_seconds: float = 5.0,
         retention_days: float = 7.0,
         cleanup_interval_seconds: float = 3600.0,
         claim_lease_seconds: float = 30.0,
+        shard_filter: Callable[[Any], bool] | None = None,
     ) -> None:
         self._bus = bus
-        self._token_provider = token_provider
+        # worker-role-split 命令分片：worker 注入「命令目标在本进程持有」
+        # 判定（run_manager 注册表 / executor 热集）；None = 不过滤
+        #（单进程部署 / control 消费全局命令）
+        self._shard_filter = shard_filter
         self._scan_interval = scan_interval_seconds
         self._claim_lease_ms = int(max(5.0, claim_lease_seconds) * 1000)
         self._retention_days = retention_days
@@ -248,9 +252,6 @@ class RunCommandConsumer:
                 logger.exception("run command cleanup error")
 
     async def _cleanup_once(self) -> int:
-        token = self._token_provider()
-        if token is None or not getattr(token, "valid", False):
-            return 0
         async with pg_manager.get_async_session_context() as db:
             deleted = await AgentRunCommandRepository(db).cleanup_expired(
                 retention_days=self._retention_days
@@ -300,14 +301,13 @@ class RunCommandConsumer:
                 await asyncio.sleep(self._scan_interval)
 
     async def _consume_once(self) -> int:
-        token = self._token_provider()
-        if token is None or not getattr(token, "valid", False):
-            return 0
         async with pg_manager.get_async_session_context() as db:
             await AgentRunCommandRepository(db).reset_stale_claimed(
                 lease_ms=self._claim_lease_ms,
             )
-            rows = await AgentRunCommandRepository(db).claim_pending()
+            rows = await AgentRunCommandRepository(db).claim_pending(
+                shard_filter=self._shard_filter,
+            )
         for row in rows:
             await self._execute(row)
         return len(rows)

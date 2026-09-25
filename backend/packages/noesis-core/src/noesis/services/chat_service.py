@@ -17,6 +17,7 @@ from typing import Optional, List, Dict, Any
 from sqlalchemy import select, and_, update, func, exists
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from noesis.ids import now_ms
 from noesis.storage.postgres.models.chat import TChatSession, TChatMessage, TAgentRun
 from noesis.errors.exceptions import ServiceException
 from noesis.runtime.logging import logger
@@ -64,11 +65,6 @@ def wait_for_load() -> None:
         return
     with _load_lock:
         pass  # 等待锁释放时加载应该已经完成
-
-
-def _now_ms() -> int:
-    """返回当前时间戳（毫秒）"""
-    return int(time.time() * 1000)
 
 
 # ============================================================================
@@ -207,7 +203,7 @@ class ChatService:
                     merged = dict(cur_extra)
                     merged["qa_type"] = extra["qa_type"]
                     existing.extra = merged
-                    existing.updated_at = _now_ms()
+                    existing.updated_at = now_ms()
                     await db.commit()
                     await db.refresh(existing)
             if title:
@@ -222,7 +218,7 @@ class ChatService:
             return existing
 
         # 创建新会话
-        now = _now_ms()
+        now = now_ms()
         session = TChatSession(
             id=session_id,
             parent_id=parent_id,
@@ -261,7 +257,7 @@ class ChatService:
         `create_session`（独立提交）与子 Agent launch（child 会话与消息/run
         同事务）共用；标题规范化在此单点。
         """
-        now = created_at if created_at is not None else _now_ms()
+        now = created_at if created_at is not None else now_ms()
         fields: Dict[str, Any] = {
             "id": session_id or str(uuid.uuid4()),
             "parent_id": parent_id,
@@ -353,7 +349,7 @@ class ChatService:
         wait_for_load()
 
         message_id = message_id or str(uuid.uuid4())
-        now = _now_ms()
+        now = now_ms()
         _, sequences = await cls.reserve_message_sequences(session_id, str(user_id), 1, db)
 
         # 处理 content 格式：统一为 multipart JSON 格式
@@ -449,7 +445,7 @@ class ChatService:
         按主键更新 assistant 消息的 content / status / extra（用于流式骨架 + 增量落库）。
         """
         wait_for_load()
-        now = _now_ms()
+        now = now_ms()
 
         result = await db.execute(
             select(TChatMessage).where(
@@ -651,7 +647,7 @@ class ChatService:
             logger.warning('取消子 Agent 失败 session_id={} err={}', session_id, exc)
 
         # 软删：更新 deleted_at（cascade 软删消息）
-        now = _now_ms()
+        now = now_ms()
         all_session_ids = [session_id, *descendant_ids]
         await db.execute(
             update(TChatSession)
@@ -793,7 +789,7 @@ class ChatService:
         except Exception as exc:  # noqa: BLE001
             logger.warning('批量取消子 Agent 失败 user_id={} err={}', uid, exc)
 
-        now = _now_ms()
+        now = now_ms()
         await db.execute(
             update(TChatSession)
             .where(TChatSession.id.in_(all_ids))
@@ -876,7 +872,7 @@ class ChatService:
         if not session_obj:
             raise ServiceException(message='会话不存在')
 
-        now = _now_ms()
+        now = now_ms()
         await db.execute(
             update(TChatSession)
             .where(TChatSession.id == session_id)
@@ -925,7 +921,7 @@ class ChatService:
         if archived is not None:
             values['archived'] = bool(archived)
         if values:
-            values['updated_at'] = _now_ms()
+            values['updated_at'] = now_ms()
             await db.execute(
                 update(TChatSession)
                 .where(TChatSession.id == session_id)
@@ -971,7 +967,7 @@ class ChatService:
             else:
                 extra[key] = value
 
-        now = _now_ms()
+        now = now_ms()
         await db.execute(
             update(TChatSession)
             .where(TChatSession.id == session_id)
@@ -991,7 +987,7 @@ class ChatService:
         updated_at 显式保留原值，压掉列级 onupdate——读会话不算内容更新，
         否则会话列表按 updated_at 排序时，仅被查看的会话会被顶到最前。
         """
-        now = _now_ms()
+        now = now_ms()
         await db.execute(
             update(TChatSession)
             .where(and_(

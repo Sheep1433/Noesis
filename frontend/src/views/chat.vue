@@ -334,7 +334,7 @@ async function restoreActiveSessionFromRoute(sessionId: string) {
 
 function resetComposingSurface() {
   sseStream.detachSubscription()
-  stopCatalogStream()
+  stopTaskStream()
   stopProcessingClock()
   // 丢弃未 flush 的流式 delta：整个消息面即将清空，残留缓冲不得流入下一会话
   streamDeltaBatcher.clear()
@@ -1249,15 +1249,13 @@ function openBackgroundNotice(childSessionIds: string[] = []): void {
   taskPanelOpen.value = true
 }
 
-function stopCatalogStream(): void {
+function stopTaskStream(): void {
   taskStreamSource?.close()
   taskStreamSource = null
   sessionTasks.value = []
 }
 
-// 用户级信令流：会话列表 run_status 实时刷新（一条连接覆盖全部会话；
-// 信令是 hint——行不在列表时全量刷新，断线重连后同样对齐）
-/** 操作后主动拉一次全量（审批/取消/发消息后对齐，事件流兜底） */
+/** 操作后主动拉一次任务清单全量（审批/取消/发消息后对齐，清单流兜底） */
 async function refreshSessionTasks(sessionId: string): Promise<void> {
   if (!sessionId || sessionId !== currentIndex.value) {
     return
@@ -2705,7 +2703,7 @@ const activateChatMode = (
     // 另一条回到新对话的路径，统计条同样不得残留）
     sessionStats.value = null
     // 回到新对话：旧会话的后台任务流与目录一并停掉
-    stopCatalogStream()
+    stopTaskStream()
     selectedKbCollections.value = []
     kbSearchEnabled.value = true
     selectedModelId.value = ''
@@ -2900,7 +2898,7 @@ onMounted(() => {
 
 // 在组件卸载前移除事件监听
 onBeforeUnmount(() => {
-  stopCatalogStream()
+  stopTaskStream()
   stopProcessingClock()
   streamDeltaBatcher.dispose()
   // 停止信令流：SPA 内路由切换不会断开 fetch 连接，必须显式中止

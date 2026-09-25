@@ -44,7 +44,9 @@ def migrate_legacy_root_files(user_id: str | int) -> None:
     for name in _ROOT_FILES:
         legacy = root / name
         target = memory_root / name
-        if legacy.is_file() and not target.exists():
+        # 目标空文件（size==0）视为缺席：老布局内容才不会滞留丢失
+        target_absent = not target.exists() or target.stat().st_size == 0
+        if legacy.is_file() and target_absent:
             legacy.replace(target)
             logger.info(
                 "记忆根文件已迁入 memory/ 子树 user_id={} file={}", user_id, name

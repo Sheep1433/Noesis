@@ -896,8 +896,9 @@ async def stream_run(
         try:
             if after_sequence > 0 and subscription.replay:
                 for envelope in subscription.replay:
-                    for line in encode_sequenced_event(envelope):
-                        yield line
+                    # encode-once：envelope.encoded 为发布点产物，直接转发
+                    for frame in envelope.encoded or ():
+                        yield frame
             else:
                 yield format_sse(
                     "run-snapshot",
@@ -917,8 +918,8 @@ async def stream_run(
                     continue
                 if isinstance(item, SlowSubscriber):
                     return
-                for line in encode_sequenced_event(item):
-                    yield line
+                for frame in item.encoded or encode_sequenced_event(item):
+                    yield frame
                 run_manager.record_event_delivered(item)
                 if isinstance(
                     item.event,
@@ -981,7 +982,13 @@ async def resume_hitl_run(
     command = await RunCommandService.submit_and_wait(
         RunCommandService.submit_hitl_resume(
             run_id, str(current_user.user_id), request.interrupt_id,
-            {"interrupt_id": request.interrupt_id, "decisions": request.decisions},
+            # HTTP 边界一次性落 JSON-safe：decisions 此刻是 pydantic 模型
+            # 实例，直传会在 decision_digest / 命令 payload 落库处炸序列化
+            #（2026-09-23 prod 实测：HITL 提交 500）
+            {
+                "interrupt_id": request.interrupt_id,
+                "decisions": [d.model_dump(mode="json") for d in request.decisions],
+            },
             db,
         ),
         db=db,

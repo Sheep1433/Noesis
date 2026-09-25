@@ -41,7 +41,7 @@ wait_for_backend() {
   for _ in $(seq 1 90); do
     if ! kill -0 "$BACKEND_PID" 2>/dev/null; then
       log_error "后端进程已退出 (PID: ${BACKEND_PID})"
-      exit 1
+      return 1
     fi
     if curl -fsS "$url" &>/dev/null; then
       log_info "后端已就绪"
@@ -50,7 +50,7 @@ wait_for_backend() {
     sleep 1
   done
   log_error "后端超时未就绪: ${url}"
-  exit 1
+  return 1
 }
 
 main() {
@@ -73,18 +73,50 @@ main() {
   read -r HOST PORT < <(
     cd "$BACKEND_DIR" && uv run python -c "from noesis.config.env import AppConfig; print(AppConfig.app_host, AppConfig.app_port)"
   )
+  # 端口预检：最常见失败原因是「已运行的后端实例占着端口 + 持有 advisory lock」
+  if lsof -nP -iTCP:"$PORT" -sTCP:LISTEN 2>/dev/null | grep -q LISTEN; then
+    die "端口 ${PORT} 已被占用（大概率是仍在运行的旧后端实例）。先停掉它（kill 占用进程）再启动。"
+  fi
 
-  log_info "启动后端 (uvicorn, reload=off) ${HOST}:${PORT} ..."
-  cd "$BACKEND_DIR"
-  uv run uvicorn app:app --host "$HOST" --port "$PORT" &
-  BACKEND_PID=$!
-  log_info "Backend started (PID: $BACKEND_PID)"
-  wait_for_backend "启动后"
+  # 双模式（同 dev.sh）：redis → 三角色（web/control/worker，可水平扩展）；
+  # memory → 单进程全干（本地裸机验收，零额外依赖）
+  BUS_MODE=$(grep -E '^NOESIS_RUN_BUS_BACKEND=' "$BACKEND_DIR/.env.prod" 2>/dev/null | cut -d= -f2)
+  # 后端输出重定向到日志文件：启动失败（如端口占用）时错误可见、可查
+  BACKEND_LOG_DIR="$ROOT/.noesis/logs"
+  mkdir -p "$BACKEND_LOG_DIR"
+  BACKEND_LOG="$BACKEND_LOG_DIR/prod-backend-$(date +%Y%m%d-%H%M%S).log"
+  BACKEND_PIDS=()
+  if [[ "$BUS_MODE" == "redis" ]]; then
+    log_info "启动后端三角色 (web :${PORT} / control :8091 / worker :8092, bus=redis) ..."
+    cd "$BACKEND_DIR"
+    uv run uvicorn web:app --host "$HOST" --port "$PORT" > "$BACKEND_LOG" 2>&1 &
+    BACKEND_PIDS+=($!)
+    uv run uvicorn control:app --host "$HOST" --port 8091 >> "$BACKEND_LOG" 2>&1 &
+    BACKEND_PIDS+=($!)
+    uv run uvicorn worker:app --host "$HOST" --port 8092 >> "$BACKEND_LOG" 2>&1 &
+    BACKEND_PIDS+=($!)
+  else
+    log_info "启动后端单进程 (app:app :${PORT}, bus=memory) ..."
+    cd "$BACKEND_DIR"
+    uv run uvicorn app:app --host "$HOST" --port "$PORT" > "$BACKEND_LOG" 2>&1 &
+    BACKEND_PIDS+=($!)
+  fi
+  BACKEND_PID="${BACKEND_PIDS[0]}"  # 兼容既有健康检查（web 为关键面）
+  log_info "Backend started (PIDs: ${BACKEND_PIDS[*]}) | 日志: $BACKEND_LOG"
+  if ! wait_for_backend "启动后"; then
+    log_error "后端启动失败，最近日志："
+    tail -15 "$BACKEND_LOG" >&2
+    exit 1
+  fi
 
   cd "$FRONTEND_DIR"
   log_info "构建前端 (pnpm build) ..."
   pnpm build
-  wait_for_backend "构建后"
+  if ! wait_for_backend "构建后"; then
+    log_error "后端在构建期间退出，最近日志："
+    tail -15 "$BACKEND_LOG" >&2
+    exit 1
+  fi
 
   log_info "启动前端预览 ${FRONTEND_PORT} (pnpm preview, /api → 127.0.0.1:${PORT}) ..."
   export FRONTEND_PREVIEW_PORT="$FRONTEND_PORT"
@@ -111,7 +143,7 @@ main() {
   log_info "推荐生产部署: ./scripts/run.sh docker（nginx + 静态资源）"
   log_info "按 Ctrl+C 停止应用进程"
 
-  wait "$BACKEND_PID" "$FRONTEND_PID"
+  wait "${BACKEND_PIDS[@]}" "$FRONTEND_PID"
   if [[ -n "$MCP_PID" ]]; then
     wait "$MCP_PID" 2>/dev/null || true
   fi

@@ -28,14 +28,18 @@ def mark_running_tools_unknown(content: dict[str, Any] | None) -> dict[str, Any]
 class RunRecoveryService:
     @classmethod
     async def recover_orphaned_runs(
-        cls, db: AsyncSession, *, current_leader_term: int | None = None
+        cls, db: AsyncSession, *, heartbeat_lease_ms: int
     ) -> int:
-        """收口上一任期遗留的非终态 Run。
+        """收口僵尸 Run（design §2.2：僵尸判定 = heartbeat 超时，启动/周期对账统一）。
 
-        - ``queued + owner IS NULL``：未被 claim 的排队 Run 存活，由本任
-          期 dispatcher 补扫启动（enable-distributed-sse-pubsub 决策 2）；
-        - 已 claim/运行中的 Run（owner_term <= current 或无从判断）收口为
-          ``interrupted/server_restart``，工具结果标 unknown，不重放。
+        - ``queued + owner IS NULL``：未被 claim 的排队 Run 存活，由
+          dispatcher 补扫启动（enable-distributed-sse-pubsub 决策 2）；
+        - **heartbeat 活着的已 claim Run 不碰**——持有它的 worker 仍在执行
+          （心跳间隔 = lease/3）。这是周期对账的安全前提：control 每 30s
+          扫一轮，活跃 run 必须被跳过；
+        - heartbeat 超时（或为 NULL 的 fencing 前遗留行）= 僵尸：未碰世界
+          重置 queued 待再认领，已碰世界收口 ``interrupted/server_restart``，
+          工具结果标 unknown，不重放。
         """
         repository = AgentRunRepository(db)
         recovered = 0
@@ -47,18 +51,54 @@ class RunRecoveryService:
                 continue
             if run.status == RunStatus.QUEUED.value and not run.owner_instance_id:
                 continue  # 未 claim 的 queued Run 跨重启存活，交给 dispatcher
-            if (
-                current_leader_term is not None
-                and run.owner_term >= current_leader_term
-            ):
-                # 本任期 claim 的 Run：新 leader 上任时不可能出现（本方法只在
-                # 启动早期执行），防御性跳过避免误杀刚 claim 的行
-                continue
+            heartbeat_at = getattr(run, "heartbeat_at", None)
+            now = int(time.time() * 1000)
+            if heartbeat_at is not None and heartbeat_at >= now - heartbeat_lease_ms:
+                continue  # 持有者心跳存活：正常执行中的 run，不是孤儿
             # 字段先固化：后续 UPDATE 落空会使 ORM 属性过期
             run_id = run.id
             run_last_sequence = run.last_sequence
             run_snapshot = run.snapshot if isinstance(run.snapshot, dict) else {}
-            now = int(time.time() * 1000)
+
+            # 阶段化重置（worker-role-split）：未碰世界的 run 优先重排队而非
+            # 收口。判据安全性——last_sequence=0 即连 message-start 都未发布，
+            # 而任何工具执行前必先发布 tool-input 事件，故该状态下工具不可
+            # 能执行过（模型调用幂等可重跑）；claim_epoch 保留递增不归零，
+            # 超长假死僵尸的旧 epoch 永不等于重置后再认领的新值。
+            # snapshot 判据看 parts 内容而非容器：create_run 落库即写
+            # ``{"parts": []}`` 骨架，骨架不算碰世界（2026-09-23 实测：
+            # 容器 truthy 判定让未启动 run 被误收口 interrupted）。
+            if (
+                run_last_sequence == 0
+                and not run_snapshot.get("parts")
+                and isinstance(run.launch_payload, dict)
+                and run.launch_payload
+            ):
+                reset = await db.execute(
+                    update(TAgentRun)
+                    .where(
+                        TAgentRun.id == run_id,
+                        TAgentRun.status == run.status,
+                        TAgentRun.owner_instance_id == run.owner_instance_id,
+                    )
+                    .values(
+                        status=RunStatus.QUEUED.value,
+                        owner_instance_id=None,
+                        owner_term=0,
+                        heartbeat_at=None,
+                        started_at=None,
+                        updated_at=now,
+                    )
+                )
+                if reset.rowcount == 1:
+                    recovered += 1
+                    logger.warning(
+                        "启动恢复：run {} 未产出任何事件（{}），重置 queued 等待再认领",
+                        run_id,
+                        run.status,
+                    )
+                continue
+
             terminal = dict(
                 target=RunStatus.INTERRUPTED,
                 finished_at=now,

@@ -9,18 +9,15 @@ from __future__ import annotations
 
 import hashlib
 import json
-import time
 import uuid
+from collections.abc import Callable
 
 from sqlalchemy import delete, select, update
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from noesis.ids import now_ms
 from noesis.storage.postgres.models.agent_run_command import TAgentRunCommand
-
-
-def _now_ms() -> int:
-    return int(time.time() * 1000)
 
 
 def decision_digest(decision: dict) -> str:
@@ -81,7 +78,7 @@ class AgentRunCommandRepository:
             decision_digest=decision_digest_value,
             payload=payload,
             status="pending",
-            created_at=_now_ms(),
+            created_at=now_ms(),
         )
         self.db.add(row)
         if flush:
@@ -119,8 +116,20 @@ class AgentRunCommandRepository:
         )
         return result.scalar_one_or_none()
 
-    async def claim_pending(self, *, limit: int = 20) -> list[TAgentRunCommand]:
-        """认领 pending 命令（FOR UPDATE SKIP LOCKED：多 consumer 安全）。"""
+    async def claim_pending(
+        self,
+        *,
+        limit: int = 20,
+        shard_filter: Callable[[TAgentRunCommand], bool] | None = None,
+    ) -> list[TAgentRunCommand]:
+        """认领 pending 命令（FOR UPDATE SKIP LOCKED：多 consumer 安全）。
+
+        ``shard_filter``（worker-role-split 命令分片）：worker 部署时注入
+        「命令目标 run/任务是否在本进程持有」判定——圈行后 Python 侧过滤，
+        只对通过的行认领；未通过的行锁随本事务提交释放，留给目标 owner
+        worker 的下一轮扫描（或换主对账）。None = 不过滤（单进程/control
+        全局命令消费）。
+        """
         result = await self.db.execute(
             select(TAgentRunCommand)
             .where(TAgentRunCommand.status == "pending")
@@ -129,8 +138,10 @@ class AgentRunCommandRepository:
             .with_for_update(skip_locked=True)
         )
         rows = list(result.scalars().all())
+        if shard_filter is not None:
+            rows = [row for row in rows if shard_filter(row)]
         if rows:
-            now = _now_ms()
+            now = now_ms()
             await self.db.execute(
                 update(TAgentRunCommand)
                 .where(TAgentRunCommand.id.in_([r.id for r in rows]))
@@ -144,7 +155,7 @@ class AgentRunCommandRepository:
 
     async def reset_stale_claimed(self, *, lease_ms: int) -> int:
         """认领租约：超时未终态的 claimed 命令重置回 pending（leader 崩溃回收）。"""
-        cutoff = _now_ms() - lease_ms
+        cutoff = now_ms() - lease_ms
         result = await self.db.execute(
             update(TAgentRunCommand)
             .where(
@@ -172,13 +183,13 @@ class AgentRunCommandRepository:
         await self.db.execute(
             update(TAgentRunCommand)
             .where(TAgentRunCommand.id == command_id)
-            .values(status=status, result_summary=summary, completed_at=_now_ms())
+            .values(status=status, result_summary=summary, completed_at=now_ms())
         )
         await self.db.commit()
 
     async def cleanup_expired(self, *, retention_days: float) -> int:
         """删除超保留期的终态命令（保留期 = 幂等去重窗口）。"""
-        cutoff = _now_ms() - int(retention_days * 24 * 60 * 60 * 1000)
+        cutoff = now_ms() - int(retention_days * 24 * 60 * 60 * 1000)
         result = await self.db.execute(
             delete(TAgentRunCommand).where(
                 TAgentRunCommand.status.in_(["completed", "rejected", "no_op"]),

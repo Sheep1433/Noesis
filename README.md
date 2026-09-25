@@ -164,7 +164,7 @@ START_LANGFUSE=1 ./scripts/run.sh dev   # 同时启动 Langfuse 观测栈
 
 ```bash
 cd frontend && pnpm i && pnpm dev    # http://localhost:2048
-cd backend && uv run app.py          # 验证后端能否拉起
+cd backend && uv run web.py          # 验证后端能否拉起（完整栈需另起 control/worker）
 ```
 
 ## 仓库结构
@@ -198,7 +198,7 @@ Noesis/
 ## 开发
 
 ```bash
-cd backend && uv run app.py              # 后端改动后验证能否拉起
+cd backend && uv run web.py              # 后端改动后验证能否拉起（完整栈需另起 control/worker）
 cd backend && uv run pytest tests/ -q    # 后端测试
 cd frontend && pnpm lint                 # 前端 lint
 ```

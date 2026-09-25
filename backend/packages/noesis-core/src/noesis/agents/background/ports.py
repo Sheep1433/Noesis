@@ -93,11 +93,11 @@ class SubagentSessionPort:
 
     @staticmethod
     async def mark_started(run_id: str, started_at: Optional[int] = None) -> None:
-        return await _service().mark_started(run_id, started_at)
+        return await _service().mark_started(run_id=run_id, started_at=started_at)
 
     @staticmethod
     async def mark_launch_rejected(run_id: str, error: str) -> None:
-        return await _service().mark_launch_rejected(run_id, error)
+        return await _service().mark_launch_rejected(run_id=run_id, error=error)
 
     @staticmethod
     async def create_turn_run(
@@ -218,7 +218,9 @@ class SubagentSessionPort:
 
     @staticmethod
     async def collect_partial_output(session_id: str, user_id: str) -> str:
-        return await _service().collect_partial_output(session_id, user_id)
+        return await _service().collect_partial_output(
+            session_id=session_id, user_id=user_id
+        )
 
     # child_session_summary 为模块级纯函数（上方），不经服务委托
 
@@ -251,7 +253,9 @@ class SessionOpsPort:
         patch: dict,
         db: Optional[AsyncSession] = None,
     ) -> None:
-        return await _session_ops().merge_session_extra(session_id, user_id, patch, db=db)
+        return await _session_ops().merge_session_extra(
+            session_id=session_id, user_id=user_id, patch=patch, db=db
+        )
 
     @staticmethod
     async def delete_session(
@@ -259,7 +263,9 @@ class SessionOpsPort:
         user_id: str,
         db: Optional[AsyncSession] = None,
     ) -> bool:
-        return await _session_ops().delete_session(session_id, user_id, db=db)
+        return await _session_ops().delete_session(
+            session_id=session_id, user_id=user_id, db=db
+        )
 
 
 # --------------------------------------------------------------------------
@@ -283,7 +289,11 @@ def _continuation() -> Any:
 
 
 class ContinuationPort:
-    """任务终态后唤醒主 Agent（60s 去抖 + 连续唤醒上限由实现负责）。"""
+    """任务终态后唤醒主 Agent（60s 去抖 + 连续唤醒上限由实现负责）。
+
+    注册的实现是模块级函数（bg_continuation_service.schedule_maybe_continue），
+    直接调用——不是带方法的对象。
+    """
 
     @staticmethod
     async def schedule_maybe_continue(session_id: str, user_id: str) -> None:
@@ -320,7 +330,11 @@ class ExecutorPort:
         reasoning_effort: Optional[str] = None,
     ) -> dict:
         return await _executor().deliver_message(
-            task_id, message, user_message_id, model_id, reasoning_effort
+            task_id=task_id,
+            message=message,
+            user_message_id=user_message_id,
+            model_id=model_id,
+            reasoning_effort=reasoning_effort,
         )
 
     @staticmethod
@@ -399,6 +413,10 @@ class ShellJobPort:
     @staticmethod
     async def mark_started(task_id: str) -> None:
         return await _shell_jobs().mark_started(task_id)
+
+    @staticmethod
+    async def update_output_tail(task_id: str, tail: str) -> None:
+        return await _shell_jobs().update_output_tail(task_id=task_id, tail=tail)
 
     @staticmethod
     async def mark_terminal(

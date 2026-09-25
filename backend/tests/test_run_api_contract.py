@@ -191,7 +191,8 @@ async def test_run_stream_consumes_stream_done_without_crashing(monkeypatch) -> 
     chunks = [chunk async for chunk in response.body_iterator]
 
     assert any("run-snapshot" in chunk for chunk in chunks)
-    assert any("[DONE]" in chunk for chunk in chunks)
+    # encode-once：事件帧为发布点 bytes 产物（手工构造 envelope 走编码兜底，同为 bytes）
+    assert any(b"[DONE]" in chunk for chunk in chunks if isinstance(chunk, bytes))
     # 订阅释放走 subscription.close()（API 不再直调 run_manager.unsubscribe）
     close.assert_awaited_once()
 
@@ -522,9 +523,14 @@ def test_sequenced_sse_contains_run_identity() -> None:
         attempt_id=2,
         event=WireFrame(event="text-delta", data={"type": "text-delta", "delta": "hi"}),
     )
-    line = encode_sequenced_event(envelope)[0]
+    frame = encode_sequenced_event(envelope)[0]
+    assert isinstance(frame, bytes)
     payload = json.loads(
-        next(part[5:].strip() for part in line.splitlines() if part.startswith("data:"))
+        next(
+            part[5:].strip()
+            for part in frame.decode("utf-8").splitlines()
+            if part.startswith("data:")
+        )
     )
     assert payload["run_id"] == "run-1"
     assert payload["sequence"] == 9
@@ -1259,3 +1265,59 @@ async def test_write_endpoints_gate_on_csrf() -> None:
     with patch.object(SessionService, "get_valid", AsyncMock(return_value=session)):
         with pytest.raises(PermissionException):
             await require_csrf(request, AsyncMock())
+
+
+@pytest.mark.asyncio
+async def test_resume_hitl_submit_decision_is_json_safe(monkeypatch):
+    """回归（2026-09-23 prod 实测）：HitlResumeRequest.decisions 是 pydantic
+    模型实例列表，直传命令层会在 decision_digest 的 json.dumps 处 500——
+    HTTP 边界必须先落 JSON-safe 表示。"""
+    import json
+    from types import SimpleNamespace
+    from unittest.mock import AsyncMock
+
+    from server.api import chat_api
+
+    snapshot = RunSnapshot(
+        run_id="run-hitl",
+        user_id="1",
+        session_id="session-1",
+        assistant_message_id="assistant-1",
+        qa_type="SUPER_AGENT_QA",
+        origin="web",
+        status=RunStatus.RUNNING,
+    )
+    monkeypatch.setattr(chat_api.RunService, "get", AsyncMock(return_value=snapshot))
+
+    captured = {}
+
+    async def fake_submit_and_wait(submission, db):
+        captured.update(db=db)
+        return {"command_id": "cmd-1", "command_status": "completed"}
+
+    submit_hitl_resume = MagicMock(
+        return_value=SimpleNamespace(command_id="cmd-1")
+    )
+    # 端点内函数级 import → patch 源模块的类属性
+    from noesis.services import run_command_service as rcsm
+    monkeypatch.setattr(rcsm.RunCommandService, "submit_and_wait", staticmethod(fake_submit_and_wait))
+    monkeypatch.setattr(rcsm.RunCommandService, "submit_hitl_resume", staticmethod(submit_hitl_resume))
+    monkeypatch.setattr(chat_api.RunService, "get", AsyncMock(return_value=snapshot))
+
+    request = HitlResumeRequest(
+        interrupt_id="interrupt-1",
+        decisions=[{"type": "approve"}, {"type": "respond", "message": "用 PostgreSQL"}],
+        grant_scope="once",
+    )
+    current_user = SimpleNamespace(user_id=1)
+    db = MagicMock()
+
+    await chat_api.resume_hitl_run(
+        "run-hitl", request, SimpleNamespace(), current_user, db
+    )
+
+    decision = submit_hitl_resume.call_args.args[3]  # 同步调用（返回提交对象）
+    # 回归断言：decision 可 JSON 序列化（pydantic 实例已在边界落 dict）
+    assert json.dumps(decision, ensure_ascii=False)  # 不抛 TypeError
+    assert decision["decisions"][0] == {"type": "approve", "message": None}
+    assert decision["decisions"][1]["message"] == "用 PostgreSQL"

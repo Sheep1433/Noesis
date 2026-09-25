@@ -38,7 +38,7 @@ def _message_payload(created_at: int = 1) -> dict[str, Any]:
 @pytest.fixture()
 def consumer() -> RunCommandConsumer:
     return RunCommandConsumer(
-        bus=None, token_provider=lambda: None,
+        bus=None,
         scan_interval_seconds=5.0, retention_days=7.0,
     )
 

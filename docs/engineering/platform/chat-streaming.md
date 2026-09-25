@@ -72,7 +72,7 @@ run 内容流之外有两条**轻量信令流**，只推定位符（`run-started
 
 > **已退役**（2026-09-21 下线，原「两条轻量信令流」）：`session-signal`（`/sessions/{id}/events`，跨窗口发现活跃 run）与 `user-signal`（`/events/stream`，会话列表实时刷新）。下线动机：浏览器 HTTP/1.1 同域 6 连接上限下，多标签页的信令流叠加 run 内容流直接挤占普通 API 请求配额（页面卡死的根因）；其职责由既有拉取路径承接——会话列表在进入/切换时全量刷新，活跃 run 经 `active-run` 端点发现。
 
-信令由 `RunManager` 在状态迁移点发布（`start()`/`resume()` 直接置 RUNNING 处，及 `transition()` 到 HITL_PENDING / 终态处；`chat/runs/{session_signals,user_signals}.py` 进程内总线，有界队列慢订阅丢帧）。**信令是 hint**：丢失或断线靠 `active-run` 自愈，不参与权威状态；流不主动结束，随页面关闭断开，15s 注释 keepalive。
+任务清单事件由 `SessionTaskService` 清单端点提供快照，增量经 `SignalBridge`（bg-tasks scope）跨进程转发（有界队列慢订阅丢帧）。**事件是 hint**：丢失或断线靠快照端点重拉，不参与权威状态；流不主动结束，随页面关闭断开，15s 注释 keepalive。
 
 客户端收到 `run-snapshot` 后按 `assistant_message_id` replace parts，并采用以下 sequence 规则：
 

@@ -404,6 +404,8 @@ export interface SessionTaskEntry {
   status: 'queued' | 'running' | 'awaiting_approval' | 'completed' | 'failed' | 'cancelled' | 'timed_out' | 'partial' | 'error' | 'interrupted'
   result?: string | null
   error?: string | null
+  /** shell 任务运行中输出尾部快照（流式 flush，≤4KB） */
+  output_tail?: string | null
   /** 停止/超时原因（cancelled / timed_out）；乐观终态（cancelled/timed_out）时非空 */
   stop_reason?: 'cancelled' | 'timed_out' | null
   interrupt?: {

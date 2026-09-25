@@ -9,7 +9,7 @@ from typing import Any, Iterable, Optional
 
 
 _TOKEN_EVENTS = frozenset({"text-delta", "reasoning-delta"})
-_TOOL_EVENTS = frozenset({"tool-input-start", "tool-call-start", "tool-output-available"})
+_TOOL_EVENTS = frozenset({"tool-input-start", "tool-input-start", "tool-output-available"})
 
 
 @dataclass

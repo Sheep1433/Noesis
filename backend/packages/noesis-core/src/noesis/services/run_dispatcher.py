@@ -1,51 +1,49 @@
-"""Run dispatcher：leader 消费 run-created 唤醒并 claim/启动 queued Run。
+"""Run dispatcher：worker 消费 run-created 唤醒并 claim/启动 queued Run。
 
 enable-distributed-sse-pubsub 决策 2：任意 worker 的 create 只写
-``queued + owner IS NULL + launch_payload``；本组件只在 leader 进程
-运行——bus wake-up 即时检查 + 周期补扫（唤醒丢失兜底）。
+``queued + owner IS NULL + launch_payload``；worker-role-split 后本组件
+在**每个 worker 进程**运行——bus wake-up 即时检查 + 周期补扫（唤醒丢失
+兜底）。多 worker 并发认领由 CAS 裁决（输家跳过），圈行经
+``FOR UPDATE SKIP LOCKED`` 减少同批竞争空转（正确性不依赖它）。
 
 claim 条件：queued 且未被认领；容量满则跳过等下轮（保持 queued，
 不收口 error）。claim 成功但启动失败必须收口（RUN_START_FAILED），
-不留无 producer 的 running 行。
+不留无 producer 的 running 行。持有期间的心跳与失去持有的自停由
+RunService 的心跳协程负责（claim_epoch fencing）。
 """
 
 from __future__ import annotations
 
 import asyncio
-import time
-from typing import Callable
 
-from noesis.chat.runs import RunCapacityExceeded
+from noesis.ids import now_ms
 from noesis.chat.runs.bus import (
     RunBus,
-    WAKEUP_TOPIC_RUN_CREATED,
 )
 from noesis.chat.runs.launch_payload import LaunchPayload
 from noesis.runtime.logging import logger
 from noesis.repositories.agent_run_repository import AgentRunRepository
-from noesis.services.leader_elector import LeadershipToken
 from noesis.services.run_service import RunService, run_manager
 from noesis.services.user_service import UserService
 from noesis.storage.postgres.manager import pg_manager
-from noesis.storage.postgres.models.chat import TAgentRun
-
-
-def _now_ms() -> int:
-    return int(time.time() * 1000)
 
 
 class RunDispatcher:
-    """单消费者协程：串行 claim，避免同一批 queued Run 的并发容量误判。"""
+    """worker 认领协程：圈行（SKIP LOCKED）+ 逐行 CAS 认领并启动。
+
+    进程内串行（每 worker 一个），容量判定基于本进程 run_manager——
+    多 worker 部署下容量天然 per-process。
+    """
 
     def __init__(
         self,
         *,
         bus: RunBus,
-        token_provider: Callable[[], LeadershipToken | None],
+        instance_id: str,
         scan_interval_seconds: float,
     ) -> None:
         self._bus = bus
-        self._token_provider = token_provider
+        self._instance_id = instance_id
         self._scan_interval = scan_interval_seconds
         self._task: asyncio.Task | None = None
         self._stopping = False
@@ -107,58 +105,34 @@ class RunDispatcher:
             return
 
     async def _scan_once(self) -> None:
-        token = self._token_provider()
-        if token is None or not token.valid:
-            return
         try:
             async with pg_manager.get_async_session_context() as db:
                 repository = AgentRunRepository(db)
-                queued = await repository.list_claimable_queued(limit=20)
-                for row in queued:
-                    if self._stopping:
-                        return
-                    await self._claim_and_start(repository, row, token, db)
+                # 容量检查经回调注入，在圈行事务的行锁内逐行判定：
+                # 本进程满（全局或该用户）的行不认领、保持 queued，
+                # 锁释放后其他 worker / 下轮补扫仍可认领
+                claimed = await repository.claim_next_batch(
+                    owner_instance_id=self._instance_id,
+                    limit=20,
+                    now_ms=now_ms(),
+                    capacity_check=run_manager.check_run_capacity,
+                )
+                await db.commit()
+            # 圈行事务已提交（SKIP LOCKED + 同事务 CAS）；启动在事务外逐行进行
+            for run_id, claim_epoch in claimed:
+                if self._stopping:
+                    return
+                logger.info(
+                    "dispatcher 已 claim run run_id={} epoch={} instance_id={}",
+                    run_id,
+                    claim_epoch,
+                    self._instance_id,
+                )
+                await self._start_claimed_run(run_id, claim_epoch)
         except Exception:
             logger.exception("run dispatcher scan failed")
 
-    async def _claim_and_start(
-        self,
-        repository: AgentRunRepository,
-        row: TAgentRun,
-        token: LeadershipToken,
-        db,
-    ) -> None:
-        token.require_valid()
-        run_id = row.id
-        # 容量预检在 claim 前：满则保持 queued 等下轮，不收口 error
-        try:
-            await run_manager.check_run_capacity(str(row.user_id))
-        except RunCapacityExceeded:
-            logger.info(
-                "dispatcher 容量已满，run 保持 queued run_id={} user_id={}",
-                run_id,
-                row.user_id,
-            )
-            return
-        claimed = await repository.claim_queued(
-            run_id=run_id,
-            owner_instance_id=token.instance_id,
-            owner_term=token.term,
-            now_ms=_now_ms(),
-        )
-        if not claimed:
-            return  # 并发 claim 输家：下轮自然跳过
-        # claim 先提交：启动路径（CAS queued→running）不再与本事务的行锁互等
-        await db.commit()
-        logger.info(
-            "dispatcher 已 claim run run_id={} owner_term={} instance_id={}",
-            run_id,
-            token.term,
-            token.instance_id,
-        )
-        await self._start_claimed_run(run_id)
-
-    async def _start_claimed_run(self, run_id: str) -> None:
+    async def _start_claimed_run(self, run_id: str, claim_epoch: int) -> None:
         # claim 已提交；以新 session 读权威行重建启动上下文
         async with pg_manager.get_async_session_context() as fresh_db:
             repository = AgentRunRepository(fresh_db)
@@ -178,7 +152,13 @@ class RunDispatcher:
                 await RunService._finalize_start_failure(run)
                 return
         try:
-            await RunService.start_queued_run(run, payload, current_user)
+            await RunService.start_queued_run(
+                run,
+                payload,
+                current_user,
+                owner_instance_id=self._instance_id,
+                claim_epoch=claim_epoch,
+            )
         except Exception:
             logger.exception("dispatcher 启动 run 失败 run_id={}", run_id)
             try:

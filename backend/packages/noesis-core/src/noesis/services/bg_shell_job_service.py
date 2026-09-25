@@ -13,14 +13,11 @@ from typing import Any, Optional
 
 from sqlalchemy import select, update
 
+from noesis.ids import now_ms
 from noesis.agents.background.jobs.state import BgTaskStatus
 from noesis.agents.background.ports import configure_shell_job_port
 from noesis.runtime.logging import logger
 from noesis.storage.postgres.models.bg_task import TBgShellJob
-
-
-def _now_ms() -> int:
-    return int(time.time() * 1000)
 
 
 def _to_seconds(ms: Optional[int]) -> Optional[float]:
@@ -42,7 +39,7 @@ class BgShellJobService:
     ) -> None:
         from noesis.storage.postgres.manager import pg_manager
 
-        now = _now_ms()
+        now = now_ms()
         async with pg_manager.get_async_session_context() as db:
             db.add(TBgShellJob(
                 task_id=task_id,
@@ -59,7 +56,7 @@ class BgShellJobService:
     async def mark_started(cls, task_id: str) -> None:
         from noesis.storage.postgres.manager import pg_manager
 
-        now = _now_ms()
+        now = now_ms()
         async with pg_manager.get_async_session_context() as db:
             await db.execute(
                 update(TBgShellJob)
@@ -101,6 +98,25 @@ class BgShellJobService:
             await db.commit()
 
     @classmethod
+    async def update_output_tail(cls, task_id: str, tail: str) -> None:
+        """运行中输出尾部快照 flush（执行进程周期调用；幂等覆盖写）。"""
+        from noesis.storage.postgres.manager import pg_manager
+
+        async with pg_manager.get_async_session_context() as db:
+            await db.execute(
+                update(TBgShellJob)
+                .where(
+                    TBgShellJob.task_id == task_id,
+                    # 终态守卫：迟到的最后一次 flush 不覆盖终态事实行
+                    TBgShellJob.status.in_([
+                        BgTaskStatus.QUEUED.value, BgTaskStatus.RUNNING.value,
+                    ]),
+                )
+                .values(output_tail=tail)
+            )
+            await db.commit()
+
+    @classmethod
     async def get_task(cls, task_id: str) -> Optional[dict[str, Any]]:
         from noesis.storage.postgres.manager import pg_manager
 
@@ -138,7 +154,7 @@ class BgShellJobService:
         else:
             ctx = _PseudoCtx(db)
         async with ctx as session:
-            now = _now_ms()
+            now = now_ms()
             result = await session.execute(
                 update(TBgShellJob)
                 .where(TBgShellJob.status.in_([
@@ -169,6 +185,7 @@ class BgShellJobService:
             "subagent_type": None,
             "status": row.status,
             "result": row.result_tail,
+            "output_tail": row.output_tail,
             "error": row.error,
             "started_at": _to_seconds(row.started_at),
             "completed_at": _to_seconds(row.completed_at),

@@ -49,11 +49,11 @@ async def test_sse_delivery_keepalive_not_from_bus() -> None:
         await bus.publish_end(run_id)
 
     task = asyncio.create_task(late_publish())
-    lines: list[str] = []
+    lines: list[bytes] = []
     async for line in iter_sse_from_bus(bus, run_id, keepalive_seconds=0.03, queue=q):
         lines.append(line)
     await task
 
-    assert any(line.startswith(": keepalive") for line in lines)
-    assert any("event: finish" in line for line in lines)
+    assert any(line.startswith(b": keepalive") for line in lines)
+    assert any(b"event: finish" in line for line in lines)
     # 总线侧不应曾 publish 过 keepalive（仅 WireFrame + end）

@@ -23,7 +23,7 @@
 5. **替换梗概比例化**：600 字符 → 头 2000 + 尾 1000。
 6. **web_fetch 单份正文与头尾截断**：删除顶层 `content` 双份存储；`fetch_max_chars` 4096 → 16000；超限页从头部硬截断改为头 75% + 尾 25%（行边界对齐）+ 全文落盘（`/web_pages/`，2MB 上限）+ 页脚精确续读 offset——与 read_file 源头封顶的「行号续读」语义衔接成完整链路。
 
-变更详情见 [openspec/changes/archive/2026-09-16-tool-context-append-only](../../../openspec/changes/archive/2026-09-16-tool-context-append-only/proposal.md)。
+变更详情见 openspec 归档 `2026-09-16-tool-context-append-only`（归档目录已于 2026-09-24 清理，全文在 git 历史）。
 
 ## 备选方案
 

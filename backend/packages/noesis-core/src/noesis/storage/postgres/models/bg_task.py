@@ -3,7 +3,7 @@ from __future__ import annotations
 
 from typing import Any
 
-from sqlalchemy import JSON, BigInteger, Index, String
+from sqlalchemy import JSON, BigInteger, Index, String, Text
 from sqlalchemy.orm import Mapped, mapped_column
 
 from noesis.storage.postgres.base import Base
@@ -51,6 +51,8 @@ class TBgShellJob(Base):
     error: Mapped[str | None] = mapped_column(String, nullable=True, comment="失败/取消原因")
     # 结果尾部摘要（stdout/stderr 尾部，与通知预览同源）
     result_tail: Mapped[str | None] = mapped_column(String, nullable=True, comment="结果尾部摘要（有界）")
+    # 运行中输出尾部快照（流式 flush，≤4KB；终态后不再更新）
+    output_tail: Mapped[str | None] = mapped_column(Text, nullable=True, comment="运行中输出尾部快照（流式 flush）")
     created_at: Mapped[int] = mapped_column(BigInteger, nullable=False, comment="创建毫秒（排队重建排序键）")
     started_at: Mapped[int | None] = mapped_column(BigInteger, nullable=True, comment="开始执行毫秒")
     completed_at: Mapped[int | None] = mapped_column(BigInteger, nullable=True, comment="终态毫秒")

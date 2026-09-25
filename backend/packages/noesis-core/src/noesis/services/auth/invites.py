@@ -7,14 +7,11 @@ import time
 
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from noesis.ids import now_ms
 from noesis.auth.policy import digest_secret, verify_invite_digest
 from noesis.auth.ports import UserRepository
 from noesis.errors.exceptions import LoginException
 from noesis.repositories.auth_repository import SqlAlchemyUserRepository
-
-
-def _now_ms() -> int:
-    return int(time.time() * 1000)
 
 
 class RegistrationInviteService:
@@ -34,7 +31,7 @@ class RegistrationInviteService:
             raise ValueError(f"管理员用户不存在: {admin_username}")
         code = cls._new_code()
         admin.registration_invite_digest = digest_secret(code)
-        admin.registration_invite_updated_at = _now_ms()
+        admin.registration_invite_updated_at = now_ms()
         await repository.save(admin)
         await db.commit()
         return code

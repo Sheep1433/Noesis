@@ -84,29 +84,32 @@ services:
     networks:
       - default
 
-  backend:
+  # worker-role-split 三角色：web（HTTP 面，可 scale）/ control（×1，
+  # advisory lock 防双开）/ worker（认领执行面，可 scale）。
+  # 三者共用 backend 镜像，仅 command 不同；bus 强制 redis。
+  web:
     build:
       context: ..
       dockerfile: deploy/backend/Dockerfile
     restart: unless-stopped
+    command: ["python", "web.py"]
     env_file:
       - .env.docker
-    environment:
+    environment: &backend_env
       NOESIS_CONFIG_PATH: /app/config.yaml
-      # 容器内用户数据根；与 runner 的 NOESIS_HOST_DATA_DIR 指向同一宿主机目录
       NOESIS_DATA_DIR: /data/noesis
+      NOESIS_RUN_BUS_BACKEND: redis
       SANDBOX_RUNNER_URL: http://sandbox-runner:8090
       SANDBOX_RUNNER_TOKEN: ${SANDBOX_RUNNER_TOKEN:-}
       SANDBOX_SKIP_DOCKER_CHECK: "1"
-
-    volumes:
+    volumes: &backend_volumes
       - ./config.docker.yaml:/app/config.yaml:ro
       - ${NOESIS_HOST_DATA_DIR}:/data/noesis
       - ${NOESIS_HOST_SKILLS_DIR}:/app/extensions/skills:ro
       - backend_runtime:/app/data
     extra_hosts:
       - "host.docker.internal:host-gateway"
-    depends_on:
+    depends_on: &backend_depends
       postgres:
         condition: service_healthy
       qdrant:
@@ -115,16 +118,50 @@ services:
         condition: service_healthy
       redis:
         condition: service_healthy
-    healthcheck:
-      # 瘦身镜像不再安装 curl；compose 级 healthcheck 覆盖镜像内置定义，须同步用 python
+    healthcheck: &backend_health
+      # 瘦身镜像不装 curl；compose 级 healthcheck 用 python
       test: ["CMD", "python", "-c", "import urllib.request,sys; sys.exit(0 if urllib.request.urlopen('http://127.0.0.1:8089/health', timeout=4).status == 200 else 1)"]
       interval: 30s
       timeout: 5s
       retries: 5
       start_period: 90s
 
-  # redis 模式多实例：docker compose up -d --scale backend=2（一 leader 多
-  # follower，角色由 PostgreSQL 选举；nginx 经 Docker DNS 轮询各副本）
+  control:
+    build:
+      context: ..
+      dockerfile: deploy/backend/Dockerfile
+    restart: unless-stopped
+    command: ["python", "control.py"]
+    env_file:
+      - .env.docker
+    environment: *backend_env
+    volumes: *backend_volumes
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
+    depends_on: *backend_depends
+    healthcheck:
+      <<: *backend_health
+      test: ["CMD", "python", "-c", "import urllib.request,sys; sys.exit(0 if urllib.request.urlopen('http://127.0.0.1:8091/health', timeout=4).status == 200 else 1)"]
+
+  worker:
+    build:
+      context: ..
+      dockerfile: deploy/backend/Dockerfile
+    restart: unless-stopped
+    command: ["python", "worker.py"]
+    env_file:
+      - .env.docker
+    environment: *backend_env
+    volumes: *backend_volumes
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
+    depends_on: *backend_depends
+    healthcheck:
+      <<: *backend_health
+      test: ["CMD", "python", "-c", "import urllib.request,sys; sys.exit(0 if urllib.request.urlopen('http://127.0.0.1:8092/health', timeout=4).status == 200 else 1)"]
+
+  # 扩容执行面：docker compose up -d --scale worker=3（认领分片，容量线性）；
+  # web 同理 --scale web=2（nginx 经 Docker DNS 轮询）
   nginx:
     build:
       context: ..
@@ -134,7 +171,7 @@ services:
       # 宿主机 nginx 经 127.0.0.1 反代进入；不对外直接暴露容器端口
       - "127.0.0.1:${NOESIS_HTTP_PORT:-28468}:80"
     depends_on:
-      backend:
+      web:
         condition: service_healthy
 
 networks:

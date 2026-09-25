@@ -272,6 +272,7 @@ async def preview_agent_context(
 async def parse_scheduled_task(
     request: Request,
     current_user: CurrentUser = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db),
 ):
     """自然语言解析为定时任务草稿，前端拿回预填表单后二次确认提交。"""
     body = await request.json()
@@ -279,7 +280,9 @@ async def parse_scheduled_task(
     if not text:
         raise HTTPException(status_code=400, detail="请输入任务描述")
     try:
-        draft = await ScheduledTaskService.parse_natural_language(text)
+        draft = await ScheduledTaskService.parse_natural_language(
+        text, user_id=str(current_user.user_id), db=db
+    )
     except ValueError as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
     return ResponseUtil.success(data=draft)

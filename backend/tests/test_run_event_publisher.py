@@ -1,7 +1,8 @@
-"""RunEventPublisher 契约（enable-distributed-sse-pubsub task 4.2）。
+"""RunEventPublisher 契约（worker-role-split：owner/epoch 构造期固定）。
 
 单 consumer 有界 outbound queue：sequence 严格有序、终态经同一 queue 不
-越位、overflow/publish 失败丢弃不阻塞、owner term 失效停止发布。
+越位、overflow/publish 失败丢弃不阻塞；envelope.owner_term 携带 claim
+epoch（语义自 leader term 迁移，hub 迟到过滤机制不变）。
 """
 
 from __future__ import annotations
@@ -16,13 +17,6 @@ from noesis.chat.runs.manager import RunManager, SequencedRunEvent
 from noesis.chat.runs.bus import InMemoryRunBus
 from noesis.chat.runs.publisher import RunEventPublisher
 from noesis.chat.delivery.events import RunCompleted, WireFrame
-
-
-class _Token:
-    def __init__(self, valid: bool = True) -> None:
-        self.valid = valid
-        self.instance_id = "instance-1"
-        self.term = 3
 
 
 class _RecordingBus:
@@ -52,13 +46,23 @@ async def _drain(publisher: RunEventPublisher) -> None:
         await asyncio.sleep(0.005)
 
 
-@pytest.mark.asyncio
-async def test_publishes_in_sequence_order_with_wire_payload() -> None:
-    bus = _RecordingBus()
-    publisher = RunEventPublisher(
-        run_id="run-1", bus=bus, token_provider=lambda: _Token(),
-        max_events=16, max_bytes=64 * 1024,
+def _publisher(bus, **overrides) -> RunEventPublisher:
+    kwargs = dict(
+        run_id="run-1",
+        bus=bus,
+        owner_instance_id="worker-1",
+        claim_epoch=3,
+        max_events=16,
+        max_bytes=64 * 1024,
     )
+    kwargs.update(overrides)
+    return RunEventPublisher(**kwargs)
+
+
+@pytest.mark.asyncio
+async def test_publishes_in_sequence_order_with_epoch_envelope() -> None:
+    bus = _RecordingBus()
+    publisher = _publisher(bus)
     publisher.start()
     try:
         for sequence in (1, 2, 3):
@@ -70,7 +74,8 @@ async def test_publishes_in_sequence_order_with_wire_payload() -> None:
     assert [e.sequence for e in bus.calls] == [1, 2, 3]
     first = bus.calls[0]
     assert first.schema_version == RUN_BUS_SCHEMA_VERSION
-    assert first.owner_instance_id == "instance-1"
+    assert first.owner_instance_id == "worker-1"
+    # 语义迁移：owner_term 携带 claim epoch（hub 迟到过滤按 epoch 兼容工作）
     assert first.owner_term == 3
     assert first.event_type == "text-delta"
     # wire 载荷与 SSE 同源：事件字段 + run_id/sequence/attempt_id 注入
@@ -84,21 +89,15 @@ async def test_publishes_in_sequence_order_with_wire_payload() -> None:
 async def test_terminal_goes_through_same_queue_after_regular_events() -> None:
     """终态经同一 queue：不越过尚未发布的普通事件（发布序 = sequence 序）。"""
     bus = _RecordingBus()
-    publisher = RunEventPublisher(
-        run_id="run-1", bus=bus, token_provider=lambda: _Token(),
-        max_events=16, max_bytes=64 * 1024,
-    )
+    publisher = _publisher(bus)
     publisher.start()
     try:
         slow = asyncio.Event()
 
-        async def _gate() -> None:
-            await slow.wait()
-
         original_publish = bus.publish_run_events
 
         async def _slow_publish(run_id, envelopes):
-            await _gate()
+            await slow.wait()
             await original_publish(run_id, envelopes)
 
         bus.publish_run_events = _slow_publish  # type: ignore[method-assign]
@@ -118,10 +117,7 @@ async def test_terminal_goes_through_same_queue_after_regular_events() -> None:
 async def test_overflow_drops_without_blocking() -> None:
     bus = _RecordingBus()
     metrics: list[str] = []
-    publisher = RunEventPublisher(
-        run_id="run-1", bus=bus, token_provider=lambda: _Token(),
-        max_events=2, max_bytes=1024, on_metric=metrics.append,
-    )
+    publisher = _publisher(bus, max_events=2, max_bytes=1024, on_metric=metrics.append)
     publisher.start()
     # 不让 consumer 消费：先堵住 bus
     gate = asyncio.Event()
@@ -143,31 +139,10 @@ async def test_overflow_drops_without_blocking() -> None:
 
 
 @pytest.mark.asyncio
-async def test_stale_term_drops_events() -> None:
-    bus = _RecordingBus()
-    metrics: list[str] = []
-    publisher = RunEventPublisher(
-        run_id="run-1", bus=bus, token_provider=lambda: _Token(valid=False),
-        max_events=8, max_bytes=1024, on_metric=metrics.append,
-    )
-    publisher.start()
-    try:
-        publisher.submit(_event(1))
-        await _drain(publisher)
-    finally:
-        await publisher.stop()
-    assert bus.calls == [], "term 失效后不得发布"
-    assert "bus_publisher_stale_term" in metrics
-
-
-@pytest.mark.asyncio
 async def test_publish_failure_does_not_stop_consumer() -> None:
     bus = _RecordingBus(fail=True)
     metrics: list[str] = []
-    publisher = RunEventPublisher(
-        run_id="run-1", bus=bus, token_provider=lambda: _Token(),
-        max_events=8, max_bytes=1024, on_metric=metrics.append,
-    )
+    publisher = _publisher(bus, max_events=8, max_bytes=1024, on_metric=metrics.append)
     publisher.start()
     try:
         publisher.submit(_event(1))
@@ -180,20 +155,19 @@ async def test_publish_failure_does_not_stop_consumer() -> None:
 
 
 @pytest.mark.asyncio
-async def test_manager_publishes_to_bus_when_attached() -> None:
-    """集成：装配 bus 后 RunManager 的事件扇出同步广播到 bus。"""
+async def test_manager_publishes_to_bus_with_claim_context() -> None:
+    """集成：装配 bus 且 start 带认领上下文时，扇出同步广播 epoch 信封。"""
     release = asyncio.Event()
     completed = asyncio.Event()
 
     async def producer(publish):
         await publish(WireFrame(event="text-delta", data={"delta": "hello"}))
-        await publish(WireFrame(event="text-delta", data={"delta": "world"}))
         await release.wait()
         completed.set()
 
     bus = InMemoryRunBus(envelope_payload_max_bytes=64 * 1024)
     manager = RunManager()
-    manager.attach_bus(bus, token_provider=lambda: _Token())
+    manager.attach_bus(bus)
     subscription = await bus.subscribe_run_events("run-1")
     try:
         handle = await manager.start(
@@ -203,13 +177,13 @@ async def test_manager_publishes_to_bus_when_attached() -> None:
             assistant_message_id="message-1",
             snapshot_provider=_snapshot_stub(),
             producer=producer,
+            owner_instance_id="worker-9",
+            claim_epoch=7,
         )
         first = await asyncio.wait_for(subscription.__aiter__().__anext__(), timeout=2)
-        second = await asyncio.wait_for(subscription.__aiter__().__anext__(), timeout=2)
         assert first.payload["delta"] == "hello"
-        assert second.payload["delta"] == "world"
-        assert first.sequence == 1 and second.sequence == 2
-        assert first.owner_term == 3
+        assert first.owner_instance_id == "worker-9"
+        assert first.owner_term == 7
         release.set()
         await asyncio.wait_for(completed.wait(), timeout=2)
         await handle.producer_task
@@ -217,6 +191,31 @@ async def test_manager_publishes_to_bus_when_attached() -> None:
         await subscription.close()
         await manager.shutdown(drain_seconds=0)
         await bus.close()
+
+
+@pytest.mark.asyncio
+async def test_manager_without_claim_context_skips_publisher() -> None:
+    """start 未带认领上下文（channel 等非认领路径）：不建 publisher，行为不变。"""
+    release = asyncio.Event()
+
+    async def producer(publish):
+        await publish(WireFrame(event="text-delta", data={"delta": "x"}))
+        await release.wait()
+
+    manager = RunManager()
+    manager.attach_bus(object())  # bus 装配但无认领上下文
+    handle = await manager.start(
+        run_id="run-2",
+        session_id="s",
+        user_id="u",
+        assistant_message_id="m",
+        snapshot_provider=_snapshot_stub(),
+        producer=producer,
+    )
+    assert handle.publisher is None
+    release.set()
+    await handle.producer_task
+    await manager.shutdown(drain_seconds=0)
 
 
 def _snapshot_stub():

@@ -55,6 +55,34 @@ start_qdrant() {
   log_info "Qdrant: http://127.0.0.1:6333/dashboard"
 }
 
+REDIS_CONTAINER="${REDIS_CONTAINER:-noesis-redis}"
+
+start_redis() {
+  # worker-role-split：三进程形态的事件/唤醒总线，强制依赖——
+  # memory 进程内总线无法跨进程（entries._require_redis_bus fail-fast）
+  if ! command -v docker &>/dev/null; then
+    log_warn "Docker 未安装，跳过 Redis。请确保 localhost:6379 可访问。"
+    log_warn "  手动: docker run -d --name $REDIS_CONTAINER -p 6379:6379 redis:7-alpine"
+    return 0
+  fi
+
+  if docker ps -q -f "name=^${REDIS_CONTAINER}$" | grep -q .; then
+    log_info "Redis 已在运行 ($REDIS_CONTAINER)"
+    return 0
+  fi
+
+  if docker ps -aq -f "name=^${REDIS_CONTAINER}$" | grep -q .; then
+    log_info "启动已有 Redis 容器..."
+    docker start "$REDIS_CONTAINER" >/dev/null
+    log_info "Redis: localhost:6379"
+    return 0
+  fi
+
+  log_info "创建并启动 Redis 容器..."
+  docker run -d     --name "$REDIS_CONTAINER"     -p 6379:6379     redis:7-alpine >/dev/null
+  log_info "Redis: localhost:6379"
+}
+
 start_langfuse() {
   local enable="${START_LANGFUSE:-0}"
   if [[ "$enable" != "1" && "$enable" != "true" ]]; then
@@ -180,7 +208,11 @@ stack_cleanup() {
   if [[ -n "$MCP_PID" ]]; then
     kill "$MCP_PID" 2>/dev/null || true
   fi
-  if [[ -n "$BACKEND_PID" ]]; then
+  if [[ -n "${BACKEND_PIDS[*]:-}" ]]; then
+    for pid in "${BACKEND_PIDS[@]}"; do
+      kill "$pid" 2>/dev/null || true
+    done
+  elif [[ -n "$BACKEND_PID" ]]; then
     kill "$BACKEND_PID" 2>/dev/null || true
   fi
   if [[ -n "$FRONTEND_PID" ]]; then

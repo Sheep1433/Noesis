@@ -7,7 +7,7 @@ import copy
 import json
 import time
 from collections.abc import Awaitable, Callable
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 from typing import Any, Optional
 
 from noesis.runtime.logging import logger
@@ -109,9 +109,17 @@ class SequencedRunEvent:
     checkpoint_snapshot: RunSnapshot | None = None
     checkpoint_kind: str | None = None
     created_at_monotonic: float = field(default_factory=time.monotonic)
+    # 发布点一次编码的 SSE 帧字节（encode-once fanout）：扇出路径共享同一
+    # bytes 引用，订阅消费侧纯转发。StreamDone 的 [DONE] 帧也在此列；
+    # 检查点/落库消费方继续读 event 字段，不经编码产物。
+    encoded: tuple[bytes, ...] | None = None
 
     @property
     def estimated_bytes(self) -> int:
+        # encoded 存在时按帧字节精确计量（含帧头开销 +64）——比 json.dumps
+        # 估算更准，原先被低估的大事件会更早触发慢订阅者隔离（方向正确）
+        if self.encoded is not None:
+            return sum(len(frame) for frame in self.encoded) + 64
         try:
             return (
                 len(
@@ -281,6 +289,9 @@ class RunHandle:
     producer_task: Optional[asyncio.Task[None]] = None
     producer_generation: int = 0
     cancel_requested: bool = False
+    # worker 心跳协程（worker-role-split）：引用挂在 handle 上防 GC
+    #（asyncio 对无引用 task 不保证存活），随 run 终态/出册自然结束
+    heartbeat_task: Optional[asyncio.Task[None]] = None
     # 投递内核（被动数据结构）：sequence 分配、有界重放缓存、连续性重放。
     # 由 RunManager 在创建 handle 时按配置注入；全部访问须持 handle.lock。
     delivery: "DeliveryCore" = field(init=False)
@@ -341,7 +352,6 @@ class RunManager:
         terminal_retry_interval_seconds: float = 5.0,
         checkpoint_retry_interval_seconds: float = 0.25,
         bus: Any | None = None,
-        token_provider: Any | None = None,
         publisher_queue_max_events: int = 512,
         publisher_queue_max_bytes: int = 1024 * 1024,
         periodic_checkpoint_interval_seconds: float = 15.0,
@@ -382,7 +392,6 @@ class RunManager:
         self.checkpoint_retry_interval_seconds = checkpoint_retry_interval_seconds
         # Run bus 发布面（task 4.2）：None = 未装配（单测），事件只走本地订阅
         self._bus = bus
-        self._token_provider = token_provider
         self.publisher_queue_max_events = publisher_queue_max_events
         self.publisher_queue_max_bytes = publisher_queue_max_bytes
         self.periodic_checkpoint_interval_seconds = periodic_checkpoint_interval_seconds
@@ -415,14 +424,15 @@ class RunManager:
     def _bump_metric(self, name: str) -> None:
         self._metrics[name] = self._metrics.get(name, 0) + 1
 
-    def attach_bus(self, bus: Any, token_provider: Any) -> None:
-        """装配 Run bus 发布面（main.py lifespan 在 leader 选举后调用）。
+    def attach_bus(self, bus: Any) -> None:
+        """装配 Run bus 发布面（main.py lifespan 启动时调用）。
 
         已在跑的 Run 不补建 publisher（重启后新 Run 才跨进程广播）；
-        memory 模式同样装配——两种模式共用同一发布路径。
+        memory 模式同样装配——两种模式共用同一发布路径。publisher 的
+        fencing 值（owner/epoch）随各 Run 的 start() 传入（worker-role-split：
+        全局 leadership token 不再参与发布门控）。
         """
         self._bus = bus
-        self._token_provider = token_provider
 
     async def start(
         self,
@@ -441,6 +451,8 @@ class RunManager:
         terminal_handler: TerminalHandler | None = None,
         checkpoint_handler: CheckpointHandler | None = None,
         max_run_duration_seconds: float | None = None,
+        owner_instance_id: str | None = None,
+        claim_epoch: int | None = None,
     ) -> RunHandle:
         loop = asyncio.get_running_loop()
         handle = RunHandle(
@@ -466,11 +478,16 @@ class RunManager:
             max_buffer_events=self.max_buffer_events,
             max_buffer_bytes=self.max_buffer_bytes,
         )
-        if self._bus is not None and self._token_provider is not None:
+        if (
+            self._bus is not None
+            and owner_instance_id is not None
+            and claim_epoch is not None
+        ):
             handle.publisher = RunEventPublisher(
                 run_id=run_id,
                 bus=self._bus,
-                token_provider=self._token_provider,
+                owner_instance_id=owner_instance_id,
+                claim_epoch=claim_epoch,
                 max_events=self.publisher_queue_max_events,
                 max_bytes=self.publisher_queue_max_bytes,
                 on_metric=self._bump_metric,
@@ -806,6 +823,9 @@ class RunManager:
         """在 lock 内分配 sequence、写 buffer。无 I/O await，不 fan-out。
 
         如果 checkpoint_policy 命中，在同一 lock 内复制 immutable snapshot 并附加到 envelope。
+        encode-once：envelope 构造即完成 SSE 编码（纯函数）——commit 进
+        buffer 与 fan-out 的都是携带 encoded bytes 的同一实例，订阅队列、
+        重放缓存、bus publisher 三方共享一次编码产物。
         """
         checkpoint_snapshot: RunSnapshot | None = None
         checkpoint_kind: str | None = None
@@ -816,7 +836,9 @@ class RunManager:
                 checkpoint_snapshot = copy.deepcopy(
                     handle.snapshot_provider(sequence, handle.status, handle.attempt_id)
                 )
-        envelope = SequencedRunEvent(
+        from noesis.chat.delivery.sse import encode_sequenced_event
+
+        probe = SequencedRunEvent(
             run_id=handle.run_id,
             sequence=handle.delivery.next_sequence,
             attempt_id=handle.attempt_id,
@@ -824,6 +846,8 @@ class RunManager:
             checkpoint_snapshot=checkpoint_snapshot,
             checkpoint_kind=checkpoint_kind,
         )
+        encoded = tuple(encode_sequenced_event(probe))
+        envelope = replace(probe, encoded=encoded) if encoded else probe
         # 即使普通输出已经触及上限，也必须允许 RunError / RunAborted
         # 投递终态，否则 producer 已经被限流后，终态事件还会再次触发同一个异常。
         terminal_event = isinstance(event, (RunCompleted, RunAborted, RunError))
@@ -871,7 +895,12 @@ class RunManager:
                 pass
 
     def _assign_and_fanout(self, handle: RunHandle, event: Any) -> SequencedRunEvent:
-        """在 lock 内分配 sequence、写 buffer、fan-out。无 I/O await。"""
+        """在 lock 内分配 sequence、写 buffer、fan-out。无 I/O await。
+
+        encode-once 在 _assign_and_buffer 构造点完成：fan-out 投递的
+        envelope 携带 encoded bytes，订阅队列与 bus publisher 共享同一
+        编码产物，消费侧不再逐连接序列化。
+        """
         envelope = self._assign_and_buffer(handle, event)
         self._fanout(handle, envelope)
         return envelope

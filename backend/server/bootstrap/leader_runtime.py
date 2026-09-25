@@ -1,16 +1,17 @@
-"""leader 运行时装配与晋升对账（自 main.py lifespan 下沉）。
+"""角色化启动对账与装配（worker-role-split Phase 3：自 main.py lifespan 下沉）。
 
-两类职责，顺序约束是安全不变式：
+对账按「谁持有状态谁对账」拆两组：
 
-1. **晋升回调**（``build_promotion_callback``）：leader 面装配（run 事件
-   桥 / 命令消费者）+ 四段对账 + 排队重建。对账顺序由
-   ``RECONCILE_ORDER`` 声明——命令重置先于命令消费、queued 重建先于
-   dispatcher.start，乱序会在换主窗口丢消息或重复消费。
-2. **singleton 启动**（``start_leader_singletons``）：dispatcher / 调度
-   器 / 信令通道 / 记忆任务——仅 leader 运行，follower 不注册。
+- **control 对账**（control × 1，advisory lock 防双开）：主 run 阶段化收口
+  （未碰世界重置 queued / 已碰世界收口 interrupted）、定时任务遗留 run。
+- **worker 对账**（每个 worker 启动时）：子代理 run、后台 shell 任务、
+  queued 子任务重建（executor 热集在本进程）、遗留 claimed 命令重置
+  （必须先于命令消费者启动）、未送达通知装载。
 
-lifespan 只保留调用；顺序约束由 ``_reconcile_steps`` 的清单结构与
-tests/test_leader_runtime_order.py 钉住。
+顺序约束是安全不变式：``claimed 命令重置 → 命令消费者启动``（换主窗口
+不误翻排队任务的消息）、``queued 重建 → dispatcher.start``（重建后 drain
+由 dispatcher 驱动）。清单结构与顺序由 ``tests/test_leader_runtime_order.py``
+钉住。
 """
 
 from __future__ import annotations
@@ -19,26 +20,41 @@ from contextlib import AsyncExitStack
 from typing import Any, Awaitable, Callable
 
 from noesis.runtime.logging import logger
-from noesis.config.env import DistributedRunsConfig, MessagingConfig
-from noesis.services.run_command_service import RunCommandConsumer
 
 
-# 晋升对账步骤（执行顺序即列表顺序）。每步 (名称, 协程工厂)。
-# 顺序约束（安全不变式）：
-#   claimed 命令重置 → 命令消费者启动（换主窗口不误翻排队任务的消息）
-#   queued 重建      → dispatcher.start（重建后 drain 由 dispatcher 驱动）
-def _reconcile_steps(recovery_db, *, token_term: int) -> list[tuple[str, Callable[[], Awaitable[Any]]]]:
-    from noesis.services.subagent_session_service import SubagentSessionService
+def _control_reconcile_steps(recovery_db) -> list[tuple[str, Callable[[], Awaitable[Any]]]]:
+    """control 面对账：主 run（阶段化）+ 定时任务。"""
 
     async def _main_runs() -> int:
         from noesis.services.run_recovery_service import RunRecoveryService
+        from noesis.services.run_service import RunService
 
         await RunRecoveryService.recover_orphaned_runs(
-            recovery_db, current_leader_term=token_term
+            recovery_db,
+            heartbeat_lease_ms=int(RunService.HEARTBEAT_LEASE_TTL_SECONDS * 1000),
         )
         return 0
 
+    async def _scheduled_task_runs() -> int:
+        from noesis.services.scheduled_task_service import ScheduledTaskService
+
+        interrupted = await ScheduledTaskService.reconcile_interrupted_runs(recovery_db)
+        if interrupted:
+            logger.warning("定时任务对账：{} 个遗留 run 已收口为 interrupted", interrupted)
+        return interrupted
+
+    return [
+        ("main_runs", _main_runs),
+        ("scheduled_task_runs", _scheduled_task_runs),
+    ]
+
+
+def _worker_reconcile_steps(recovery_db) -> list[tuple[str, Callable[[], Awaitable[Any]]]]:
+    """worker 面对账：executor 热集相关 + 命令重置 + 通知装载。"""
+
     async def _subagent_runs() -> int:
+        from noesis.services.subagent_session_service import SubagentSessionService
+
         orphaned = await SubagentSessionService.reconcile_orphaned_runs(recovery_db)
         if orphaned:
             logger.warning("子 Agent 对账：{} 个遗留 run 已标记为中断", orphaned)
@@ -54,6 +70,7 @@ def _reconcile_steps(recovery_db, *, token_term: int) -> list[tuple[str, Callabl
 
     async def _rebuild_queued() -> int:
         from noesis.agents.background.ports import ExecutorPort
+        from noesis.services.subagent_session_service import SubagentSessionService
 
         specs = await SubagentSessionService.list_queued_subagent_runs(recovery_db)
         if not specs:
@@ -70,14 +87,6 @@ def _reconcile_steps(recovery_db, *, token_term: int) -> list[tuple[str, Callabl
         await AgentRunCommandRepository(recovery_db).reset_all_claimed()
         return 0
 
-    async def _scheduled_task_runs() -> int:
-        from noesis.services.scheduled_task_service import ScheduledTaskService
-
-        interrupted = await ScheduledTaskService.reconcile_interrupted_runs(recovery_db)
-        if interrupted:
-            logger.warning("定时任务对账：{} 个遗留 run 已收口为 interrupted", interrupted)
-        return interrupted
-
     async def _restore_notifications() -> int:
         from noesis.services.bg_notification_store import (
             restore_undelivered_notifications,
@@ -89,70 +98,45 @@ def _reconcile_steps(recovery_db, *, token_term: int) -> list[tuple[str, Callabl
         return restored
 
     return [
-        ("main_runs", _main_runs),
         ("subagent_runs", _subagent_runs),
         ("shell_jobs", _shell_jobs),
         ("rebuild_queued", _rebuild_queued),
         ("reset_claimed_commands", _reset_claimed_commands),
-        ("scheduled_task_runs", _scheduled_task_runs),
         ("restore_notifications", _restore_notifications),
     ]
 
 
-def build_promotion_callback(
-    *,
-    elector,
-    run_bus,
-    run_manager,
-    resources: AsyncExitStack,
-    leader_components: dict,
-) -> Callable[[Any], Awaitable[None]]:
-    """构造 leader 晋升回调（含进程启动首例）。
+async def run_reconcile_group(steps: list[tuple[str, Callable[[], Awaitable[Any]]]]) -> None:
+    """顺序执行对账组，异常大声失败（启动期半初始化比崩溃更难排障）。"""
+    for _name, step in steps:
+        await step()
 
-    dispatcher / command consumer / 信令与 run 事件桥随晋升启动；重入
-    （运行中切主后本进程晋升）时先跑对账再起消费者——旧 term 遗留由
-    对账步骤收口。命令消费者的 start 挂在对账序列之后（顺序约束见
-    模块 docstring）。
+
+def _names(steps_factory: Callable[..., list[tuple[str, Any]]]) -> list[str]:
+    from unittest.mock import MagicMock
+
+    return [name for name, _ in steps_factory(MagicMock())]
+
+
+# 对账步骤名序列（单一事实源：从步骤工厂推导；改步骤清单测试同步红）
+CONTROL_RECONCILE_ORDER = _names(_control_reconcile_steps)
+WORKER_RECONCILE_ORDER = _names(_worker_reconcile_steps)
+
+
+# 周期对账间隔：lease_ttl（60s）的一半——僵尸 run 的收口延迟上界
+# = lease_ttl 超时判定 + 本间隔。产品逻辑常量（非部署参数）：与心跳
+# 租约配套定档，两部署实例该值理应相同。
+PERIODIC_RECONCILE_INTERVAL_SECONDS = 30.0
+
+
+async def start_control_singletons(*, resources: AsyncExitStack) -> None:
+    """control 专属 singleton：周期对账、调度器、信令通道、记忆任务。
+
+    advisory lock 防双开由调用方（entries）在启动前获取。周期对账
+    （design §2.2）：运行期 heartbeat 超时的僵尸 run 由本循环收口/
+    重置，不等 control 重启。
     """
-
-    async def _on_promotion(token) -> None:
-        run_manager.attach_bus(run_bus, token_provider=lambda: elector.token)
-        from noesis.agents.background.jobs import events as bg_run_events
-
-        bg_run_events.configure_run_event_bridge(run_bus, lambda: elector.token)
-        if "command_consumer" not in leader_components:
-            consumer = RunCommandConsumer(
-                bus=run_bus,
-                token_provider=lambda: elector.token,
-                scan_interval_seconds=DistributedRunsConfig.command_scan_interval_seconds,
-                retention_days=DistributedRunsConfig.command_retention_days,
-            )
-            leader_components["command_consumer"] = consumer
-            resources.push_async_callback(consumer.stop)
-        # 四段对账 + 排队重建：顺序执行，异常大声失败（启动期半初始化
-        # 比崩溃更难排障）
-        from noesis.storage.postgres.manager import pg_manager as _pgm
-
-        async with _pgm.get_async_session_context() as recovery_db:
-            for name, step in _reconcile_steps(recovery_db, token_term=token.term):
-                await step()
-            consumer = leader_components.get("command_consumer")
-            if consumer is not None:
-                await consumer.start()
-
-    return _on_promotion
-
-
-async def start_leader_singletons(
-    *,
-    dispatcher,
-    resources: AsyncExitStack,
-) -> None:
-    """leader 专属 singleton：dispatcher / 调度器 / 信令通道 / 记忆任务。
-
-    后台任务执行面（executor/隔离循环）与 shutdown_bg_subagents 也仅
-    leader 需要——follower 没有注册表可停。
-    """
+    from noesis.config.env import MessagingConfig
     from noesis.services.scheduled_task_scheduler import (
         start_scheduled_task_scheduler,
         stop_scheduled_task_scheduler,
@@ -167,7 +151,6 @@ async def start_leader_singletons(
     )
     from noesis.memory.extraction import start_memory_sweeper, stop_memory_sweeper
 
-    await dispatcher.start()
     start_scheduled_task_scheduler()
     resources.push_async_callback(stop_scheduled_task_scheduler)
     start_telegram_runtime()
@@ -193,12 +176,28 @@ async def start_leader_singletons(
     await start_memory_consolidator()
     resources.push_async_callback(stop_memory_consolidator)
 
+    # 周期对账：僵尸判定（heartbeat 超时）+ 阶段化分流，与启动对账共用
+    # 同一步骤工厂——单一人（谁持有状态谁对账的 control 面）。
+    import asyncio
 
-# 对账步骤名序列（单一事实源：从步骤工厂推导；改步骤清单测试同步红）
-def _names() -> list[str]:
-    from unittest.mock import MagicMock
+    async def _periodic_reconcile() -> None:
+        from noesis.storage.postgres.manager import pg_manager
 
-    return [name for name, _ in _reconcile_steps(MagicMock(), token_term=0)]
+        while True:
+            await asyncio.sleep(PERIODIC_RECONCILE_INTERVAL_SECONDS)
+            try:
+                async with pg_manager.get_async_session_context() as db:
+                    await run_reconcile_group(_control_reconcile_steps(db))
+            except asyncio.CancelledError:
+                raise
+            except Exception:
+                logger.exception("control 周期对账失败")
 
+    reconcile_task = asyncio.create_task(
+        _periodic_reconcile(), name="control-periodic-reconcile"
+    )
 
-RECONCILE_ORDER = _names()
+    def _cancel_reconcile() -> None:
+        reconcile_task.cancel()
+
+    resources.callback(_cancel_reconcile)

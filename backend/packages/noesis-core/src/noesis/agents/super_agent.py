@@ -194,6 +194,9 @@ class SuperAgent(BaseAgent):
         # （独立子任务）不需要跨 run 的会话原文召回
         # ask_user 同属 loop 绑定剔除：worker 无人值守不交互，歧义在结果中
         # 说明假设后继续（危险命令拒绝见 guard_worker_filesystem_tools）
+        # 注意：过滤按工具名，真实约束按变体——search_memory 的 DB 回写变体
+        # （root run 携带 run_id/db）loop-bound，紧随其后的 build_memory_tools
+        # 重加的是文件检索变体（不碰 pg_manager，隔离 loop 安全）。
         _loop_bound_tools = {"search_memory", "search_history", "search_sessions", "ask_user"}
         worker_tools = [
             tool for tool in tools if getattr(tool, "name", "") not in _loop_bound_tools

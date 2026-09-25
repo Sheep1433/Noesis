@@ -48,6 +48,8 @@ const finished = computed(() =>
     .reverse(),
 )
 const ordered = computed(() => [...pending.value, ...running.value, ...finished.value])
+// 已结束任务默认折叠：面板只保运行中/待审批的即时可见性，历史按需展开
+const finishedExpanded = ref(false)
 const taskSummary = computed(() => {
   if (!ordered.value.length) {
     return '任务进度会在这里实时更新'
@@ -170,6 +172,10 @@ watch([() => props.focusTaskId, () => props.tasks], ([taskId]) => {
           </div>
           <code class="shell-task-detail__command">{{ selectedTaskResolved.command || selectedTaskResolved.description }}</code>
           <pre v-if="selectedTaskResolved.result || selectedTaskResolved.error" class="shell-task-detail__output">{{ selectedTaskResolved.result || selectedTaskResolved.error }}</pre>
+          <template v-else-if="selectedTaskResolved.output_tail">
+            <span class="shell-task-detail__empty">运行中——最新输出尾部（持续更新）：</span>
+            <pre class="shell-task-detail__output">{{ selectedTaskResolved.output_tail }}</pre>
+          </template>
           <span v-else class="shell-task-detail__empty">命令仍在运行，输出完成后会显示在这里。</span>
         </div>
         <SubagentConversationView
@@ -223,35 +229,82 @@ watch([() => props.focusTaskId, () => props.tasks], ([taskId]) => {
           </div>
         </div>
 
-        <!-- 两行任务行：主信息、状态与指标分层，展开后再显示执行内容。 -->
-        <div
-          v-for="task in [...running, ...finished]"
-          :key="task.task_id"
-          class="bg-task-card"
-          :class="{ 'bg-task-card--open': showDetail && selectedTaskResolved?.task_id === task.task_id }"
-        >
-          <button type="button" class="bg-task-card__row" @click="toggleExpand(task)">
-            <span class="bg-task-card__disclosure" :class="{ 'bg-task-card__disclosure--open': showDetail && selectedTaskResolved?.task_id === task.task_id }">
-              <n-icon size="14"><ChevronDownOutline /></n-icon>
-            </span>
-            <span class="bg-task-status-dot" :class="`bg-task-status-dot--${statusClass(task.status)}`"></span>
-            <span class="bg-task-card__content">
-              <span class="bg-task-card__title">{{ task.description }}</span>
-              <span class="bg-task-card__meta">
-                <span v-if="task.kind === 'shell'">后台命令</span>
-                <span v-else>子 Agent</span>
-                <span>·</span>
-                <span>{{ taskStatusLabel(task.status) }}</span>
-                <template v-if="taskElapsed(task)">
-                  <span>·</span>
-                  <span class="bg-task-card__elapsed">{{ taskElapsed(task) }}</span>
-                </template>
+        <!-- 两行任务行：主信息、状态与指标分层，展开后再显示执行内容。
+             已结束任务折叠为一行分组头（点按展开/收起），避免历史条目
+             淹没运行中的即时状态。 -->
+        <template v-for="task in running" :key="task.task_id">
+          <div
+            class="bg-task-card"
+            :class="{ 'bg-task-card--open': showDetail && selectedTaskResolved?.task_id === task.task_id }"
+          >
+            <button type="button" class="bg-task-card__row" @click="toggleExpand(task)">
+              <span class="bg-task-card__disclosure" :class="{ 'bg-task-card__disclosure--open': showDetail && selectedTaskResolved?.task_id === task.task_id }">
+                <n-icon size="14"><ChevronDownOutline /></n-icon>
               </span>
-            </span>
-            <span v-if="task.progress_count ?? task.progress?.length" class="bg-task-card__metric">
-              {{ task.progress_count ?? task.progress?.length }} 步
-            </span>
+              <span class="bg-task-status-dot" :class="`bg-task-status-dot--${statusClass(task.status)}`"></span>
+              <span class="bg-task-card__content">
+                <span class="bg-task-card__title">{{ task.description }}</span>
+                <span class="bg-task-card__meta">
+                  <span v-if="task.kind === 'shell'">后台命令</span>
+                  <span v-else>子 Agent</span>
+                  <span>·</span>
+                  <span>{{ taskStatusLabel(task.status) }}</span>
+                  <template v-if="taskElapsed(task)">
+                    <span>·</span>
+                    <span class="bg-task-card__elapsed">{{ taskElapsed(task) }}</span>
+                  </template>
+                </span>
+              </span>
+              <span v-if="task.progress_count ?? task.progress?.length" class="bg-task-card__metric">
+                {{ task.progress_count ?? task.progress?.length }} 步
+              </span>
+            </button>
+          </div>
+        </template>
+
+        <div v-if="finished.length" class="bg-task-finished">
+          <button
+            type="button"
+            class="bg-task-finished__header"
+            @click="finishedExpanded = !finishedExpanded"
+          >
+            <n-icon size="14" class="bg-task-finished__chevron" :class="{ 'bg-task-finished__chevron--open': finishedExpanded }">
+              <ChevronDownOutline />
+            </n-icon>
+            <span>已结束</span>
+            <span class="bg-task-finished__count">{{ finished.length }}</span>
           </button>
+          <template v-if="finishedExpanded">
+            <div
+              v-for="task in finished"
+              :key="task.task_id"
+              class="bg-task-card"
+              :class="{ 'bg-task-card--open': showDetail && selectedTaskResolved?.task_id === task.task_id }"
+            >
+              <button type="button" class="bg-task-card__row" @click="toggleExpand(task)">
+                <span class="bg-task-card__disclosure" :class="{ 'bg-task-card__disclosure--open': showDetail && selectedTaskResolved?.task_id === task.task_id }">
+                  <n-icon size="14"><ChevronDownOutline /></n-icon>
+                </span>
+                <span class="bg-task-status-dot" :class="`bg-task-status-dot--${statusClass(task.status)}`"></span>
+                <span class="bg-task-card__content">
+                  <span class="bg-task-card__title">{{ task.description }}</span>
+                  <span class="bg-task-card__meta">
+                    <span v-if="task.kind === 'shell'">后台命令</span>
+                    <span v-else>子 Agent</span>
+                    <span>·</span>
+                    <span>{{ taskStatusLabel(task.status) }}</span>
+                    <template v-if="taskElapsed(task)">
+                      <span>·</span>
+                      <span class="bg-task-card__elapsed">{{ taskElapsed(task) }}</span>
+                    </template>
+                  </span>
+                </span>
+                <span v-if="task.progress_count ?? task.progress?.length" class="bg-task-card__metric">
+                  {{ task.progress_count ?? task.progress?.length }} 步
+                </span>
+              </button>
+            </div>
+          </template>
         </div>
       </div>
     </template>
@@ -532,5 +585,43 @@ watch([() => props.focusTaskId, () => props.tasks], ([taskId]) => {
 .shell-task-detail__empty {
   color: var(--noesis-color-text-hint);
   font-size: 12px;
+}
+.bg-task-finished {
+  display: flex;
+  flex-direction: column;
+}
+
+.bg-task-finished__header {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 6px 8px;
+  border: 0;
+  border-radius: var(--noesis-radius-md);
+  background: transparent;
+  color: var(--noesis-color-text-secondary);
+  font-size: 12px;
+  cursor: pointer;
+  text-align: left;
+
+  &:hover {
+    background: var(--noesis-color-fill-soft, rgba(128, 128, 128, 0.08));
+  }
+}
+
+.bg-task-finished__chevron {
+  transition: transform 0.15s ease;
+
+  &--open {
+    transform: rotate(180deg);
+  }
+}
+
+.bg-task-finished__count {
+  padding: 0 6px;
+  border-radius: 999px;
+  background: var(--noesis-color-fill-soft, rgba(128, 128, 128, 0.12));
+  font-size: 11px;
+  line-height: 18px;
 }
 </style>
