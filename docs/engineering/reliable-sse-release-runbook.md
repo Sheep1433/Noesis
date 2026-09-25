@@ -1,6 +1,6 @@
 # 发布 Runbook：reliable-sse-multitab
 
-> 对应 `reliable-sse-multitab` tasks.md §8.5（见 `openspec/changes/archive-index.md`，全文在 git 历史）。本 change 是 BREAKING 发布——前后端与数据库 schema 作为一个发布单元切换。
+> 对应 `reliable-sse-multitab` 提案的 §8.5（归档目录已于 2026-09-24 清理，全文在 git 历史）。本 change 是 BREAKING 发布——前后端与数据库 schema 作为一个发布单元切换。
 
 ## 前置条件
 
