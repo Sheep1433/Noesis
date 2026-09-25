@@ -244,12 +244,26 @@ class ScheduledTaskService:
         row = result.scalar_one_or_none()
         return _to_dict(row) if row else None
 
+    @staticmethod
+    def _llm_error_hint(exc: Exception, model_target: str = "平台默认模型") -> str:
+        """LLM 调用失败的用户面提示：不含 SDK 异常类名，按类型给可操作指向。"""
+        text = str(exc)
+        name = type(exc).__name__
+        if "Authentication" in name or "401" in text or "INVALID_TOKEN" in text:
+            return f"模型认证失败，请检查 {model_target} 的 API 凭据配置"
+        if "RateLimit" in name or "429" in text:
+            return "模型限流，请稍后重试"
+        if "Connection" in name or "Connect" in name:
+            return "模型服务连接失败，请检查网络与网关地址"
+        return "模型不可用，请稍后重试或联系管理员检查模型配置"
+
     @classmethod
-    async def parse_natural_language(cls, text: str) -> Dict[str, Any]:
+    async def parse_natural_language(cls, text: str, *, user_id: str, db: Any) -> Dict[str, Any]:
         """把自然语言（如「每周一早上9点收集网上资料整理AI Agent最新进展」）解析成定时任务草稿。
 
         仅产出 name / cron_expr / prompt，qa_type 固定 SuperAgent、时区固定 Asia/Shanghai、单任务单会话、不投递。
-        后端用 validate_cron_expr 二次校验。LLM 调用失败（限流/配置）时原样暴露错误，不静默兜底。
+        后端用 validate_cron_expr 二次校验。模型解析与任务执行同链路：用户设置的默认模型优先，
+        无则平台默认——解析与执行因此用同一个模型。LLM 调用失败（限流/配置）时原样暴露错误，不静默兜底。
         """
         raw = (text or "").strip()
         if not raw:
@@ -264,14 +278,27 @@ class ScheduledTaskService:
             f"\n用户输入：{raw}"
         )
         from noesis.llm.factory import get_llm
+        from noesis.llm.runtime_snapshot import set_runtime_model_snapshots
+        from noesis.services.user_llm_service import UserLLMService
 
-        llm = get_llm()
+        # 与任务执行同链路：用户设置的默认模型优先，无则平台默认
+        model_id = await UserLLMService.get_default_model(db, user_id=str(user_id))
+        hint_target = "平台默认模型"
+        if model_id:
+            snapshots = await UserLLMService.resolve_runtime_snapshots(
+                db, user_id=str(user_id), model_id=model_id
+            )
+            if not snapshots:
+                raise ValueError("解析失败：你配置的默认模型不可用，请检查设置页的模型配置")
+            set_runtime_model_snapshots(snapshots)
+            hint_target = f"你配置的模型（{model_id}）"
+        llm = get_llm(model_id=model_id)
         try:
             resp = await llm.ainvoke(prompt)
             content = getattr(resp, "text", "") or str(resp)
         except Exception as e:
             logger.exception("scheduled task NL parse LLM call failed")
-            raise ValueError(f"解析失败，模型不可用或被限流：{type(e).__name__}") from e
+            raise ValueError(f"解析失败，{_llm_error_hint(e, hint_target)}") from e
         data = _extract_json_object(content)
         if data is None:
             raise ValueError("解析失败，请直接编辑表单")

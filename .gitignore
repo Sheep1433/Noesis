@@ -50,3 +50,4 @@ backend/evals/agent/rag/erb_scorer/generated_data/
 
 # 仓库根临时目录（统一进 .tmp/）
 /tmp/
+.zcode/
