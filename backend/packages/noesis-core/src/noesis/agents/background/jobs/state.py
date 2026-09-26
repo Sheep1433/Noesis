@@ -55,7 +55,7 @@ _SLOT_STATUSES = frozenset({
 class BackgroundTask:
     """一个后台任务的公开快照（可安全序列化给 API / 工具）。"""
 
-    # 子 Agent 会话 ID；执行状态与会话历史使用同一身份。
+    # 任务内部唯一号（bg-* 格式）；对外主标识是 child_session_id（独立字段）
     task_id: str
     session_id: str
     user_id: str
