@@ -171,7 +171,7 @@ def _final_model_fallback_error(message: Optional[AIMessage]) -> Optional[str]:
     return None
 
 async def _projection_boundary(task: BackgroundTask, builder: AssistantMessageBuilder) -> None:
-    """投影边界统一收口：任务级来源合并（无条件）+ 子会话投影落库（有标准 run 时）。"""
+    """投影边界统一处理：任务级来源合并（无条件）+ 子会话投影落库（有标准 run 时）。"""
     content = builder.to_dict()
     _merge_task_sources(task, content)
     if task.run_id:
@@ -222,7 +222,7 @@ async def _ensure_agent(entry: _TaskEntry) -> Any:
     entry.model_override 非 None 时以覆盖模型编译（追加消息切换模型后
     compiled_agent 已被置空，这里按新模型重建；同 thread 续跑，历史保留）。
     编译前设置本 turn 推理档位——档位在 LLM 构造时经 ContextVar 固化为
-    请求参数，这里是所有编译路径（首轮/追加消息切参/审批 resume）的唯一收口。
+    请求参数，这里是所有编译路径（首轮/追加消息切参/审批 resume）的唯一处理入口。
     """
     if entry.compiled_agent is None:
         with entry.compiled_lock:
@@ -531,9 +531,9 @@ async def _arun(
     task = entry.task
     if task.status.is_terminal:
         # 调度窗口内已被 cancel（乐观终态已落）：本协程按未启动处理。
-        # 停止族终态直接走停止收口（落库/事件/通知立即补齐——任务未
-        # 执行、无产出可回收，收口本身很快）；其他终态意味着已有完整
-        # 收口路径负责，不重复
+        # 停止族终态直接走停止终态处理（落库/事件/通知立即补齐——任务未
+        # 执行、无产出可回收，终态处理本身很快）；其他终态意味着已有完整
+        # 终态处理路径负责，不重复
         if task.status in _STOP_TERMINALS and not entry.terminal_published:
             await settle_stop(entry, task, None)
         return
@@ -657,7 +657,7 @@ async def _arun(
             )
             source = {"messages": [HumanMessage(content=next_message)]}
         final_fallback_error = outcome.fallback_error
-        # 终态收口（先到获胜）：若停止已抢先受理（乐观 CANCELLED），
+        # 终态处理（先到获胜）：若停止已抢先受理（乐观 CANCELLED），
         # _accept_terminal 把本规格降级为停止语义并保留载荷
         await settle_task(
             entry,
@@ -684,15 +684,15 @@ async def _arun(
         # 投影沿用最后一次边界 persist（mark_terminal content=None 语义）；
         # 部分成果从落库投影回收（覆盖边界前产出；无 DB 降级为空）。
         # 乐观终态下 status 在受理时已落 CANCELLED/TIMED_OUT——守卫不得查
-        # is_terminal（恒 False 导致本分支死亡），以 terminal_published（收口
-        # 是否已发布）为准；停止信号已被冷恢复清除的旧协程消亡于此（不收口，
-        # 复活轮的生命周期归新协程）
+        # is_terminal（恒 False 导致本分支死亡），以 terminal_published（终态
+        # 处理是否已发布）为准；停止信号已被冷恢复清除的旧协程消亡于此（不做
+        # 终态处理，重新执行轮的生命周期归新协程）
         if not entry.terminal_published and (
             entry.cooperative_stop_signalled or not task.status.is_terminal
         ):
             await settle_stop(entry, task, None)
     except Exception as exc:
-        # 收口已完整发布（状态+落库+事件）：迟到异常只记录，不覆盖终态、不重发
+        # 终态处理已完整发布（状态+落库+事件）：迟到异常只记录，不覆盖终态、不重发
         if entry.terminal_published:
             logger.opt(exception=True).error(
                 "bg subagent exception after terminal finalized task_id={}",
@@ -700,7 +700,7 @@ async def _arun(
             )
             return
         # 停止受理中（乐观终态已落）：异常协程正在消亡，不会再有静止
-        # 边界，立即走停止收口（保留部分成果回收），不再判 FAILED；
+        # 边界，立即走停止终态处理（保留部分成果回收），不再判 FAILED；
         # 普通异常走 FAILED（若终态已是停止族，_accept_terminal 自动
         # 降级保留载荷）
         if entry.cooperative_stop_signalled:
@@ -733,10 +733,10 @@ async def _arun_appended_turn(
     params 携带该 turn 的模型/推理档位覆盖；变化时以新参数编译 worker
     （同 thread 续跑）。新 turn 的投影由独立 builder 从零累积（统一管道）。
 
-    前置段（worker 编译 / run 创建）失败经 settle_delivery_failure 收口：
+    前置段（worker 编译 / run 创建）失败经 settle_delivery_failure 处理：
     投递失败不终态化任务——回退先前终态（冷恢复窗口内受理的停止获胜）+
     消息行翻转 dropped + 异常记日志。deliver_message 对本协程 fire-and-forget，
-    异常若不显式收口会滞留在未观察的 concurrent Future 里被静默吞掉（冷
+    异常若不显式处理会滞留在未观察的 concurrent Future 里被静默吞掉（冷
     恢复静默失败事故：跨 loop 连接错误曾走此路径无任何日志）。
     """
     task = entry.task

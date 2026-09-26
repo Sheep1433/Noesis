@@ -37,7 +37,7 @@ Noesis 当前由 `RunService` 创建数据库 Run，进程内 `RunManager` 持�
 - `memory`模式下，未获锁者启动失败；进程内bus无法跨进程传播事件或命令，不能伪装成可横向扩展。
 - follower持续等待 leader变更；leader使用专用连接的短周期heartbeat检测失锁，并为每次任期创建不可复用的本地leadership token。token失效后，dispatcher、publisher、command consumer和persistence callback都必须停止接受新工作。
 
-只有execution leader可以把queued Run claim为running并调用 `RunManager.start()`。claim在同一SQL条件中验证 `t_runtime_leader.leader_term`仍等于当前term，并将Run的 `owner_instance_id` 与新增 `owner_term` 写为当前任期。所有checkpoint、状态推进和terminal CAS均验证active状态与 `(owner_instance_id, owner_term)`；新term建立后旧leader不能claim新Run。新leader获得lock并提交新term后先执行recovery，以新term作为recovery writer，按固定顺序收口与装载：旧term已进入running/retrying/hitl_pending的Run统一收口为 `interrupted/server_restart`；遗留子代理Run收口（ERROR/SUBAGENT_PROCESS_RESTARTED）；遗留定时任务运行记录收口（interrupted，任务行last_status同步）；未送达后台任务通知装载回内存注册表。未被claim且 `owner_instance_id IS NULL` 的queued Run保留并正常dispatch。recovery由leader晋升回调触发——进程启动只是晋升的首例，redis模式下运行中的leader切换同样必须重跑完整recovery后才开始dispatch。
+只有execution leader可以把queued Run claim为running并调用 `RunManager.start()`。claim在同一SQL条件中验证 `t_runtime_leader.leader_term`仍等于当前term，并将Run的 `owner_instance_id` 与新增 `owner_term` 写为当前任期。所有checkpoint、状态推进和terminal CAS均验证active状态与 `(owner_instance_id, owner_term)`；新term建立后旧leader不能claim新Run。新leader获得lock并提交新term后先执行recovery，以新term作为recovery writer，按固定顺序完成终态处理与装载：旧term已进入running/retrying/hitl_pending的Run统一标记为 `interrupted/server_restart`；遗留子代理Run标记终态（ERROR/SUBAGENT_PROCESS_RESTARTED）；遗留定时任务运行记录标记终态（interrupted，任务行last_status同步）；未送达后台任务通知装载回内存注册表。未被claim且 `owner_instance_id IS NULL` 的queued Run保留并正常dispatch。recovery由leader晋升回调触发——进程启动只是晋升的首例，redis模式下运行中的leader切换同样必须重跑完整recovery后才开始dispatch。
 
 这里的全局term不是按Run lease：它不允许运行中迁移，也不需要定时更新每个Run，只负责在advisory lock连接丢失而旧进程尚未察觉的窗口中拒绝旧任期的新claim和迟到数据库写入。
 
@@ -47,11 +47,11 @@ Noesis 当前由 `RunService` 创建数据库 Run，进程内 `RunManager` 持�
 
 `POST /api/chat/runs` 在任意worker执行同一数据库事务：校验用户/session和`client_request_id`，完成slash command改写与本轮模型/运行参数解析，写入user message、assistant骨架及 `queued + owner_instance_id=NULL` 的Run，然后返回Run身份。Run新增受schema约束的 `launch_payload`，保存启动producer所需的不可变、可序列化输入；不得依赖请求进程内的 `CreateRunRequest`、session状态快照或 `CurrentUser` 对象。
 
-dispatcher只根据Run、`launch_payload`和数据库中的用户记录重建执行上下文。launch payload不得保存密码、Cookie、CSRF、API key等认证秘密；用户在dispatch前被删除或禁用时，Run按明确start error收口。解析后的model identity必须写入launch payload，用户随后修改默认模型不得影响queued Run。
+dispatcher只根据Run、`launch_payload`和数据库中的用户记录重建执行上下文。launch payload不得保存密码、Cookie、CSRF、API key等认证秘密；用户在dispatch前被删除或禁用时，Run按明确start error标记终态。解析后的model identity必须写入launch payload，用户随后修改默认模型不得影响queued Run。
 
 事务提交后通过所选Run bus发布轻量 `run-created(run_id)` wake-up。execution leader收到后先检查本地容量，再从PostgreSQL读取并以 `queued + owner IS NULL + 不存在pending stop` 条件claim为running，然后创建本地RunHandle。为防通知丢失或进程在提交后崩溃，leader在两种模式下都按有界周期扫描queued Run；数据库唯一约束继续保证同session只有一个active Run。wake-up失败不回滚已提交的创建事务。
 
-claim成功后若 `RunManager.start()`、Agent装配或producer注册在同步启动阶段失败，leader必须将该Run和assistant骨架收口为明确error，不能保留没有内存owner的running行。进程在claim后崩溃则由下一任leader recovery收口为interrupted。
+claim成功后若 `RunManager.start()`、Agent装配或producer注册在同步启动阶段失败，leader必须将该Run和assistant骨架标记为明确error，不能保留没有内存owner的running行。进程在claim后崩溃则由下一任leader recovery标记为interrupted。
 
 ### 3. Run bus只广播实时通知，并提供memory/redis adapter
 
@@ -99,7 +99,7 @@ stop使用 `(run_id, stop)` 作为稳定dedupe identity；HITL使用 `(run_id, i
 
 stop/HITL API保持项目统一HTTP 200响应，但数据明确返回 `command_id`、`command_status=accepted|completed|rejected` 与最新Run snapshot。`accepted`只表示durable command已提交，不表示producer已经停止或恢复；前端立即订阅/继续订阅同一Run并显示“正在停止”或“正在继续”，直到SSE/snapshot出现权威状态。API可短暂等待快速ack，但超时仍返回accepted，不能仅凭Redis publish成功返回completed，也不新增仅用于轮询command的公开API。
 
-queued Run收到stop时，command consumer直接以CAS将其收口为partial/stopped而不创建producer；dispatcher claim条件必须排除pending stop。
+queued Run收到stop时，command consumer直接以CAS将其标记为partial/stopped而不创建producer；dispatcher claim条件必须排除pending stop。
 
 若dispatcher先成功claim为running，stop则按正常active Run取消路径执行。两种事务顺序都只能得到“未启动即停止”或“启动后取消”之一，不能出现stop已确认但producer随后启动。command完成后保留有限时长（`distributed_runs.command_retention_days`，默认7天），由leader低频批量清理；保留期同时是幂等去重窗口，超窗重复提交按新command处理并重验Run状态。API提交command后对完成做有界等待（默认5秒）：leader同进程执行的常见路径（如stop在cancel grace内完成）返回 `completed`，超时返回 `accepted`；该等待是纯读取观察，不得因等待失败回滚command。
 
@@ -113,7 +113,7 @@ queued Run收到stop时，command consumer直接以CAS将其收口为partial/sto
 - durable command仍可落库并由leader补扫；API在ack前不宣称成功。
 - Redis恢复后，remote subscription执行subscribe-first握手，不直接续接旧sequence。
 
-`memory`模式不探测Redis，也不会在运行中切换到Redis；进程内bus异常按进程故障处理。若第二个backend连接同一业务库并选择memory模式，必须在接收流量前因拿不到exclusive execution lock而失败。运行模式只能在所有active Run完成或被明确收口、进程重启后切换，禁止热切换造成两种bus同时活跃。
+`memory`模式不探测Redis，也不会在运行中切换到Redis；进程内bus异常按进程故障处理。若第二个backend连接同一业务库并选择memory模式，必须在接收流量前因拿不到exclusive execution lock而失败。运行模式只能在所有active Run完成或被明确标记终态、进程重启后切换，禁止热切换造成两种bus同时活跃。
 
 降级只阻止新Run进入系统；已有Run的查询、snapshot stream、stop和HITL command仍须可用，避免基础设施降级反而使用户无法停止高风险操作。只有PostgreSQL或HTTP核心依赖不可用时，Web readiness才返回503。
 
@@ -190,7 +190,7 @@ checkpointer、知识库读服务等每个HTTP进程需要的依赖可以各自�
 6. 更新health/readiness、Compose和多进程E2E；以一个backend切换Redis，再扩为两个，并执行memory/redis共享契约测试。
 7. 验收后删除请求进程直接start producer的旧分支；仅保留memory模式必要的单实例启动门禁，不保留两套业务实现。
 
-回滚前停止创建新Run并drain/收口active Run，将backend缩为一个进程后回滚代码。新增command表先保留，确认旧版本不读取后再单独清理。
+回滚前停止创建新Run并drain/标记终态active Run，将backend缩为一个进程后回滚代码。新增command表先保留，确认旧版本不读取后再单独清理。
 
 ## Open Questions
 

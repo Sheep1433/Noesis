@@ -146,7 +146,7 @@ class TelegramTextStreamer:
                 await self._flush_locked(with_cursor=True)
 
     async def finalize_segment(self) -> bool:
-        """收口当前文本气泡（去 cursor）；返回是否发过内容。准备下一段。"""
+        """完成并发出当前文本气泡（去 cursor）；返回是否发过内容。准备下一段。"""
         async with self._lock:
             had = bool(self._text.strip()) or self._message_id is not None
             if had:
@@ -319,7 +319,7 @@ class TelegramOutbound:
                 )
             return
 
-        # 若刚有文本段，收口文本并开新进度气泡（Hermes content → __reset__）
+        # 若刚有文本段，先完成该文本气泡并开新进度气泡（Hermes content → __reset__）
         if self.text.has_content:
             await self.text.finalize_segment()
             await self.tools.reset_bubble()

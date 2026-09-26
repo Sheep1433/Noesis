@@ -78,7 +78,7 @@ queued → running ↔ retrying
 completed | partial | error | interrupted
 ```
 
-启动 recovery 只在 advisory lock 获取成功后执行。它把数据库中无 live owner 的非终态 Run 收口为 `interrupted/server_restart`，保留最近 snapshot，将 assistant 收口为 partial，不调用模型和工具。
+启动 recovery 只在 advisory lock 获取成功后执行。它把数据库中无 live owner 的非终态 Run 标记为 `interrupted/server_restart`，保留最近 snapshot，将 assistant 标记为 partial，不调用模型和工具。
 
 终态 Run 在配置的 retention 后释放 producer task、projection、buffer、subscriber 与 persistence writer；后续查询从 PostgreSQL 返回。
 

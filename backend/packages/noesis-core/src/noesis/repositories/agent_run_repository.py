@@ -126,7 +126,7 @@ class AgentRunRepository:
 
         subagent run 由进程内 executor 调度（mark_started / mark_terminal），
         且不写 launch_payload——dispatcher claim 后重建上下文必然失败并把
-        run 收口成 RUN_START_FAILED（排队任务整段对话丢失），必须排除。
+        run 标记为 RUN_START_FAILED（排队任务整段对话丢失），必须排除。
         """
         result = await self.db.execute(
             select(TAgentRun)

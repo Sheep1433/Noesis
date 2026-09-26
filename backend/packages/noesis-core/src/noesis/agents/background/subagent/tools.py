@@ -365,7 +365,7 @@ class AsyncSubagentToolsMiddleware(
             except ValueError as exc:
                 return f"取消失败：{exc}"
             if task.get("kind") == "subagent" or task["status"] == "timed_out":
-                # 协作路径（running 受理）/ 超时：执行侧收口异步回收部分产出
+                # 协作路径（running 受理）/ 超时：执行侧终态处理异步回收部分产出
                 return (
                     f"已取消：{task['task_id']}（部分产出在后台回收中，"
                     "稍后可用 check_async_task 查收）"

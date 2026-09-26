@@ -165,7 +165,7 @@ SSE 注释 keepalive 不分配 sequence，也不触发 checkpoint。反向代理
 
 ## 10. 已知限制
 
-- 进程崩溃后只用最近 checkpoint 收口为 `interrupted/server_restart`，不重放模型或工具。
+- 进程崩溃后只用最近 checkpoint 标记为 `interrupted/server_restart`，不重放模型或工具。
 - 当前不支持多 active backend、owner 转移或跨进程 command routing；未引入 Redis Pub/Sub。
 - Channel outbound 是进程内有界队列，不是 durable spool。
 

@@ -509,7 +509,7 @@ class ScheduledTaskService:
                 return
             await cls._execute_and_finalize(db, row, run)
 
-    # 主 run 返回后会话交付链的收口等待：轮询间隔与总超时（工程常量）
+    # 主 run 返回后会话交付链的完成等待：轮询间隔与总超时（工程常量）
     _DELIVERY_POLL_SECONDS = 5.0
     _DELIVERY_TIMEOUT_SECONDS = 6 * 60 * 60.0
 
@@ -518,11 +518,11 @@ class ScheduledTaskService:
         """等待会话交付链完成：无活跃后台任务、无待发续跑唤醒、无活跃 run。
 
         主 run 返回不代表交付完成——无人值守会话的真实产出在子任务与
-        continuation 链里。终态判定须等链收口，否则 scheduled run 在
+        continuation 链里。终态判定须等交付链完成，否则 scheduled run 在
         「子任务已转后台」时就自欺为 succeeded（生产事故缺口 3）。
         会话曾有后台任务时要求连续两次空闲观测（间隔一个轮询周期），
         关闭「任务刚落终态、去抖唤醒尚未武装」的毫秒竞态。
-        超时返回 False（调用方按 delivery_timeout 收口，防 watcher 泄漏）。
+        超时返回 False（调用方按 delivery_timeout 标记终态，防 watcher 泄漏）。
         """
         from noesis.agents.background.executor import BackgroundTaskExecutor
         from noesis.services.bg_continuation_service import has_pending_wake
@@ -587,7 +587,7 @@ class ScheduledTaskService:
     async def _execute_and_finalize(
         cls, db: AsyncSession, row: TUserScheduledTask, run: TUserScheduledTaskRun
     ) -> TUserScheduledTaskRun:
-        """执行主体 + 等待交付链收口 + 终态判定（手动触发 / 调度 / 重试共用）。"""
+        """执行主体 + 等待交付链完成 + 终态判定（手动触发 / 调度 / 重试共用）。"""
         run.status = "running"
         run.started_at = now_ms()
         await db.commit()
@@ -603,7 +603,7 @@ class ScheduledTaskService:
             if not delivered:
                 run.status = "failed"
                 run.error_category = "delivery_timeout"
-                run.error_message = "任务执行完成但会话交付链长时间未收口（后台任务或续跑未结束）"
+                run.error_message = "任务执行完成但会话交付链长时间未完成（后台任务或续跑未结束）"
             elif session_id:
                 ok, reason = cls._delivery_outcome(session_id)
                 if not ok:
@@ -691,7 +691,7 @@ class ScheduledTaskService:
         task = result.scalar_one_or_none()
         if task is None:
             raise ValueError("任务已删除，无法重试")
-        # 与手动触发同款：建 queued 记录立即返回，执行后台派发（等交付链收口才落终态）
+        # 与手动触发同款：建 queued 记录立即返回，执行后台派发（等交付链完成才落终态）
         run = await cls._create_run_record(db, task, trigger_source="retry", idempotency_key=idempotency_key, retry_of=old.id)
         asyncio.create_task(cls._run_in_background(task.id, str(user_id), run.id))
         return _run_to_dict(run)
@@ -755,11 +755,11 @@ class ScheduledTaskService:
 
     @staticmethod
     async def reconcile_interrupted_runs(db: AsyncSession) -> int:
-        """进程重启后收口遗留的 queued/running 运行记录为 interrupted。
+        """进程重启后将遗留的 queued/running 运行记录标记为 interrupted。
 
         调度器与手动触发的执行体都在进程内（_run_in_background await
-        全程，含交付链收口等待），重启即丢失；claim_due_tasks 已推进
-        next_run_at（下次触发照常），但遗留行无人收口——设置页永久显示
+        全程，含交付链完成等待），重启即丢失；claim_due_tasks 已推进
+        next_run_at（下次触发照常），但遗留行无人标记终态——设置页永久显示
         running、任务行 last_status 卡死。终态行（succeeded/failed/
         cancelled/interrupted）不动；须在调度器启动前调用（lifespan
         leader-only 对账块）。
@@ -788,7 +788,7 @@ class ScheduledTaskService:
             )
         await db.commit()
         if interrupted:
-            logger.warning("定时任务重启对账：{} 个遗留 run 已收口为 interrupted", interrupted)
+            logger.warning("定时任务重启对账：{} 个遗留 run 已标记为 interrupted", interrupted)
         return interrupted
 
     @staticmethod

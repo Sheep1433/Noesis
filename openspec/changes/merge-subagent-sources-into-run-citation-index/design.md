@@ -8,7 +8,7 @@
 子 Agent 流式执行（executor._run_turn_via_pipeline）
   └─ on_tool_end / on_chat_model_end → _projection_boundary
        └─ _merge_task_sources(task, builder.to_dict())      # task.retrieval_sources 累积（≤MAX_TASK_SOURCES=200）
-终态收口（executor._finalize_task → _publish_terminal_events → _notify_terminal）
+终态处理（executor._finalize_task → _publish_terminal_events → _notify_terminal）
   └─ notifications.record(sources=task.retrieval_sources.values())
 主 Agent 下一次模型调用（BgNotifyMiddleware._injected_messages）
   └─ register_pending_sources(session_id, label, notice["sources"])  # _PENDING 合并（≤200/任务）

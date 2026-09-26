@@ -9,15 +9,15 @@
 - [x] 2.1 将现有advisory lock封装为leader elector（key 不变），新增含cluster identity的单行 t_runtime_leader term（migration 202608270001）；错cluster id时fail-fast（ClusterIdMismatchError）；token 失效拒绝 claim（claim 侧已接，checkpoint/terminal/Redis envelope 校验随 P4）
 - [x] 2.2 使用独立migration advisory lock串行执行 `init_database()`（阻塞轮询+超时）；双worker并发验证归入 2.4 双进程测试（migration lock 语义已单测；live-PG 用例已跑绿：term 递增/跨实例锁互斥/foreign cluster fail-fast）
 - [x] 2.0 子会话分布式 spec delta（2026-09-19 落定，spec 见 distributed-run-coordination）：子会话 RunEvent 复用 Run bus channel 与 envelope（run_id=子会话 Run、sequence=投影 sequence、owner_term 校验；进程内投递内核仅 leader，follower 以 DB 投影为 snapshot 恢复）；后台任务面板/目录事件并入 4.7 信令广播（hint 语义，初始快照本就走 DB）；后台任务用户停止复用 5.x durable command 由 leader 执行；后台任务执行面（注册表/隔离循环/调度器/continuation/通知注入）leader-only、查询面 DB 权威；新 leader 晋升先执行完整 recovery（主 Run + 子代理 Run + 定时任务记录 + 通知装载，启动为首例）。否决候选：子会话端点 leader-only + 网关亲和（leader 故障期页面不可用，削弱多实例收益）
-- [x] 2.3 仅在leader启动/停止Run recovery、dispatcher、scheduler、memory dream、Telegram和Feishu runtime，以及后台任务执行面（executor 注册表/隔离循环/continuation/通知注入，见 2.0 delta）；follower不运行这些后台任务。recovery 绑定晋升回调（进程启动为首例）：主 Run 收口 → 子代理 Run 收口 → 定时任务记录收口 → 通知装载，全部完成后才允许 dispatch（已落地：lifespan 重构为晋升回调模式——_on_promotion 承载 leader 面装配（attach_bus/run 事件桥/command consumer/四段 recovery），_start_leader_runtime 承载 dispatcher/调度器/信令通道/记忆任务；redis 模式 run_as_worker（follower 待命 + 5s 重竞选循环），memory 保持 acquire fail-fast；follower 不启动任何 singleton 与 bg 执行面）
+- [x] 2.3 仅在leader启动/停止Run recovery、dispatcher、scheduler、memory dream、Telegram和Feishu runtime，以及后台任务执行面（executor 注册表/隔离循环/continuation/通知注入，见 2.0 delta）；follower不运行这些后台任务。recovery 绑定晋升回调（进程启动为首例）：主 Run 终态处理 → 子代理 Run 终态处理 → 定时任务记录终态处理 → 通知装载，全部完成后才允许 dispatch（已落地：lifespan 重构为晋升回调模式——_on_promotion 承载 leader 面装配（attach_bus/run 事件桥/command consumer/四段 recovery），_start_leader_runtime 承载 dispatcher/调度器/信令通道/记忆任务；redis 模式 run_as_worker（follower 待命 + 5s 重竞选循环），memory 保持 acquire fail-fast；follower 不启动任何 singleton 与 bg 执行面）
 - [x] 2.4 增加双进程测试，覆盖redis模式leader唯一、follower ready、失锁取消、优雅关闭先drain后释放lock、重新选举（含晋升回调重跑完整 recovery）、singleton runtime与后台任务执行面不重复；memory模式第二进程fail-fast；follower 上子代理目录/任务详情查询以 DB 权威应答（已落地：test_leader_election_two_process 真实 PG+Redis——唯一 leader、follower 待命不晋升、A 释放后 B 晋升 term 递增、第二进程 acquire fail-fast（独立连接直验 PG 互斥）；lifespan mock 测试补 is_leader；运行中切主的完整矩阵归 8.x 双进程 E2E）
 
 ## 3. Run创建与可靠dispatch
 
 - [x] 3.1 将 `RunService.create` 收敛为事务性创建消息骨架与queued Run（owner NULL + owner_term 0），持久化不含认证秘密的schema化 launch_payload（extra 白名单过滤 + 敏感键静态断言）；model identity 在 create 时解析冻结（resolved_model，command 改写经 notify_agent_query 仍在 producer 内）
-- [x] 3.2 实现leader Run dispatcher（run_dispatcher.py）：从launch payload与数据库用户重建上下文，容量预检（满则保持queued）、wake-up 100ms 去抖 + queued补扫、claim 先提交再启动（避免行锁互等）；启动失败 RUN_START_FAILED 收口（pending stop 条件随 P2 command 落地）
-- [x] 3.3 区分未claim queued Run和旧leader active Run（recovery 跳过 `queued+owner IS NULL`，owner_term >= 当前任期防御性跳过）；旧leader active Run按 `interrupted/server_restart` 收口且工具结果标unknown
-- [x] 3.4 覆盖wake-up丢失（补扫兜底测试）、并发claim输家、默认模型queued期间变化（resolved_model 冻结测试）、用户失效（上下文重建失败收口测试）、leader失锁未感知（token 失效拒绝 claim 测试）、claim后崩溃（recovery 按 owner_term 收口测试）；旧term迟到写入的完整矩阵随 P4 envelope 校验
+- [x] 3.2 实现leader Run dispatcher（run_dispatcher.py）：从launch payload与数据库用户重建上下文，容量预检（满则保持queued）、wake-up 100ms 去抖 + queued补扫、claim 先提交再启动（避免行锁互等）；启动失败标记为 RUN_START_FAILED（pending stop 条件随 P2 command 落地）
+- [x] 3.3 区分未claim queued Run和旧leader active Run（recovery 跳过 `queued+owner IS NULL`，owner_term >= 当前任期防御性跳过）；旧leader active Run按 `interrupted/server_restart` 标记终态且工具结果标unknown
+- [x] 3.4 覆盖wake-up丢失（补扫兜底测试）、并发claim输家、默认模型queued期间变化（resolved_model 冻结测试）、用户失效（上下文重建失败终态处理测试）、leader失锁未感知（token 失效拒绝 claim 测试）、claim后崩溃（recovery 按 owner_term 终态处理测试）；旧term迟到写入的完整矩阵随 P4 envelope 校验
 
 ## 4. Redis RunEvent与无窗口订阅
 
@@ -63,7 +63,7 @@
 
 ## 8. 验收
 
-- [x] 8.1 后端全量测试通过，并执行memory/Redis共享契约、真实PostgreSQL、真实Redis和双backend集成测试；核心场景不得mock掉进程边界（全量 1689 passed / 8 skipped：memory/redis 参数化契约、真实 PG 集成（停止收口/通知持久化/调度对账/选举）、真实 Redis 契约均在 CI/本地可跑；核心场景未 mock 进程边界——双进程选举用真实 advisory lock + Redis）
+- [x] 8.1 后端全量测试通过，并执行memory/Redis共享契约、真实PostgreSQL、真实Redis和双backend集成测试；核心场景不得mock掉进程边界（全量 1689 passed / 8 skipped：memory/redis 参数化契约、真实 PG 集成（停止终态处理/通知持久化/调度对账/选举）、真实 Redis 契约均在 CI/本地可跑；核心场景未 mock 进程边界——双进程选举用真实 advisory lock + Redis）
 - [ ] 8.2 前端test/lint/build与真实双backend Playwright E2E全部通过，跨worker多Tab、重连、stop和HITL场景不得skip【前端 lint/vitest/build 已过；双 backend Playwright E2E 归 staging 验收】
 - [ ] 8.3 以一个leader、至少一个follower执行100 active Run、每Run 2–3 Tab、每Run 10–30 events/s容量测试，记录leader/follower p50/p95/p99、Redis吞吐、event-loop lag、RSS、queue/checkpoint lag、gap恢复和terminal delivery【容量报告（100 active Run/2-3 Tab/10-30 events/s）需 staging 双副本环境，归 runbook】
 - [ ] 8.4 在staging执行Redis重启、leader崩溃/重选、滚动发布、跨worker stop/HITL与回滚演练，并将命令和结果写入release runbook【staging 演练（Redis 重启/leader 崩溃/滚动发布/跨 worker stop）+ 回滚步骤，写入 release runbook 后勾选】

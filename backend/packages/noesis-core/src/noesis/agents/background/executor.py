@@ -2,7 +2,7 @@
 
 机制在 jobs/（state/loop/registry/events/settle），两类执行内核分别在
 subagent/kernel.py 与 shell/kernel.py，kind 行为注册表在 kinds.py；本模块
-保留 Executor 门面（任务台 CRUD + shutdown 编排）与运行时端口装配。
+保留 Executor 门面（后台任务运行时 CRUD + shutdown 编排）与运行时端口装配。
 """
 
 from __future__ import annotations
@@ -452,8 +452,8 @@ class BackgroundTaskExecutor:
                 queued = True
             else:
                 queued = False
-                # 复活中和：记录先前终态快照（投递失败回退用），清停止信号、
-                # 取消旧协程与在飞对账任务、复位收口旗标（复活轮发自己的
+                # 重新执行中：记录先前终态快照（投递失败回退用），清停止信号、
+                # 取消旧协程与在飞对账任务、复位终态处理旗标（重新执行轮发自己的
                 # 终态事件与通知）
                 entry.prev_terminal_snapshot = {
                     "status": task.status.value,
@@ -504,7 +504,7 @@ class BackgroundTaskExecutor:
             task.assistant_message_id = str(launch.get("assistant_message_id") or "") or None
             task.projection_sequence = 0
             # 创建窗口内已受理停止：不提交执行——停止终态获胜（不回退），
-            # 消息行已被 launch 采纳为该 run 的输入，随 run 停止收口
+            # 消息行已被 launch 采纳为该 run 的输入，随 run 停止的终态处理一并处理
             stopped_during_launch = entry.cooperative_stop_signalled
         if not stopped_during_launch:
             loop = _ensure_loop()
@@ -695,8 +695,8 @@ class BackgroundTaskExecutor:
                 behavior_of(task.kind).request_stop(entry) == StopMode.COOPERATIVE
             ):
                 # 乐观终态：状态直接落 CANCELLED（快照立即对前端生效）；
-                # 执行侧经协作停止信号在静止边界干净退出，收口异步补
-                # 投影回收与通知。宽限/对账 watchdog 保持武装：异步收口
+                # 执行侧经协作停止信号在静止边界干净退出，终态处理异步补
+                # 投影回收与通知。宽限/对账 watchdog 保持武装：异步终态处理
                 # 卡死时对账兜底（此时终态已落，只补通知与落库）
                 task.status = BgTaskStatus.CANCELLED
                 task.stop_reason = "cancelled"
@@ -718,12 +718,12 @@ class BackgroundTaskExecutor:
                 snapshot = task.to_dict(include_progress=False)
         # 锁外发布：drain / 终态通知需要再拿 _TASKS_LOCK
         if not entry.cooperative_stop_signalled:
-            # 即时终态（锁内已置状态供快照返回）：收口只补落库与事件
+            # 即时终态（锁内已置状态供快照返回）：终态处理只补落库与事件
             settle_task_sync(entry, _stop_terminal(entry))
-        # RUNNING 协作停止：终态事件与通知由执行协程的静止边界收口发布
+        # RUNNING 协作停止：终态事件与通知由执行协程的静止边界完成终态处理时发布
         # （携带完整 outcome 的部分成果回收）；宽限超时经硬杀的 CancelledError
-        # 路径收口（outcome=None，进度摘要回收），对账 watchdog 兜底不依赖
-        # 协程配合——cancel 不自起收口协程，避免与执行侧收口竞争 outcome
+        # 路径做终态处理（outcome=None，进度摘要回收），对账 watchdog 兜底不依赖
+        # 协程配合——cancel 不自起终态处理协程，避免与执行侧终态处理竞争 outcome
         return snapshot
 
     # -- 内部委托模块实现（见下方模块函数） ----------------------------

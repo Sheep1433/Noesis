@@ -2,7 +2,7 @@
 
 shell 任务非对话：无 child session / run 行可挂靠，本服务是任务事实在
 DB 侧的唯一写入与读取边界。内存热集回收或跨进程查询由本表回答；进程
-重启对账把非终态行（queued / running）收口为 cancelled——shell 执行环境
+重启对账把非终态行（queued / running）标记为 cancelled——shell 执行环境
 （local_shell 宿主机 / docker 会话容器）不持久化，queued 亦不重建。
 agents 侧经 ShellJobPort 访问（services → agents 方向注册）。
 """
@@ -142,7 +142,7 @@ class BgShellJobService:
 
     @classmethod
     async def reconcile_orphaned(cls, db: Any = None) -> int:
-        """非终态 shell 行收口为 cancelled（进程重启、产出未知）。
+        """非终态 shell 行标记为 cancelled（进程重启、产出未知）。
 
         幂等：仅 queued / running 行受影响；queued 亦不重建（执行环境不
         持久化，重启后无从获取会话沙箱 backend）。

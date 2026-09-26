@@ -1,4 +1,4 @@
-"""自动化运行状态、幂等重试与调度边界（Phase 3：tick 异步化 + 交付链收口判定）。"""
+"""自动化运行状态、幂等重试与调度边界（Phase 3：tick 异步化 + 交付链终态处理判定）。"""
 
 import asyncio
 import time
@@ -114,7 +114,7 @@ async def test_result_summary_prefers_final_delivery_text(monkeypatch: pytest.Mo
 
 @pytest.mark.asyncio
 async def test_subtask_failure_fails_the_run(monkeypatch: pytest.MonkeyPatch) -> None:
-    """交付链收口但存在失败/超时子任务：scheduled run 落 failed（不再自欺 succeeded）。"""
+    """交付链完成终态处理但存在失败/超时子任务：scheduled run 落 failed（不再自欺 succeeded）。"""
     db = _mock_db()
     monkeypatch.setattr(ScheduledTaskService, "_execute_task", AsyncMock(return_value=SimpleNamespace(session_id="session-1", plain_text="转后台")))
     _patch_delivery_chain(
@@ -212,7 +212,7 @@ async def test_duplicate_idempotency_key_returns_existing_run(monkeypatch: pytes
 
 
 # ---------------------------------------------------------------------------
-# 交付链收口等待（_await_session_delivery）
+# 交付链终态处理等待（_await_session_delivery）
 # ---------------------------------------------------------------------------
 
 def _patch_session_state(
@@ -245,7 +245,7 @@ def _patch_session_state(
 
 @pytest.mark.asyncio
 async def test_delivery_wait_blocks_on_running_bg_task(monkeypatch: pytest.MonkeyPatch) -> None:
-    """后台任务在跑：不收口；任务全部终态后按双观测确认空闲。"""
+    """后台任务在跑：不完成终态处理；任务全部终态后按双观测确认空闲。"""
     calls = _patch_session_state(
         monkeypatch,
         tasks_by_poll=[[{"status": "running"}], [{"status": "completed"}], [{"status": "completed"}]],
@@ -257,7 +257,7 @@ async def test_delivery_wait_blocks_on_running_bg_task(monkeypatch: pytest.Monke
 
 @pytest.mark.asyncio
 async def test_delivery_wait_immediate_when_no_bg_tasks(monkeypatch: pytest.MonkeyPatch) -> None:
-    """主 run 未派生后台任务：单次空闲观测即收口（不加无谓延迟）。"""
+    """主 run 未派生后台任务：单次空闲观测即完成终态处理（不加无谓延迟）。"""
     calls = _patch_session_state(monkeypatch, tasks_by_poll=[[]])
     assert await ScheduledTaskService._await_session_delivery("1", "session-1") is True
     assert calls["n"] == 1
@@ -265,7 +265,7 @@ async def test_delivery_wait_immediate_when_no_bg_tasks(monkeypatch: pytest.Monk
 
 @pytest.mark.asyncio
 async def test_delivery_wait_blocks_on_pending_wake(monkeypatch: pytest.MonkeyPatch) -> None:
-    """去抖窗口内待发续跑唤醒：交付链未收口，不返回。"""
+    """去抖窗口内待发续跑唤醒：交付链未完成终态处理，不返回。"""
     calls = _patch_session_state(monkeypatch, tasks_by_poll=[[]], pending_wake=True)
     monkeypatch.setattr(ScheduledTaskService, "_DELIVERY_TIMEOUT_SECONDS", 0.05)
     assert await ScheduledTaskService._await_session_delivery("1", "session-1") is False
@@ -274,7 +274,7 @@ async def test_delivery_wait_blocks_on_pending_wake(monkeypatch: pytest.MonkeyPa
 
 @pytest.mark.asyncio
 async def test_delivery_wait_timeout_returns_false(monkeypatch: pytest.MonkeyPatch) -> None:
-    """长期不收口：超时返回 False（调用方按 delivery_timeout 落终态，防 watcher 泄漏）。"""
+    """长期不完成终态处理：超时返回 False（调用方按 delivery_timeout 落终态，防 watcher 泄漏）。"""
     _patch_session_state(monkeypatch, tasks_by_poll=[[{"status": "running"}]])
     monkeypatch.setattr(ScheduledTaskService, "_DELIVERY_TIMEOUT_SECONDS", 0.05)
     assert await ScheduledTaskService._await_session_delivery("1", "session-1") is False
@@ -282,7 +282,7 @@ async def test_delivery_wait_timeout_returns_false(monkeypatch: pytest.MonkeyPat
 
 @pytest.mark.asyncio
 async def test_delivery_wait_blocks_on_active_run(monkeypatch: pytest.MonkeyPatch) -> None:
-    """continuation run 仍在执行：不收口。"""
+    """continuation run 仍在执行：不完成终态处理。"""
     from noesis.repositories.agent_run_repository import AgentRunRepository
 
     _patch_session_state(monkeypatch, tasks_by_poll=[[{"status": "completed"}]])

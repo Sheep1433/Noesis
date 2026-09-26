@@ -51,20 +51,20 @@ abortController?.abort()
 
 关键区分维持不变：`TimeoutError`（前台超时）不取消、自动转后台；内层取消不级联（任务自身已终止）；仅外层取消级联。
 
-父 run 不等待子任务完全静止：子任务停止本身是乐观终态（受理即 cancelled，`agent-background-tasks` 既有语义），父的 partial 快照不依赖子任务收尾；子任务协作退出、部分产出回收与终态通知由其自身收口路径异步完成。与 dsh「父 step await child.whenIdle()」的差异源于我们的子任务停止受理即终态，无需父侧等待。
+父 run 不等待子任务完全静止：子任务停止本身是乐观终态（受理即 cancelled，`agent-background-tasks` 既有语义），父的 partial 快照不依赖子任务收尾；子任务协作退出、部分产出回收与终态通知由其自身终态处理路径异步完成。与 dsh「父 step await child.whenIdle()」的差异源于我们的子任务停止受理即终态，无需父侧等待。
 
 ### D3 auto-continue 压制：会话级「用户已停止」标记，下一条用户消息解除
 
-`bg_continuation_service` 新增会话级停止标记：置位点在 **`RunService.stop`**（用户停止 API 的唯一入口，`chat_api.py:1128`；channel 无停止入口）——普通路径与 `_force_finalize_stopped` 兜底路径都在该函数内，一处置位全覆盖。**不得**下沉到 `run_manager.stop`：`_finalize_start_failure` 等内部清理路径也调用它，误置会把启动失败清理当成用户停止。置位时同时取消该会话 pending wake（复用 `note_user_activity` 的取消逻辑）；**检查点在 `maybe_continue` 入口**（单一收口，覆盖 debounce=0 直调路径与去抖定时器路径两条进路）；`note_user_activity`（用户真实消息到达）清除标记。内存态，与 `_wake_counts` 同生命周期，`reset_for_tests` 一并重置。
+`bg_continuation_service` 新增会话级停止标记：置位点在 **`RunService.stop`**（用户停止 API 的唯一入口，`chat_api.py:1128`；channel 无停止入口）——普通路径与 `_force_finalize_stopped` 兜底路径都在该函数内，一处置位全覆盖。**不得**下沉到 `run_manager.stop`：`_finalize_start_failure` 等内部清理路径也调用它，误置会把启动失败清理当成用户停止。置位时同时取消该会话 pending wake（复用 `note_user_activity` 的取消逻辑）；**检查点在 `maybe_continue` 入口**（单一处理入口，覆盖 debounce=0 直调路径与去抖定时器路径两条进路）；`note_user_activity`（用户真实消息到达）清除标记。内存态，与 `_wake_counts` 同生命周期，`reset_for_tests` 一并重置。
 
 备选（仅取消当前 pending wake，不清后续）：停止 1 分钟后后台任务终态仍会冒 continuation run，恰是用户抱怨的场景；且「停止」后需要用户再确认一次才恢复自动续跑，语义反复。弃。
 
-### D4 文案单一来源：「用户已停止生成」，覆盖正常与兜底两条收口路径
+### D4 文案单一来源：「用户已停止生成」，覆盖正常与兜底两条终态处理路径
 
-用户停止有两条终态收口路径，文案须一致：
+用户停止有两条终态处理路径，文案须一致：
 
-- **正常路径**：`RunAborted` 收口（`chat/runs/projection.py`）对未完成工具的 reconcile 文案由「本次工具执行已停止」改为「用户已停止生成」，与前端 `appendUserStopNotice` 的工具错误文案统一。`RunCompleted` / `HitlRequired` 的 reconcile 各有独立语境（完成时残留、审批暂停），不属用户停止，不改。
-- **兜底路径**：`_force_finalize_stopped`（进程重启后停止、producer 收尾失败）现复用 `run_recovery_service.mark_running_tools_unknown`，工具文案「服务中断，操作结果未确认」+ 类别 `server_restart`——用户停止语义下两者皆错。改用 builder 既有的 `reconcile_nonterminal_tools(CANCELLED, "用户已停止生成")`（与正常路径同款收口，state/outcome/文案一致），server_restart 恢复路径维持 `mark_running_tools_unknown` 不动。
+- **正常路径**：`RunAborted` 终态处理（`chat/runs/projection.py`）对未完成工具的 reconcile 文案由「本次工具执行已停止」改为「用户已停止生成」，与前端 `appendUserStopNotice` 的工具错误文案统一。`RunCompleted` / `HitlRequired` 的 reconcile 各有独立语境（完成时残留、审批暂停），不属用户停止，不改。
+- **兜底路径**：`_force_finalize_stopped`（进程重启后停止、producer 收尾失败）现复用 `run_recovery_service.mark_running_tools_unknown`，工具文案「服务中断，操作结果未确认」+ 类别 `server_restart`——用户停止语义下两者皆错。改用 builder 既有的 `reconcile_nonterminal_tools(CANCELLED, "用户已停止生成")`（与正常路径同款终态处理，state/outcome/文案一致），server_restart 恢复路径维持 `mark_running_tools_unknown` 不动。
 
 中断说明段落（*（本轮回复已被用户中断。）*）维持前端按 `extra.finish_reason === 'stopped'` 派生（实时与历史回放已一致）。`failure_notice.py` 死代码删除范围（已复核无生产调用方）：`append_user_stop_notice_to_content`、`append_disconnect_partial_content`；`append_stream_failure_notice_to_content` **有**生产调用方（`services/qa/helpers.py:334`），保留。
 

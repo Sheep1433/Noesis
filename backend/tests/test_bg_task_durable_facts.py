@@ -44,7 +44,7 @@ from noesis.agents.background.jobs.state import (
         ("error", "error", "failed"),
         ("partial", "cancelled", "cancelled"),
         ("partial", "timeout", "timed_out"),
-        # 截断沿用现行收口规则：任务级已完成（不制造续聊资格悬崖）
+        # 截断沿用现行终态处理规则：任务级已完成（不制造续聊资格悬崖）
         ("partial", "truncated", "completed"),
         ("partial", "stopped", "cancelled"),
         ("partial", None, "cancelled"),

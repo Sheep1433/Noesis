@@ -54,7 +54,7 @@ backend lifespan SHALL 在接收流量前通过专用 PostgreSQL 连接获取固
 
 ### Requirement: Run recovery SHALL 在单实例所有权确立后执行
 
-Run recovery、scheduler 与 channel runtime SHALL 只在 advisory lock 获取成功后启动。未持 lock 的实例 SHALL NOT 扫描或收口数据库中的非终态 Run。
+Run recovery、scheduler 与 channel runtime SHALL 只在 advisory lock 获取成功后启动。未持 lock 的实例 SHALL NOT 扫描或终态化数据库中的非终态 Run。
 
 #### Scenario: 未获得所有权
 

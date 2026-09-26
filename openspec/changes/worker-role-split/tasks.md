@@ -9,9 +9,9 @@
 
 ## 2. 对账阶段化（Phase 1）
 
-- [x] 2.1 `services/run_recovery_service.py`：僵尸判定改「heartbeat 超时」+ 阶段化分流——`last_sequence=0 且 snapshot IS NULL 且 launch_payload 非空` → 重置 queued + 清 `owner_instance_id` 与 `heartbeat_at`（**claim_epoch 保留递增不归零**——归零会制造 epoch 碰撞，第一代超长假死僵尸可通过校验）；否则收口 interrupted（保留现有部分成果语义）
+- [x] 2.1 `services/run_recovery_service.py`：僵尸判定改「heartbeat 超时」+ 阶段化分流——`last_sequence=0 且 snapshot IS NULL 且 launch_payload 非空` → 重置 queued + 清 `owner_instance_id` 与 `heartbeat_at`（**claim_epoch 保留递增不归零**——归零会制造 epoch 碰撞，第一代超长假死僵尸可通过校验）；否则标记为 interrupted（保留现有部分成果语义）
 - [x] 2.2 `server/bootstrap/leader_runtime.py`：阶段化收敛在 `recover_orphaned_runs` 内部实现，对账步骤清单对外接口未变（`_main_runs` 调用不变、顺序语义不变）——`test_leader_runtime_order.py` 全绿无需改写
-- [x] 2.3 单测：未碰世界 run 重置后被再认领执行；已碰世界 run 收口 interrupted 且部分成果保留；heartbeat 未超时的 run 不被对账触碰
+- [x] 2.3 单测：未碰世界 run 重置后被再认领执行；已碰世界 run 标记为 interrupted 且部分成果保留；heartbeat 未超时的 run 不被对账触碰
 
 ## 3. 认领循环 worker 化 + fencing 管道（Phase 2）
 
@@ -38,7 +38,7 @@
 ## 6. 回归与验收
 
 - [x] 6.1 单测全绿 + `tests/api_contract` + `test_doc_contract` 契约门禁
-- [x] 6.2 集成（真库，2026-09-23 验收通过）：双 worker 并发认领无双跑（4 run 并发 epoch 全=1）；worker kill -9 → lease_ttl+周期对账收口 interrupted/server_restart（已碰世界）；未碰世界 run 重置 queued → 存活 worker 再认领（epoch 1→2）续跑到 completed（358 事件）；停止命令经分片消费生效（owner worker 消费 completed/stopped:partial，非 owner worker 日志零命中）
+- [x] 6.2 集成（真库，2026-09-23 验收通过）：双 worker 并发认领无双跑（4 run 并发 epoch 全=1）；worker kill -9 → lease_ttl+周期对账标记为 interrupted/server_restart（已碰世界）；未碰世界 run 重置 queued → 存活 worker 再认领（epoch 1→2）续跑到 completed（358 事件）；停止命令经分片消费生效（owner worker 消费 completed/stopped:partial，非 owner worker 日志零命中）
   - 验收附带发现并修复：周期对账误杀活跃 run（僵尸判定改 heartbeat 超时）、骨架 snapshot 误判已碰世界（判据改 parts 内容）、web 入口缺 /health
 - [x] 6.3 三进程手动验收（2026-09-23，部分通过）：双 web 双路 SSE 286 事件完全一致（跨 web hub + 多标签页 ✅）；定时任务经 control 准点触发（cron 15:21 → 15:21:27 创建 automation run → worker 认领执行到终态 ✅）；断线重连补发——**部分通过**：终态 run 重连（快照+[DONE] 短路）正常，运行中重连的实时流受存量 redis-py reader bug 阻塞（docs/bug/2026-09-23-redis-pubsub-reader-reconnect-deaf.md，快照兜底路径正常）；Telegram 通道消费未验收（环境无 bot token，通道 disabled）
   - 双 web 进程下信令消费向：经 hub 的双 web 事件通路已验证（286 事件一致）；信令 channel 消费向未单独验收

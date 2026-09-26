@@ -1,7 +1,7 @@
-"""真实 DB 的停止收口集成测试。
+"""真实 DB 的停止终态处理集成测试。
 
 覆盖单测盲区：任务携带真实 run_id / child_session_id / assistant_message_id 时，
-停止收口经 SubagentSessionPort 调用真实服务——collect_partial_output 从落库
+停止终态处理经 SubagentSessionPort 调用真实服务——collect_partial_output 从落库
 投影回收部分成果、mark_terminal 把 run 行终态化。端口缺方法的事故（collect_
 partial_output 只加在服务上漏了端口委托）正藏在这个盲区：单测任务无 run_id，
 端口调用根本不会执行。
@@ -43,7 +43,7 @@ pytestmark = [
     pytest.mark.integration,
     pytest.mark.skipif(
         os.getenv("NOESIS_LIVE_POSTGRES_TEST") != "1",
-        reason="设置 NOESIS_LIVE_POSTGRES_TEST=1 后运行真实 PostgreSQL 收口集成测试",
+        reason="设置 NOESIS_LIVE_POSTGRES_TEST=1 后运行真实 PostgreSQL 终态处理集成测试",
     ),
 ]
 
@@ -116,7 +116,7 @@ async def _insert_child_rows(db, user_id: str) -> dict[str, str]:
     # 分批 flush 保证 FK 顺序：会话 → 消息 → run（UOW 按表名排序不可依赖，
     # 与 launch 的「循环依赖分批 flush」同一约束）
     db.add_all([
-        TChatSession(id=parent_id, user_id=user_id, title="停止收口集成测试",
+        TChatSession(id=parent_id, user_id=user_id, title="停止终态处理集成测试",
                      created_at=now, updated_at=now, next_message_sequence=1),
         TChatSession(id=child_id, parent_id=parent_id, user_id=user_id, title="子任务",
                      kind="subagent", extra={"origin": "subagent"},
@@ -194,7 +194,7 @@ async def _wait_cancelled(executor: BackgroundTaskExecutor, task_id: str) -> dic
         if task and task["status"] == BgTaskStatus.CANCELLED.value:
             return task
         await asyncio.sleep(0.1)
-    pytest.fail("停止未在 30s 内收口")
+    pytest.fail("停止未在 30s 内完成终态处理")
 
 
 async def _run_stop_scenario(pg_manager, *, hard_kill: bool) -> None:
@@ -209,7 +209,7 @@ async def _run_stop_scenario(pg_manager, *, hard_kill: bool) -> None:
     try:
         task_id = executor.start(
             worker_factory=_build_worker,
-            description="硬取消收口集成" if hard_kill else "停止收口集成",
+            description="硬取消终态处理集成" if hard_kill else "停止终态处理集成",
             session_id=ids["parent_id"],
             user_id=user_id,
             child_session_id=ids["child_id"],

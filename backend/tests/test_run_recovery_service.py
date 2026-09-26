@@ -139,7 +139,7 @@ async def test_recovery_keeps_unclaimed_queued_runs(monkeypatch) -> None:
 
     recovered = await RunRecoveryService.recover_orphaned_runs(db, heartbeat_lease_ms=60_000)
 
-    # 只收口旧任期 running run；queued 未 claim 的存活
+    # 只对旧任期 running run 标记终态；queued 未 claim 的存活
     finalized_ids = [call.kwargs["run_id"] for call in repository.finalize.await_args_list]
     assert finalized_ids == ["run-running"]
     assert recovered == 1
@@ -149,7 +149,7 @@ async def test_recovery_keeps_unclaimed_queued_runs(monkeypatch) -> None:
 async def test_recovery_skips_live_heartbeat_runs(monkeypatch) -> None:
     """心跳存活的 run 跳过（worker 正常执行中——周期对账的安全前提）。
 
-    2026-09-23 实测教训：周期对账若按「已认领即孤儿」收口，control 每
+    2026-09-23 实测教训：周期对账若按「已认领即孤儿」标记终态，control 每
     30s 误杀一批正在执行的 run。僵尸判定唯一依据是 heartbeat 超时。
     """
     import time
@@ -191,7 +191,7 @@ async def test_recovery_skips_live_heartbeat_runs(monkeypatch) -> None:
 
 @pytest.mark.asyncio
 async def test_recovery_skips_subagent_runs(monkeypatch) -> None:
-    """子 Agent run 不走通用对账（统一由 reconcile_orphaned_runs 收口 ERROR）。"""
+    """子 Agent run 不走通用对账（统一由 reconcile_orphaned_runs 标记为 ERROR）。"""
     subagent_run = SimpleNamespace(
         id="run-sub",
         origin="subagent",
@@ -225,7 +225,7 @@ async def test_recovery_skips_subagent_runs(monkeypatch) -> None:
 @pytest.mark.asyncio
 async def test_recovery_run_only_finalize_for_poisoned_message(monkeypatch) -> None:
     """毒丸数据回归：assistant 消息已终态而 run 遗留非终态——不炸启动，
-    仅收口 run 行（完整 finalize 不调用，消息保持原终态不被覆盖）。"""
+    仅对 run 行标记终态（完整 finalize 不调用，消息保持原终态不被覆盖）。"""
     from noesis.chat.runs import RunStatus
     poisoned_run = SimpleNamespace(
         id="run-poison",
@@ -284,7 +284,7 @@ def _reset_table_update_result():
 
 @pytest.mark.asyncio
 async def test_recovery_resets_unstarted_run_to_queued(monkeypatch) -> None:
-    """已 claim 但未产出任何事件的 run：重置 queued 等待再认领，不收口。"""
+    """已 claim 但未产出任何事件的 run：重置 queued 等待再认领，不做终态处理。"""
     unstarted = SimpleNamespace(
         id="run-unstarted",
         origin="web",
@@ -332,7 +332,7 @@ async def test_recovery_resets_unstarted_run_to_queued(monkeypatch) -> None:
 async def test_recovery_resets_skeleton_snapshot_run(monkeypatch) -> None:
     """create_run 落库即写 {"parts": []} 骨架——骨架不算碰世界，仍走重置。
 
-    2026-09-23 实测回归：容器 truthy 判定让未启动 run 被误收口。
+    2026-09-23 实测回归：容器 truthy 判定让未启动 run 被误标记终态。
     """
     skeleton = SimpleNamespace(
         id="run-skeleton",
@@ -373,7 +373,7 @@ async def test_recovery_resets_skeleton_snapshot_run(monkeypatch) -> None:
 
 @pytest.mark.asyncio
 async def test_recovery_does_not_reset_started_run(monkeypatch) -> None:
-    """已产出事件（last_sequence>0）的 run：不重置，走收口 interrupted。"""
+    """已产出事件（last_sequence>0）的 run：不重置，标记为 interrupted。"""
     started = SimpleNamespace(
         id="run-started",
         origin="web",
@@ -417,7 +417,7 @@ async def test_recovery_does_not_reset_started_run(monkeypatch) -> None:
 
 @pytest.mark.asyncio
 async def test_recovery_does_not_reset_without_launch_payload(monkeypatch) -> None:
-    """无 launch_payload 的未启动 run（无法重建 producer）：不重置，收口。"""
+    """无 launch_payload 的未启动 run（无法重建 producer）：不重置，直接标记终态。"""
     broken = SimpleNamespace(
         id="run-broken",
         origin="web",

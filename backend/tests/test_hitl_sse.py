@@ -191,7 +191,7 @@ def test_child_hitl_keeps_parent_task_after_task_stack_is_no_longer_active() -> 
         )
         if part.get("type") == "tool-input-available"
     )
-    # 模拟 task stack 已收口，但 LangGraph parent_ids 仍能证明 interrupt 属于该 task。
+    # 模拟 task stack 已完成终态处理，但 LangGraph parent_ids 仍能证明 interrupt 属于该 task。
     ctx["task_tool_call_stack"] = []
     payload = {
         "type": "hitl-required",

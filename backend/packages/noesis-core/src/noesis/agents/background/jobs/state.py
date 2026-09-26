@@ -15,8 +15,8 @@ from typing import Any, Optional
 # 协作停止宽限默认值（stop_grace_seconds 配置可覆盖）
 STOP_GRACE_SECONDS = 30.0
 # 硬杀后强制终态对账延迟：CancelledError 可能在深层执行链（langgraph/langchain/
-# httpx）被吸收，_arun 的 except CancelledError 收口不保证执行。终态不能依赖
-# 被取消协程的配合——宽限超时硬杀后再给协程这么多秒自行收口，仍未收口则由
+# httpx）被吸收，_arun 的 except CancelledError 终态处理不保证执行。终态不能依赖
+# 被取消协程的配合——宽限超时硬杀后再给协程这么多秒自行完成终态处理，仍未完成则由
 # reconcile 定时器强制落终态
 STOP_RECONCILE_SECONDS = 30.0
 
@@ -45,7 +45,7 @@ class BgTaskStatus(str, Enum):
 
 
 # 占用会话并发槽的状态：排队（QUEUED）只占队列不占槽。
-# 停止是乐观终态（受理即 CANCELLED），无中间收口态占槽
+# 停止是乐观终态（受理即 CANCELLED），无中间终态处理态占槽
 _SLOT_STATUSES = frozenset({
     BgTaskStatus.RUNNING,
 })
@@ -157,7 +157,7 @@ _SHELL_DEFAULT_COMMAND_TIMEOUT = 3600
 def run_status_to_task_status(run_status: str, finish_reason: Optional[str] = None) -> str:
     """run 行状态 → 任务级状态的唯一映射（内存快照与 DB 投影共用同一函数）。
 
-    截断轮沿用现行收口规则：run 落 partial/truncated，任务级视为已完成并带
+    截断轮沿用现行终态处理规则：run 落 partial/truncated，任务级视为已完成并带
     截断标注（kernel 仅 fallback 异常才落任务 FAILED）——DB 投影照搬该规则，
     不制造「回收前可续聊、回收后变 failed 不可续」的资格悬崖。stopped 只
     出现在主 run 路径与 stop API 快照覆写，防御性归并 cancelled。

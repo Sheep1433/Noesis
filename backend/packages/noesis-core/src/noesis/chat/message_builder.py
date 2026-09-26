@@ -811,7 +811,7 @@ class AssistantMessageBuilder:
         *,
         error_category: str = "unknown",
     ) -> int:
-        """停止/重启时不推断远程副作用，收口所有未完成工具。"""
+        """停止/重启时不推断远程副作用，将所有未完成工具标记为终态。"""
         count = 0
         for part in self._content.parts:
             if not isinstance(part, ToolPart) or is_terminal_tool_state(part.state):

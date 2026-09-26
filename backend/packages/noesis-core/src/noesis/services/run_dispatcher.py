@@ -7,7 +7,7 @@ enable-distributed-sse-pubsub 决策 2：任意 worker 的 create 只写
 ``FOR UPDATE SKIP LOCKED`` 减少同批竞争空转（正确性不依赖它）。
 
 claim 条件：queued 且未被认领；容量满则跳过等下轮（保持 queued，
-不收口 error）。claim 成功但启动失败必须收口（RUN_START_FAILED），
+不标记 error）。claim 成功但启动失败必须标记终态（RUN_START_FAILED），
 不留无 producer 的 running 行。持有期间的心跳与失去持有的自停由
 RunService 的心跳协程负责（claim_epoch fencing）。
 """
@@ -145,7 +145,7 @@ class RunDispatcher:
                     str(run.user_id), fresh_db
                 )
             except Exception:
-                # payload 损坏或用户已删除/禁用：claim 已提交，必须收口不留僵尸
+                # payload 损坏或用户已删除/禁用：claim 已提交，必须标记终态不留僵尸
                 logger.exception(
                     "dispatcher 启动前上下文重建失败 run_id={}", run_id
                 )
@@ -165,7 +165,7 @@ class RunDispatcher:
                 await RunService._finalize_start_failure(run)
             except Exception:
                 logger.exception(
-                    "dispatcher 启动失败收口失败 run_id={}", run_id
+                    "dispatcher 启动失败终态处理失败 run_id={}", run_id
                 )
 
 

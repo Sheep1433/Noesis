@@ -2,11 +2,11 @@
 
 分层规则——顶层放跨 kind 共享物，kind 专属物进子包：
 
-- jobs/          共享运行时（状态机/隔离循环/登记表/事件/终态收口）
+- jobs/          共享运行时（状态机/隔离循环/登记表/事件/终态处理）
 - subagent/      subagent kind（turn 链内核 kernel + 角色注册表 roles + 工具面 tools）
 - shell/         shell kind（命令内核 kernel + execute 工具面 tools）
 - task_state.py  两 kind 工具面共用的任务身份 graph state 投影契约
-- executor.py    门面（任务台 CRUD + shutdown 编排）
+- executor.py    门面（后台任务运行时 CRUD + shutdown 编排）
 - kinds.py       kind 行为协议与注册表
 - 其余顶层文件    通知（notifications/notify_middleware）
 

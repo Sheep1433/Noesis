@@ -18,7 +18,7 @@ async def _tick_once() -> None:
     agent 执行不 await 在 tick 里——调度器与 dispatcher/SSE 共享 leader
     事件循环，一个 30 分钟的定时任务会拖垮同批到期任务与全部 Web 实时面
     （Phase 3：tick 只领任务，执行甩出主循环等待路径）。执行体
-    _run_in_background 自带独立 db session 与交付链收口等待。
+    _run_in_background 自带独立 db session 与交付链完成等待。
     """
     async with pg_manager.get_async_session_context() as db:
         try:

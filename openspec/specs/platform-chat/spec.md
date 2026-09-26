@@ -675,7 +675,7 @@ typed RuntimeEventMapper、可靠 Run、多 Tab、snapshot 恢复和统一 Deliv
 
 ### Requirement: run 流客户端 SHALL 为单一传输实现
 
-chat 页的 run 流消费、会话信令流与子会话详情视图的流消费 SHALL 由同一传输客户端实现提供（SSE 帧解析含 `[DONE]`/CRLF、读超时、退避重连、sequence 记账、终态判定、abort/代际隔离、断流后权威快照收口）；各视图仅保留各自的领域事件分派，SHALL NOT 各自维护一套流传输代码。`[DONE]` SHALL 被协议层正确处理，SHALL NOT 产生解析错误日志。
+chat 页的 run 流消费、会话信令流与子会话详情视图的流消费 SHALL 由同一传输客户端实现提供（SSE 帧解析含 `[DONE]`/CRLF、读超时、退避重连、sequence 记账、终态判定、abort/代际隔离、断流后权威快照终态处理）；各视图仅保留各自的领域事件分派，SHALL NOT 各自维护一套流传输代码。`[DONE]` SHALL 被协议层正确处理，SHALL NOT 产生解析错误日志。
 
 #### Scenario: 子会话视图具备读超时保护
 

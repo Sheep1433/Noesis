@@ -199,9 +199,9 @@ RunService SHALL 负责骨架插入；PersistWriter SHALL 负责节流语义检�
 - **WHEN** 用户触发停止且 RunLifecycle 原因为用户停止
 - **THEN** terminal handler SHALL 先将 assistant 更新为 partial 并带上与现网一致的停止语义，且其它 Delivery 随后 SHALL 收到同一终态
 
-### Requirement: 后端重启 SHALL 安全收口悬空 run
+### Requirement: 后端重启 SHALL 安全处理悬空 run 终态
 
-应用启动后 SHALL 识别无活跃执行 owner 的非终态 run，并将其收口为 `interrupted`；对应 assistant SHALL 进入 `partial` 或现有等价非成功终态，`finish_reason=server_restart`。系统 SHALL 保留最近检查点，并将未完成工具标记为结果未知或错误。
+应用启动后 SHALL 识别无活跃执行 owner 的非终态 run，并将其标记为 `interrupted`；对应 assistant SHALL 进入 `partial` 或现有等价非成功终态，`finish_reason=server_restart`。系统 SHALL 保留最近检查点，并将未完成工具标记为结果未知或错误。
 
 系统 SHALL NOT 因恢复悬空 run 自动重新调用模型、工具、子 Agent 或外部平台操作。仅当 HITL pending 的 checkpoint、pending token、用户和消息身份均可验证时，系统 MAY 保持 `hitl_pending`。
 
@@ -237,7 +237,7 @@ RunService SHALL 负责骨架插入；PersistWriter SHALL 负责节流语义检�
 
 每次模型调用 SHALL 使用 run 内可区分的 `attempt_id`，相关正文、reasoning 与工具提议事件 SHALL 能关联该 attempt。不同 attempt 的增量 SHALL NOT 无条件追加为同一正文；已废弃 attempt 的迟到事件 SHALL 被忽略并记录。
 
-系统 MAY 在尚未产生用户可见正文且未开始工具时自动重试。已产生正文时，只有服务端能够从权威 snapshot 撤销该 attempt 的未确认片段才 MAY 替换后重试；否则 SHALL 收口为 partial/error。任何工具、HITL 或子 Agent 已开始后，系统 SHALL NOT 自动重试整个模型步骤。
+系统 MAY 在尚未产生用户可见正文且未开始工具时自动重试。已产生正文时，只有服务端能够从权威 snapshot 撤销该 attempt 的未确认片段才 MAY 替换后重试；否则 SHALL 标记为 partial/error。任何工具、HITL 或子 Agent 已开始后，系统 SHALL NOT 自动重试整个模型步骤。
 
 #### Scenario: 首个 attempt 无输出即断开
 
@@ -266,7 +266,7 @@ RunService SHALL 负责骨架插入；PersistWriter SHALL 负责节流语义检�
 #### Scenario: 远程工具取消结果未知
 
 - **WHEN** 用户停止 run，但远程工具在 grace period 内未确认取消
-- **THEN** run MAY 收口为 partial/stopped
+- **THEN** run MAY 标记为 partial/stopped
 - **AND** 工具结果 SHALL 标记 unknown，不得标记已撤销或成功
 
 #### Scenario: 取消后的迟到结果
@@ -277,7 +277,7 @@ RunService SHALL 负责骨架插入；PersistWriter SHALL 负责节流语义检�
 
 ### Requirement: RunManager SHALL 实施资源上限与确定回收
 
-系统 SHALL 对 active run、单 run 运行时长、event buffer 事件数与字节数、subscriber 队列、输出长度、HITL pending 时长和 shutdown drain 设置可配置上限。超过用户级并发限制时 SHALL 拒绝创建；运行中超过限制时 SHALL 使用稳定错误码收口，不得无限占用内存。
+系统 SHALL 对 active run、单 run 运行时长、event buffer 事件数与字节数、subscriber 队列、输出长度、HITL pending 时长和 shutdown drain 设置可配置上限。超过用户级并发限制时 SHALL 拒绝创建；运行中超过限制时 SHALL 使用稳定错误码完成终态处理，不得无限占用内存。
 
 run 终态可靠落库且超过 terminal 内存保留期后，RunManager SHALL 释放 producer task、builder、event buffer、subscriber 与 terminal future。后续查询 SHALL 从 PostgreSQL 权威 snapshot 返回结果。
 
@@ -290,7 +290,7 @@ run 终态可靠落库且超过 terminal 内存保留期后，RunManager SHALL �
 #### Scenario: HITL 长期无人处理
 
 - **WHEN** hitl_pending 超过配置的有效期
-- **THEN** 系统 SHALL 按既有 HITL timeout 策略收口
+- **THEN** 系统 SHALL 按既有 HITL timeout 策略处理终态
 - **AND** 重复或过期审批 SHALL 不恢复第二个 producer
 
 ### Requirement: P0 部署 SHALL 保持 live owner 可达并提供关联观测
@@ -445,7 +445,7 @@ SseDelivery SHALL 将 RunEvent 编码为现网 stream 事件形状，并在新�
 
 - **WHEN** 主会话 run 被用户停止
 - **THEN** 流 SHALL 以 `run.finished(status=interrupted, finish_reason=stopped)` 结束
-- **AND** 客户端 SHALL 无需依赖 `abort` 编码即可收口
+- **AND** 客户端 SHALL 无需依赖 `abort` 编码即可完成终态处理
 
 #### Scenario: 子 run 终态同形
 

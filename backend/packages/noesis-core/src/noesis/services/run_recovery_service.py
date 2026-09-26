@@ -1,4 +1,4 @@
-"""启动时收口无法继续执行的 Agent run。"""
+"""启动时处理无法继续执行的 Agent run（标记终态）。"""
 
 from __future__ import annotations
 
@@ -30,7 +30,7 @@ class RunRecoveryService:
     async def recover_orphaned_runs(
         cls, db: AsyncSession, *, heartbeat_lease_ms: int
     ) -> int:
-        """收口僵尸 Run（design §2.2：僵尸判定 = heartbeat 超时，启动/周期对账统一）。
+        """将僵尸 Run 标记终态（design §2.2：僵尸判定 = heartbeat 超时，启动/周期对账统一）。
 
         - ``queued + owner IS NULL``：未被 claim 的排队 Run 存活，由
           dispatcher 补扫启动（enable-distributed-sse-pubsub 决策 2）；
@@ -38,7 +38,7 @@ class RunRecoveryService:
           （心跳间隔 = lease/3）。这是周期对账的安全前提：control 每 30s
           扫一轮，活跃 run 必须被跳过；
         - heartbeat 超时（或为 NULL 的 fencing 前遗留行）= 僵尸：未碰世界
-          重置 queued 待再认领，已碰世界收口 ``interrupted/server_restart``，
+          重置 queued 待再认领，已碰世界标记为 ``interrupted/server_restart``，
           工具结果标 unknown，不重放。
         """
         repository = AgentRunRepository(db)
@@ -46,7 +46,7 @@ class RunRecoveryService:
         for run in await repository.list_non_terminal():
             # 子 Agent run 由 SubagentSessionService.reconcile_orphaned_runs
             # 统一对账（ERROR/SUBAGENT_PROCESS_RESTARTED——executor 状态在进程内，
-            # 重启即不可恢复）；此处收口会与其终态语义按调用顺序隐式切分。
+            # 重启即不可恢复）；此处做终态处理会与其终态语义按调用顺序隐式切分。
             if run.origin == "subagent":
                 continue
             if run.status == RunStatus.QUEUED.value and not run.owner_instance_id:
@@ -61,13 +61,13 @@ class RunRecoveryService:
             run_snapshot = run.snapshot if isinstance(run.snapshot, dict) else {}
 
             # 阶段化重置（worker-role-split）：未碰世界的 run 优先重排队而非
-            # 收口。判据安全性——last_sequence=0 即连 message-start 都未发布，
+            # 标记终态。判据安全性——last_sequence=0 即连 message-start 都未发布，
             # 而任何工具执行前必先发布 tool-input 事件，故该状态下工具不可
             # 能执行过（模型调用幂等可重跑）；claim_epoch 保留递增不归零，
             # 超长假死僵尸的旧 epoch 永不等于重置后再认领的新值。
             # snapshot 判据看 parts 内容而非容器：create_run 落库即写
             # ``{"parts": []}`` 骨架，骨架不算碰世界（2026-09-23 实测：
-            # 容器 truthy 判定让未启动 run 被误收口 interrupted）。
+            # 容器 truthy 判定让未启动 run 被误标记为 interrupted）。
             if (
                 run_last_sequence == 0
                 and not run_snapshot.get("parts")
@@ -111,8 +111,8 @@ class RunRecoveryService:
             )
             message = message_result.scalar_one_or_none()
             if message is None or message.status != "streaming":
-                # 历史脏数据（消息终态写入方未同步收口 run，如 automation/channel
-                # 链路）：仅收口 run 行、不动消息，下次启动不再重复对账。启动
+                # 历史脏数据（消息终态写入方未同步处理 run 终态，如 automation/channel
+                # 链路）：仅将 run 行标记终态、不动消息，下次启动不再重复对账。启动
                 # 对账持有 leader 锁且先于 dispatcher/scheduler/channel 启动，
                 # SELECT 即权威，无需 CAS 兜底。
                 finalized = await repository.finalize_run_only(
@@ -123,8 +123,8 @@ class RunRecoveryService:
                 )
                 if finalized:
                     logger.warning(
-                        "启动恢复：run {} 的 assistant 消息已终态或缺失，仅收口 run 行 "
-                        "(消息终态写入方未同步收口 run，属历史脏数据)",
+                        "启动恢复：run {} 的 assistant 消息已终态或缺失，仅将 run 行标记终态 "
+                        "(消息终态写入方未同步处理 run 终态，属历史脏数据)",
                         run_id,
                     )
             else:
@@ -193,7 +193,7 @@ class RunRecoveryService:
         await db.commit()
         if recovered or recovered_messages:
             logger.warning(
-                "启动时收口悬空 Agent run_count={} orphan_message_count={}",
+                "启动时将悬空 Agent run 标记终态 run_count={} orphan_message_count={}",
                 recovered,
                 recovered_messages,
             )

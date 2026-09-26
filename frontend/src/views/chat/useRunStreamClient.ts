@@ -3,7 +3,7 @@
  *
  * 主聊天 run 流（followRun）、会话信令流、子会话 run 流共用的唯一传输实现：
  * SSE 帧解析（CRLF / 多行 data / [DONE] / 注释帧）、读超时（半开连接保护）、
- * 有界退避重连、断流后权威快照收口钩子、代际失效检查。不含任何领域事件
+ * 有界退避重连、断流后权威快照终态处理钩子、代际失效检查。不含任何领域事件
  * 分派——事件词汇与终态判定由调用方经 onFrame 处理。
  */
 
@@ -22,11 +22,11 @@ export interface RunStreamTransportOptions {
   /** 第 attempt 次重连（0 起）前的退避毫秒 */
   backoffMs: (attempt: number) => number
   /**
-   * 每次断流后、退避前调用：权威快照收口（内部自行经 onFrame 分派）。
+   * 每次断流后、退避前调用：权威快照终态处理（内部自行经 onFrame 分派）。
    * 抛错向上传播、不重试——快照端点失败意味着恢复链路本身不可用。
    */
   resync?: () => Promise<void>
-  /** 重试耗尽且仍 active 时的收口；缺省抛「连接已中断」 */
+  /** 重试耗尽且仍 active 时的终态处理；缺省抛「连接已中断」 */
   onExhausted?: () => void
   /** 订阅返回这些状态码时永久退出（登录失效 / 会话已删，重连无意义） */
   fatalStatuses?: readonly number[]

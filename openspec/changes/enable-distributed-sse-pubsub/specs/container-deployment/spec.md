@@ -25,7 +25,7 @@ backend SHALL 暴露liveness与readiness语义及实际 `run_bus_backend`。进�
 
 ### Requirement: Run recovery SHALL 在单实例所有权确立后执行
 
-Run recovery与Agent producer SHALL 只在execution leader取得advisory lock后启动。新leader SHALL 先收口旧leader已claim的running/retrying/HITL Run，再dispatch未被claim的queued Run；follower SHALL NOT 扫描收口或执行Run。scheduler、memory dream和messaging runtime SHALL 与leader角色使用同一生命周期边界，避免多进程重复执行。
+Run recovery与Agent producer SHALL 只在execution leader取得advisory lock后启动。新leader SHALL 先处理旧leader已claim的running/retrying/HITL Run的终态，再dispatch未被claim的queued Run；follower SHALL NOT 扫描、标记终态或执行Run。scheduler、memory dream和messaging runtime SHALL 与leader角色使用同一生命周期边界，避免多进程重复执行。
 
 #### Scenario: follower不执行后台任务
 - **WHEN** backend未取得execution leader lock

@@ -547,7 +547,7 @@ async function consumeStream(runId: string, serial: number) {
       isActive: () => serial === requestSerial && !terminalSeen,
       maxAttempts: 6,
       backoffMs: (attempt) => Math.min(800 * (attempt + 1), 4000),
-      // 断流自愈：权威快照收口（终态即就地收尾），否则退避重订阅
+      // 断流自愈：权威快照终态处理（终态即就地收尾），否则退避重订阅
       resync: async () => {
         const snapshot = await getAgentRun(runId)
         handleSnapshot(snapshot)
