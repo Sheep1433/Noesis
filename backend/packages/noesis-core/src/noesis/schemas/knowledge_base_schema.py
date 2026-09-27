@@ -144,6 +144,8 @@ class SearchTiming(BaseModel):
     recall_hits: int = Field(..., description="召回命中数")
     final_hits: int = Field(..., description="最终返回条数")
     search_mode: str = Field(..., description="本次检索模式")
+    rerank_docs: int = Field(0, description="进入 rerank 的候选条数")
+    threshold_filtered: int = Field(0, description="被 score_threshold 过滤掉的条数")
 
 
 class SearchCollectionResponse(BaseModel):

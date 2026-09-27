@@ -200,6 +200,8 @@ export interface SearchTiming {
   recall_hits: number
   final_hits: number
   search_mode: string
+  rerank_docs?: number
+  threshold_filtered?: number
 }
 
 export interface SearchCollectionResponse {
