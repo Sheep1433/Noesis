@@ -356,8 +356,8 @@ def build_all_in_one_app() -> FastAPI:
             resources.push_async_callback(close_knowledge_base)
             run_manager.attach_bus(run_bus)
 
-            # 对账：control 组（主 run 阶段化 + 定时任务）+ worker 组
-            # （executor 热集 + 命令重置 + 通知装载），顺序同三入口
+            # 对账（启动一次性）：control 组（主 run 阶段化 + 定时任务遗留
+            # 收口）+ worker 组（executor 热集 + 命令重置 + 通知装载）
             async with pg_manager.get_async_session_context() as recovery_db:
                 await run_reconcile_group(_control_reconcile_steps(recovery_db))
                 await run_reconcile_group(_worker_reconcile_steps(recovery_db))

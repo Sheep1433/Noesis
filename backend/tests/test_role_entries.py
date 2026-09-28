@@ -72,7 +72,7 @@ def test_memory_bus_fails_fast_for_role_entries() -> None:
 
 
 def test_control_reconcile_order_matches_factory() -> None:
-    """CONTROL_RECONCILE_ORDER（推导值）与步骤工厂产出一致——单一事实源。"""
+    """启动对账（CONTROL_RECONCILE_ORDER）与步骤工厂产出一致——单一事实源。"""
     from server.bootstrap.leader_runtime import (
         CONTROL_RECONCILE_ORDER,
         _control_reconcile_steps,
@@ -81,6 +81,18 @@ def test_control_reconcile_order_matches_factory() -> None:
     steps = _control_reconcile_steps(MagicMock())
     assert [name for name, _ in steps] == CONTROL_RECONCILE_ORDER
     assert CONTROL_RECONCILE_ORDER == ["main_runs", "scheduled_task_runs"]
+
+
+def test_control_periodic_steps_exclude_scheduled_task_runs() -> None:
+    """周期对账（30s）不得包含定时任务收口——reconcile_interrupted_runs
+    无条件标记所有 queued/running 为 interrupted（server_restart），放进
+    周期循环会把运行中的定时任务（5~11 分钟）在第 30 秒误标中断。"""
+    from server.bootstrap.leader_runtime import _control_periodic_steps
+
+    steps = _control_periodic_steps(MagicMock())
+    names = [name for name, _ in steps]
+    assert names == ["main_runs"]
+    assert "scheduled_task_runs" not in names
 
 
 def test_worker_reconcile_order_matches_factory() -> None:
