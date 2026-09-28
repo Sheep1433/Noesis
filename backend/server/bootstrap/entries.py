@@ -248,6 +248,15 @@ def build_worker_app() -> FastAPI:
 
             # 事件发布面：worker 的 run 事件经 bus 广播给 web 进程扇出
             run_manager.attach_bus(run_bus)
+            # 子会话 run 事件桥：worker 身份打标（term=0，与 worker 认领
+            # 的 run 的 owner_term 语义一致），web 面经 hub 订阅
+            from noesis.agents.background.jobs import events as bg_run_events
+            from types import SimpleNamespace as _SNS
+
+            bg_run_events.configure_run_event_bridge(
+                run_bus,
+                lambda: _SNS(instance_id=instance_id, term=0, valid=True),
+            )
 
             # worker 对账（顺序约束：claimed 重置 → 命令消费；queued 重建 → dispatcher）
             async with pg_manager.get_async_session_context() as recovery_db:
@@ -355,6 +364,10 @@ def build_all_in_one_app() -> FastAPI:
             await init_knowledge_base()
             resources.push_async_callback(close_knowledge_base)
             run_manager.attach_bus(run_bus)
+            # 子会话 run 事件桥（leader 选举后装配，同原 main.py 形态）
+            from noesis.agents.background.jobs import events as bg_run_events
+
+            bg_run_events.configure_run_event_bridge(run_bus, lambda: elector.token)
 
             # 对账（启动一次性）：control 组（主 run 阶段化 + 定时任务遗留
             # 收口）+ worker 组（executor 热集 + 命令重置 + 通知装载）
