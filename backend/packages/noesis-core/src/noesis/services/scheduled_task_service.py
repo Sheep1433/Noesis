@@ -16,6 +16,11 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.exc import IntegrityError
 
 from noesis.ids import now_ms
+
+# 非终态 run 状态（与实际写入的状态域一致：queued→running→终态）；
+# 交付等待期间 run.status 已置终态，不在此列。并发护栏用（认领排除
+# 存在非终态 run 的任务）。
+_NON_TERMINAL_RUN_STATUSES = ("queued", "running")
 from noesis.runtime.logging import logger
 from noesis.config.code_enum import IntentEnum
 from noesis.storage.postgres.models.scheduled_task import TUserScheduledTask
@@ -614,6 +619,11 @@ class ScheduledTaskService:
                     run.status = "succeeded"
             else:
                 run.status = "succeeded"
+            # 成功路径清错误字段：防御与历史 interrupted 误标（如周期对账
+            # 误标回写）并存造成的「成功但有错」矛盾态；失败分支保留错误
+            if run.status == "succeeded":
+                run.error_category = None
+                run.error_message = None
             run.session_id = session_id
             summary = (
                 await cls._latest_run_text(str(row.user_id), session_id)
@@ -803,6 +813,14 @@ class ScheduledTaskService:
                     TUserScheduledTask.next_run_at.is_not(None),
                     TUserScheduledTask.next_run_at <= now,
                     TUserScheduledTask.deleted_at.is_(None),
+                    # 并发护栏：上一轮 run 未到终态（交付链最长等 6h）不认领，
+                    # 防止长任务与下一次 cron 触发叠出并发 run 写同一绑定会话
+                    ~TUserScheduledTask.id.in_(
+                        select(TUserScheduledTaskRun.task_id).where(
+                            TUserScheduledTaskRun.task_id == TUserScheduledTask.id,
+                            TUserScheduledTaskRun.status.in_(_NON_TERMINAL_RUN_STATUSES),
+                        )
+                    ),
                 )
             )
             .order_by(TUserScheduledTask.next_run_at.asc())
