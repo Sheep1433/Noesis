@@ -1,11 +1,11 @@
-"""定时任务运行记录重启对账集成测试（Phase 2：scheduled run 收口）。
+"""定时任务运行记录重启对账集成测试（Phase 2：scheduled run 终态处理）。
 
 覆盖生产事故暴露的缺口：调度器在进程内后台执行整个 agent
-（``_run_in_background``，含交付链收口等待），重启即丢失执行体；``claim_due_tasks`` 已推进
-``next_run_at``（下次触发照常），但 queued/running 的运行记录行无人收口
+（``_run_in_background``，含交付链终态处理等待），重启即丢失执行体；``claim_due_tasks`` 已推进
+``next_run_at``（下次触发照常），但 queued/running 的运行记录行无人完成终态处理
 ——设置页永久显示「running」，任务行 last_status 同步卡死。
 
-契约：启动对账把遗留的 queued/running 收口为 interrupted
+契约：启动对账把遗留的 queued/running 标记为 interrupted
 （error_category=server_restart）；终态行（succeeded/failed/cancelled）不动；
 幂等（重复对账零效果）。
 
@@ -72,7 +72,7 @@ async def test_scheduled_run_restart_reconcile() -> None:
     try:
         async with pg_manager.get_async_session_context() as db:
             interrupted = await ScheduledTaskService.reconcile_interrupted_runs(db)
-        assert interrupted == 2, "running + queued 两行应收口为 interrupted"
+        assert interrupted == 2, "running + queued 两行应标记为 interrupted"
 
         async with pg_manager.get_async_session_context() as db:
             statuses = {
@@ -96,8 +96,8 @@ async def test_scheduled_run_restart_reconcile() -> None:
                     )
                 )
             ).one()
-            assert task.last_status == "interrupted", "任务行 last_status 须同步收口"
-            assert task.last_error, "收口须携带可读错误信息"
+            assert task.last_status == "interrupted", "任务行 last_status 须同步标记终态"
+            assert task.last_error, "终态处理须携带可读错误信息"
 
         # 幂等：重复对账零效果
         async with pg_manager.get_async_session_context() as db:

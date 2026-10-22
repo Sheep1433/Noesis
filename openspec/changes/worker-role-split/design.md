@@ -30,7 +30,7 @@ SELECT ... FOR UPDATE SKIP LOCKED LIMIT batch  先圈行再逐行 CAS（纯优�
 
 两条层间纪律：
 
-- **heartbeat 超时判定只属于对账**（§2.2 的分流入口），不属于 claim——心跳超时的 running run 必须先经对账阶段化分流（重置时清 owner / 收口 interrupted），claim 永远只见 `queued AND owner IS NULL` 的行。把超时判定放进 claim 等于绕过"是否已碰世界"的检查。
+- **heartbeat 超时判定只属于对账**（§2.2 的分流入口），不属于 claim——心跳超时的 running run 必须先经对账阶段化分流（重置时清 owner / 标记为 interrupted），claim 永远只见 `queued AND owner IS NULL` 的行。把超时判定放进 claim 等于绕过"是否已碰世界"的检查。
 - **epoch 单调递增、永不归零**：对账重置只清 `owner_instance_id` 与 `heartbeat_at`，`claim_epoch` 保留。归零会制造 epoch 碰撞——第一代认领 epoch=1 的超长假死僵尸，在"归零→再认领到 1"后苏醒，epoch 相等即通过校验，双写。
 
 - **epoch 校验管道**：事件信封携带 `claim_epoch`（发布时从 handle 读）；`apply_event` 与 publisher 提交前比对 DB 侧 epoch——不符即拒（`StaleProducerGeneration` 的同款防御，对象从"全局 leader term"细化为"单 run 认领代次"）。写入侧的终极防线：checkpoint / 终态 CAS 的 UPDATE 带上 `WHERE claim_epoch = :epoch`，僵尸 worker 的迟到写在数据库层被拒。
@@ -47,7 +47,7 @@ running/hitl_pending/retrying 且 heartbeat_at 超过 lease_ttl
   │    → 「未碰世界」：重置 queued + 清 owner_instance_id 与 heartbeat_at
   │      （claim_epoch 保留递增，见 §2.1 层间纪律）
   └─ 已有持久事件或 checkpoint
-       → 「已碰世界」：收口 interrupted（服务重启语义），
+       → 「已碰世界」：标记为 interrupted（服务重启语义），
          部分成果按落库投影保留——副作用不可重放原则不破
 ```
 
@@ -96,6 +96,6 @@ queued run 的认领**只归 worker**；control 与 run 的唯一交集是定时
 ## 6. 验证策略
 
 - 单测：epoch CAS 幂等与递增；**epoch 单调性回归**（对账重置后 epoch 不归零、跨多轮重置递增，超长假死僵尸的旧 epoch 永远不等于当前值）；僵尸写入被双层拒绝（内存 epoch 比对 + DB 条件更新）；阶段化重置的两个分支；命令分片过滤（本进程 run 命令消费、非本进程跳过）；心跳超时判定。
-- 集成（真库）：双 worker 并发认领同批 queued run 无双跑；worker kill -9 后 lease_ttl 内被对账收口；重置 queued 的 run 被另一 worker 认领并执行到终态。
+- 集成（真库）：双 worker 并发认领同批 queued run 无双跑；worker kill -9 后 lease_ttl 内被对账标记为 interrupted；重置 queued 的 run 被另一 worker 认领并执行到终态。
 - 契约：`tests/api_contract` + `test_doc_contract` 全绿；`test_leader_runtime_order.py` 对账顺序语义迁移到新对账模块后同步改写。
 - 手动验收：三进程起本地栈，单 run 双标签页 SSE 一致性 + 停止命令链路 + 定时任务触发（control）全链路；**信令消费向跨 web 进程验证**（发布向已确认走 bus，signal_bridge task 4.7；双 web 进程下跨窗口实时刷新列为显式验证点——不以"SSE 面不变"的断言替代验证）。

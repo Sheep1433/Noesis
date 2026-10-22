@@ -186,7 +186,7 @@ async def run_db_print(
         pump.cancel()
         await asyncio.gather(pump, return_exceptions=True)
         raise
-    # run 收口后终态事件仍在队列里：给 pump 一个排空窗口再放弃
+    # run 标记终态后终态事件仍在队列里：给 pump 一个排空窗口再放弃
     try:
         await asyncio.wait_for(pump, timeout=_DRAIN_TIMEOUT_SECONDS * 3)
     except asyncio.TimeoutError:

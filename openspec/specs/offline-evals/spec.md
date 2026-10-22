@@ -151,30 +151,9 @@ KB 检索评测入口（`evals.kb.erb`，ERB 企业级基准）SHALL 与 `knowle
 - **AND** 已有 tag 的历史结果 SHALL 保持不变
 - **AND** 显式 `--resume` / `--retry-failed` SHALL 为续跑例外：复用同 tag 只追加逐题记录，SHALL NOT 改写已有记录与 manifest 之外的产物
 
-### Requirement: 引用溯源评测
+### Requirement: Agent E2E 判卷
 
-系统 SHALL 提供引用溯源评测：复用 ERB 数据集的 `answer_facts` 与 `gold_answer`，对 GeneralQAAgent 全链路产出的最终回答计算三项指标——引用格式遵循率（citation 契约解析成功率，确定性）、引用正确率（引用文档属于该题 `expected_doc_ids` 的比例，确定性）、事实可溯源率（逐条 answer_fact 是否在引用 chunk 中有支撑，LLM-as-judge）。引用评测 SHALL 与 Agent E2E 判卷共享同一次 agent run，SHALL NOT 为引用指标额外运行 agent。
-
-#### Scenario: 同一次 run 产出引用三指标
-
-- **WHEN** 运行 Agent E2E 评测
-- **THEN** 每题结果 SHALL 同时包含引用格式遵循率、引用正确率与事实可溯源率的判定输入与得分
-
-#### Scenario: 已知引用失败模式回归
-
-- **WHEN** 被评回答包含伪协议头引用（如 `file:` 代替 `kb:`）或张冠李戴引用
-- **THEN** 引用格式遵循率或引用正确率 SHALL 判定该题失败
-- **AND** 该失败 SHALL 在逐题原始记录中标注具体失败模式
-
-#### Scenario: 事实可溯源率由独立 judge 判定
-
-- **WHEN** 计算 answer_fact 的支撑判定
-- **THEN** SHALL 使用与被测 agent 不同的 judge 模型
-- **AND** 10% 样本 SHALL 进入人工抽检清单
-
-### Requirement: Agent E2E 判卷与失败归因
-
-`evals.agent.rag` SHALL 对 ERB 正样本题提供基于 `gold_answer` 的 LLM-as-judge 任务判卷（采纳 / 部分采纳 / 不采纳三档），judge 模型与被测模型分离。runner SHALL 逐题增量落盘并支持断点续跑：启动时按逐题记录中的样本标识跳过已完成题；单题失败 SHALL 记录错误并继续整批，SHALL NOT 中断后续题。对判卷不采纳的题，系统 SHALL 自动关联该题的检索命中记录与工具轨迹，按确定性规则归因到「检索没召回」「工具行为异常」「推理错」三类并产出归因报告；无组件层数据可关联的题 SHALL 标注为待人工复核而非默认归类。通用 Agent（SUPER_AGENT_QA）场景 SHALL 复用既有 DeepResearch Bench 子集评测线（`evals.agent.deepresearch`），SHALL NOT 在本能力内新建通用 Agent 数据集。
+`evals.agent.rag` SHALL 对 ERB 正样本题提供基于 `gold_answer` 的 LLM-as-judge 任务判卷（采纳 / 部分采纳 / 不采纳三档），judge 模型与被测模型分离。runner SHALL 逐题增量落盘并支持断点续跑：启动时按逐题记录中的样本标识跳过已完成题；单题失败 SHALL 记录错误并继续整批，SHALL NOT 中断后续题。失败归因 SHALL 经官方指标交叉读数完成（Document Recall 未命中判为检索问题、检索命中而判卷不采纳判为生成问题，可结合 kb 线逐题原始记录联查），SHALL NOT 依赖独立归因模块。通用 Agent（SUPER_AGENT_QA）场景 SHALL 复用既有 DeepResearch Bench 子集评测线（`evals.agent.deepresearch`），SHALL NOT 在本能力内新建通用 Agent 数据集。
 
 #### Scenario: 断点续跑
 
@@ -182,11 +161,11 @@ KB 检索评测入口（`evals.kb.erb`，ERB 企业级基准）SHALL 与 `knowle
 - **THEN** 已完成题 SHALL 被跳过不重跑
 - **AND** error 状态的题 SHALL 可经显式参数单独重跑
 
-#### Scenario: 失败归因报告
+#### Scenario: 归因交叉读数
 
-- **WHEN** 存在判卷不采纳的题
-- **THEN** 归因报告 SHALL 按三类给出计数与逐题明细
-- **AND** 检索命中且工具轨迹正常但回答错误的题 SHALL 归为「推理错」
+- **WHEN** 某题判卷不采纳且该题标准文档未进入检索结果
+- **THEN** 该题 SHALL 判为检索侧问题
+- **AND** 检索命中标准文档但判卷不采纳的题 SHALL 判为生成侧问题
 
 #### Scenario: 通用 Agent 场景复用既有线
 

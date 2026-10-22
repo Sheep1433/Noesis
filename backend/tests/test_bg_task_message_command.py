@@ -112,7 +112,7 @@ async def test_dispatch_defers_when_running_but_hotset_miss(consumer, command_en
 
 @pytest.mark.asyncio
 async def test_dispatch_rejects_and_flips_when_not_revivable(consumer, command_env, monkeypatch) -> None:
-    """任务不可续（failed/timed_out/error 收口）→ 翻转 dropped + 命令 rejected。"""
+    """任务不可续（failed/timed_out/error 已标记终态）→ 翻转 dropped + 命令 rejected。"""
     command_env.memory_task = {"status": "failed", "completed_at": 100.0}
     with pytest.raises(ConflictException) as exc_info:
         await consumer._deliver_bg_task(_command_row("child-1", "m-1"), "u1")
@@ -125,7 +125,7 @@ async def test_dispatch_rejects_and_flips_when_not_revivable(consumer, command_e
 async def test_dispatch_cancelled_message_accepted_before_stop_is_retained(
     consumer, command_env, monkeypatch,
 ) -> None:
-    """受理先于取消：命令 no_op 保留行（意图保留），任务 SHALL NOT 被复活。"""
+    """受理先于取消：命令 no_op 保留行（意图保留），任务 SHALL NOT 被重新执行。"""
     command_env.memory_task = {
         "status": "cancelled", "completed_at": 1000.0,  # 秒
     }
@@ -150,7 +150,7 @@ async def test_dispatch_cancelled_message_accepted_before_stop_is_retained(
 async def test_dispatch_cancelled_message_accepted_after_stop_revives(
     consumer, command_env, monkeypatch,
 ) -> None:
-    """受理晚于取消（用户对已停任务的主动追问）→ 正常冷恢复复活。"""
+    """受理晚于取消（用户对已停任务的主动追问）→ 正常冷恢复重新执行。"""
     command_env.memory_task = {
         "status": "cancelled", "completed_at": 1000.0,
     }

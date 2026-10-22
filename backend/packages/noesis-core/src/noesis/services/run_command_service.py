@@ -413,7 +413,7 @@ class RunCommandConsumer:
             ).get("completed_at")
             cancelled_ms = int(completed_at * 1000) if completed_at else 0
             if cancelled_ms and info["created_at"] < cancelled_ms:
-                # 受理先于用户停止：意图保留（行保留 pending，待续聊触发），不复活任务
+                # 受理先于用户停止：意图保留（行保留 pending，待续聊触发），不重新执行任务
                 return "cancelled:queued_intent_retained"
         executor = BackgroundTaskExecutor.default()
         await executor.deliver_message(
@@ -434,7 +434,7 @@ class RunCommandConsumer:
             return None
         current = BackgroundTaskExecutor.get(str(target))
         if current is None:
-            # 注册表无此任务：已终态或随进程丢失——幂等收口
+            # 注册表无此任务：已终态或随进程丢失——幂等标记终态
             return None
         try:
             result = BackgroundTaskExecutor.cancel(str(target))

@@ -2,8 +2,8 @@
 
 对账按「谁持有状态谁对账」拆两组：
 
-- **control 对账**（control × 1，advisory lock 防双开）：主 run 阶段化收口
-  （未碰世界重置 queued / 已碰世界收口 interrupted）、定时任务遗留 run。
+- **control 对账**（control × 1，advisory lock 防双开）：主 run 阶段化标记终态
+  （未碰世界重置 queued / 已碰世界标记为 interrupted）、定时任务遗留 run。
 - **worker 对账**（每个 worker 启动时）：子代理 run、后台 shell 任务、
   queued 子任务重建（executor 热集在本进程）、遗留 claimed 命令重置
   （必须先于命令消费者启动）、未送达通知装载。
@@ -23,7 +23,16 @@ from noesis.runtime.logging import logger
 
 
 def _control_reconcile_steps(recovery_db) -> list[tuple[str, Callable[[], Awaitable[Any]]]]:
-    """control 面对账：主 run（阶段化）+ 定时任务。"""
+    """control 启动对账：主 run（阶段化）+ 定时任务遗留收口 + 子 Agent + shell + 通知。
+
+    仅在启动时执行一次（lifespan leader-only 对账块）。定时任务收口
+    （reconcile_interrupted_runs）只属于这里——它无条件标记所有
+    queued/running 的 run 为 interrupted，是为「进程重启后遗留孤儿」
+    设计的一次性收口（docstring：须在调度器启动前调用），放进周期
+    循环会把每个运行中的定时任务（5~11 分钟）在第 30 秒误标中断。
+
+    周期对账用 _control_periodic_steps（不含定时任务收口）。
+    """
 
     async def _main_runs() -> int:
         from noesis.services.run_recovery_service import RunRecoveryService
@@ -40,7 +49,7 @@ def _control_reconcile_steps(recovery_db) -> list[tuple[str, Callable[[], Awaita
 
         interrupted = await ScheduledTaskService.reconcile_interrupted_runs(recovery_db)
         if interrupted:
-            logger.warning("定时任务对账：{} 个遗留 run 已收口为 interrupted", interrupted)
+            logger.warning("定时任务对账：{} 个遗留 run 已标记为 interrupted", interrupted)
         return interrupted
 
     return [
@@ -65,7 +74,7 @@ def _worker_reconcile_steps(recovery_db) -> list[tuple[str, Callable[[], Awaitab
 
         orphaned = await BgShellJobService.reconcile_orphaned(recovery_db)
         if orphaned:
-            logger.warning("后台命令对账：{} 个非终态 shell 任务已收口为 cancelled", orphaned)
+            logger.warning("后台命令对账：{} 个非终态 shell 任务已标记为 cancelled", orphaned)
         return orphaned
 
     async def _rebuild_queued() -> int:
@@ -106,6 +115,29 @@ def _worker_reconcile_steps(recovery_db) -> list[tuple[str, Callable[[], Awaitab
     ]
 
 
+def _control_periodic_steps(recovery_db) -> list[tuple[str, Callable[[], Awaitable[Any]]]]:
+    """control 周期对账（30s）：仅 zombie run 检测。
+
+    明确排除 scheduled_task_runs——定时任务执行体在 control 进程内
+    await 全程（单 control 副本不变量），运行中不存在孤儿；其遗留
+    收口只属于启动对账（_control_reconcile_steps）。
+    """
+
+    async def _main_runs() -> int:
+        from noesis.services.run_recovery_service import RunRecoveryService
+        from noesis.services.run_service import RunService
+
+        await RunRecoveryService.recover_orphaned_runs(
+            recovery_db,
+            heartbeat_lease_ms=int(RunService.HEARTBEAT_LEASE_TTL_SECONDS * 1000),
+        )
+        return 0
+
+    return [
+        ("main_runs", _main_runs),
+    ]
+
+
 async def run_reconcile_group(steps: list[tuple[str, Callable[[], Awaitable[Any]]]]) -> None:
     """顺序执行对账组，异常大声失败（启动期半初始化比崩溃更难排障）。"""
     for _name, step in steps:
@@ -123,7 +155,7 @@ CONTROL_RECONCILE_ORDER = _names(_control_reconcile_steps)
 WORKER_RECONCILE_ORDER = _names(_worker_reconcile_steps)
 
 
-# 周期对账间隔：lease_ttl（60s）的一半——僵尸 run 的收口延迟上界
+# 周期对账间隔：lease_ttl（60s）的一半——僵尸 run 的终态处理延迟上界
 # = lease_ttl 超时判定 + 本间隔。产品逻辑常量（非部署参数）：与心跳
 # 租约配套定档，两部署实例该值理应相同。
 PERIODIC_RECONCILE_INTERVAL_SECONDS = 30.0
@@ -133,7 +165,7 @@ async def start_control_singletons(*, resources: AsyncExitStack) -> None:
     """control 专属 singleton：周期对账、调度器、信令通道、记忆任务。
 
     advisory lock 防双开由调用方（entries）在启动前获取。周期对账
-    （design §2.2）：运行期 heartbeat 超时的僵尸 run 由本循环收口/
+    （design §2.2）：运行期 heartbeat 超时的僵尸 run 由本循环标记终态/
     重置，不等 control 重启。
     """
     from noesis.config.env import MessagingConfig
@@ -187,7 +219,7 @@ async def start_control_singletons(*, resources: AsyncExitStack) -> None:
             await asyncio.sleep(PERIODIC_RECONCILE_INTERVAL_SECONDS)
             try:
                 async with pg_manager.get_async_session_context() as db:
-                    await run_reconcile_group(_control_reconcile_steps(db))
+                    await run_reconcile_group(_control_periodic_steps(db))
             except asyncio.CancelledError:
                 raise
             except Exception:

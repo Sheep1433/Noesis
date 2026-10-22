@@ -55,7 +55,7 @@ def note_user_activity(session_id: str) -> None:
 
 
 def has_pending_wake(session_id: str) -> bool:
-    """去抖窗口内是否有待发的续跑唤醒（会话交付链未收口判定用）。"""
+    """去抖窗口内是否有待发的续跑唤醒（会话交付链未完成判定用）。"""
     return session_id in _pending_wakes
 
 

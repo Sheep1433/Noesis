@@ -2,7 +2,7 @@
 
 事故背景：PG 崩溃恢复期登录报错，`str(exc)` 把
 "the database system is not yet accepting connections..." 整句透给了
-前端 toast（含基础设施细节）。三类收口：
+前端 toast（含基础设施细节）。三类终态处理：
 - OperationalError/InterfaceError（DB 不可达/恢复中）→ 503 + 通用文案
 - 其他 SQLAlchemyError（SQL/完整性）→ 500 + 通用文案（无 SQL 细节）
 - 未知 Exception → 500 + 通用文案（无路径/连接串等细节）

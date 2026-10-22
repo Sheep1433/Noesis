@@ -34,7 +34,7 @@ SuperAgent SHALL 通过进程内后台任务执行器 `BackgroundTaskExecutor` �
 
 任务事实源 SHALL 在 PostgreSQL：subagent 任务为 child session 与其 run 行，shell 任务为 `t_bg_shell_job` 行。内存注册表 SHALL 定位为执行热集——仅承载活跃（queued / running）与近终态（retention 窗口内）任务条目及执行壳（future / watchdog / 追加消息队列 / 编译缓存），SHALL NOT 作为跨重启的任务事实。执行面 SHALL 保持 leader-only：任务状态的写者唯一（leader 进程），内存领先 DB 的部分仅为有界的持久化延迟。
 
-进程重启后启动对账 SHALL 收口遗留：活跃 child run 收口为 error（`SUBAGENT_PROCESS_RESTARTED`；queued 行除外，改走排队重建）；非终态 shell 行（queued / running，不参与重建——shell 执行环境不持久化）收口为 cancelled 并注明进程重启、产出未知；pending 的追加消息行（`extra.pending_run` 标记的 user message 行）按所属任务去向分流：任务将重建排队的保留 pending 并随任务入队；任务被本次对账收口为不可续终态（error）的翻转 dropped 标记；重启前已处可续终态（completed / cancelled）的保留 pending 原状，供冷恢复重载（行保留在会话记录中）。排队任务（仅 child run 行）SHALL 按落库行（queued 状态、`created_at` 升序）重建进程内排队队列。对账 SHALL NOT 调用模型或工具。
+进程重启后启动对账 SHALL 处理遗留：活跃 child run 标记为 error（`SUBAGENT_PROCESS_RESTARTED`；queued 行除外，改走排队重建）；非终态 shell 行（queued / running，不参与重建——shell 执行环境不持久化）标记为 cancelled 并注明进程重启、产出未知；pending 的追加消息行（`extra.pending_run` 标记的 user message 行）按所属任务去向分流：任务将重建排队的保留 pending 并随任务入队；任务被本次对账标记为不可续终态（error）的翻转 dropped 标记；重启前已处可续终态（completed / cancelled）的保留 pending 原状，供冷恢复重载（行保留在会话记录中）。排队任务（仅 child run 行）SHALL 按落库行（queued 状态、`created_at` 升序）重建进程内排队队列。对账 SHALL NOT 调用模型或工具。
 
 `check_task` / `list_tasks` / `cancel_task` 对内存 miss 的任务 SHALL 回退 DB 投影回答（状态映射与内存快照复用同一函数），SHALL NOT 将可从 DB 回答的任务误报为「任务不存在」；对 DB 已终态任务的取消 SHALL 幂等返回该终态快照；对确实无任何 DB 事实的 task_id SHALL 返回可诊断提示。任务投影 SHALL 携带 `subagent_type` 字段（shell 任务为 null）。
 
@@ -58,9 +58,9 @@ SuperAgent SHALL 通过进程内后台任务执行器 `BackgroundTaskExecutor` �
 #### Scenario: 进程重启对账
 
 - **WHEN** 进程重启后启动对账执行
-- **THEN** 重启前活跃的 child run SHALL 被收口为 error，assistant 消息同步置 error
-- **AND** 重启前 running / queued 的 shell 行 SHALL 被收口为 cancelled（错误注明进程重启、产出未知）
-- **AND** 重启前 pending 的追加消息行 SHALL 按所属任务去向分流：任务重建排队的随任务保留入队；被收口为不可续终态（error）的任务，其遗留消息行翻转 dropped；重启前已处可续终态（completed / cancelled）的任务，其 pending 行保留原状（SHALL NOT 静默消失；不可续任务的遗留指示 SHALL NOT 自动执行）
+- **THEN** 重启前活跃的 child run SHALL 被标记为 error，assistant 消息同步置 error
+- **AND** 重启前 running / queued 的 shell 行 SHALL 被标记为 cancelled（错误注明进程重启、产出未知）
+- **AND** 重启前 pending 的追加消息行 SHALL 按所属任务去向分流：任务重建排队的随任务保留入队；被标记为不可续终态（error）的任务，其遗留消息行翻转 dropped；重启前已处可续终态（completed / cancelled）的任务，其 pending 行保留原状（SHALL NOT 静默消失；不可续任务的遗留指示 SHALL NOT 自动执行）
 - **AND** 对账 SHALL NOT 调用模型或工具
 
 #### Scenario: 排队任务重启重建
@@ -68,7 +68,7 @@ SuperAgent SHALL 通过进程内后台任务执行器 `BackgroundTaskExecutor` �
 - **WHEN** 重启前存在排队中的 child run（run 行为 queued），重启后启动对账完成
 - **THEN** 系统 SHALL 按落库行 `created_at` 升序重建进程内排队队列，并发槽可用时按序唤醒
 - **AND** 唤醒候选 SHALL 按落库行 `created_at` 全局升序（与所属会话无关）；会话槽满的候选留队 SHALL NOT 阻塞其他会话候选
-- **AND** queued 的 shell 行 SHALL NOT 被重建（收口为 cancelled，见「进程重启对账」）
+- **AND** queued 的 shell 行 SHALL NOT 被重建（标记为 cancelled，见「进程重启对账」）
 
 #### Scenario: 内存 miss 回退 DB 投影
 
@@ -182,10 +182,10 @@ SuperAgent SHALL 通过进程内后台任务执行器 `BackgroundTaskExecutor` �
 - **命令即引用**：`bg_task_deliver` 命令 payload SHALL 仅携带 `(child_session_id, message_id)` 引用，SHALL NOT 携带消息内容或 turn 参数。
 - **消费幂等**：消费前 SHALL 校验 pending 行仍处 pending 标记，且按 message_id 在执行镜像队列查重；已采纳、已翻转 dropped 或已在镜像队列中的行 SHALL 空转（命令 no_op），SHALL NOT 重复入队或重复开 turn。
 - **认领租约**：claimed 状态的命令 SHALL 有界回收（`claimed_at` 超过租约由补扫重置回 pending；leader 晋升对账 SHALL 将遗留 claimed 行重置回 pending）——leader 在认领与终态标记之间崩溃 SHALL NOT 造成命令永久卡死或 pending 行永久滞留。
-- **消费分派**：消费按目标任务状态分派——行已非 pending → no_op；任务非终态但热集 miss（换主窗口）→ no_op 延后（SHALL NOT 翻转行）；任务可续或活跃 → 入执行队列或冷恢复；任务不可续（failed / timed_out / 对账 error）→ 翻转 pending 行 dropped 并将命令标 rejected（摘要注明原因）。已取消任务的遗留队列消息：**受理先于取消**的 SHALL NOT 复活任务（命令 no_op，行保留 pending 待续聊触发）；**受理晚于取消**的（用户主动追问）SHALL 正常冷恢复。
+- **消费分派**：消费按目标任务状态分派——行已非 pending → no_op；任务非终态但热集 miss（换主窗口）→ no_op 延后（SHALL NOT 翻转行）；任务可续或活跃 → 入执行队列或冷恢复；任务不可续（failed / timed_out / 对账 error）→ 翻转 pending 行 dropped 并将命令标 rejected（摘要注明原因）。已取消任务的遗留队列消息：**受理先于取消**的 SHALL NOT 使任务重新执行（命令 no_op，行保留 pending 待续聊触发）；**受理晚于取消**的（用户主动追问）SHALL 正常冷恢复。
 - **容量执法点在受理**：队列上限（10）以该任务的 pending 行计数判定，超限 SHALL 在受理时拒绝（不写行、不插命令）；消费对已受理行 SHALL NOT 复查容量。执行镜像队列 SHALL NOT 因上限静默淘汰已受理条目。
-- **投递确认与失败语义**：消费采纳 SHALL 复用 launch 事务（清 `pending_run`、盖 `run_id`），SHALL NOT 以独立更新留出「已执行却停在 pending」的崩溃窗口。投递失败 SHALL NOT 终态化任务：冷恢复路径失败时任务 SHALL 回退先前终态（恢复完整先前收口态，SHALL NOT 留下悬空的回收资格判定），链式路径失败时任务 SHALL 保持当前状态，消息行翻转 dropped、调用方收到可诊断错误；冷恢复窗口内受理的停止终态 SHALL 获胜。launch 失败分流：确定性失败 SHALL 直接翻转 dropped，瞬时故障 SHALL 有界重试、耗尽后翻转 dropped——任何失败分支 SHALL NOT 留下滞留 pending 的行。
-- **换主时序**：leader 晋升时 SHALL 先完成对账（遗留 run 收口、queued 重建）再启动命令消费——排队任务的追加消息 SHALL 随任务重建保留并消费，SHALL NOT 因消费先于对账被误翻转 dropped。
+- **投递确认与失败语义**：消费采纳 SHALL 复用 launch 事务（清 `pending_run`、盖 `run_id`），SHALL NOT 以独立更新留出「已执行却停在 pending」的崩溃窗口。投递失败 SHALL NOT 终态化任务：冷恢复路径失败时任务 SHALL 回退先前终态（恢复完整先前终态，SHALL NOT 留下悬空的回收资格判定），链式路径失败时任务 SHALL 保持当前状态，消息行翻转 dropped、调用方收到可诊断错误；冷恢复窗口内受理的停止终态 SHALL 获胜。launch 失败分流：确定性失败 SHALL 直接翻转 dropped，瞬时故障 SHALL 有界重试、耗尽后翻转 dropped——任何失败分支 SHALL NOT 留下滞留 pending 的行。
+- **换主时序**：leader 晋升时 SHALL 先完成对账（遗留 run 终态处理、queued 重建）再启动命令消费——排队任务的追加消息 SHALL 随任务重建保留并消费，SHALL NOT 因消费先于对账被误翻转 dropped。
 - **响应契约**：等待窗口内命令 completed SHALL 返回任务投影快照（冷恢复场景含新 run_id）；命令 rejected SHALL 返回 409 与拒绝原因；等待超时 SHALL 返回受理时投影并携带 `command_status: "accepted"` 字段，SHALL NOT 以 500 或无限等待收场——前端由既有轮询与事件流兜底。
 - **呈现**：前端 SHALL 对 pending 标记消息呈现待执行状态、对 dropped 标记消息呈现未执行标注，SHALL NOT 将 dropped 消息呈现为已执行的正常用户消息。
 - 任务 running：消息排队（FIFO，上限 10）；当前 turn 结束后 executor SHALL 同 thread 链式开新 turn，队列清空前任务保持 running。
@@ -223,11 +223,11 @@ SuperAgent SHALL 通过进程内后台任务执行器 `BackgroundTaskExecutor` �
 - **THEN** 消费者 SHALL 翻转 pending 行 dropped 并将命令标 rejected（摘要注明原因）
 - **AND** 该任务的查询投影 SHALL 携带 `undelivered_messages` 计数，SHALL NOT 留下永久 pending 的行
 
-#### Scenario: 已停止任务的遗留消息不被被动复活
+#### Scenario: 已停止任务的遗留消息不被动触发重新执行
 
 - **WHEN** 任务 running 时受理的追加消息尚未消费，用户停止任务（cancelled），随后命令被消费
 - **THEN** 消费 SHALL 空转（命令 no_op，摘要注明任务已停止），pending 行保留原状
-- **AND** 任务 SHALL NOT 被该消息反向复活开新 turn；用户对该任务的新一轮主动追问 SHALL 正常冷恢复
+- **AND** 任务 SHALL NOT 因该消息被动重新执行开新 turn；用户对该任务的新一轮主动追问 SHALL 正常冷恢复
 
 #### Scenario: 排队任务的指示随任务保留（换主窗口）
 
@@ -254,7 +254,7 @@ SuperAgent SHALL 通过进程内后台任务执行器 `BackgroundTaskExecutor` �
 #### Scenario: 队列满在落库前拒绝
 
 - **WHEN** 某任务 pending 的追加消息已达上限（10）后再追加
-- **THEN** SHALL 返回「补话队列已满」类错误，提示等待当前轮完成或合并指示
+- **THEN** SHALL 返回「追加指令队列已满」类错误，提示等待当前轮完成或合并指示
 - **AND** SHALL NOT 产生滞留的 pending 消息行
 
 #### Scenario: 投递失败不终态化任务
@@ -308,7 +308,7 @@ SuperAgent SHALL 通过进程内后台任务执行器 `BackgroundTaskExecutor` �
 - 前端 SHALL 从帧级事件自组装 assistant 投影，投影函数族与主聊天为同一实现；SHALL NOT 依赖服务端 `message.updated` 全量投影事件；
 - `run.finished` SHALL 终止流并发送 `[DONE]`；
 - 客户端断开（关闭详情抽屉）SHALL 立即退订（generator finally），终态 run 只发快照 + `[DONE]`、不建立订阅；
-- 断流自愈 SHALL 与主聊天同模式：有界重试 + 权威 run 快照收口；重试耗尽且 run 非终态时 SHALL 向用户展示可感知的失败/重连入口，SHALL NOT 静默停留在「生成中」。
+- 断流自愈 SHALL 与主聊天同模式：有界重试 + 权威 run 快照终态处理；重试耗尽且 run 非终态时 SHALL 向用户展示可感知的失败/重连入口，SHALL NOT 静默停留在「生成中」。
 
 前端 SHALL 复用主 Agent 的消息渲染组件（Markdown / 工具块 / 审批卡 / 输入框）；父会话只展示带 child session 引用的轻量卡片，目录与卡片打开同一详情视图。
 
@@ -439,7 +439,7 @@ SuperAgent SHALL 通过进程内后台任务执行器 `BackgroundTaskExecutor` �
 
 ### Requirement: 后台命令任务（execute run_in_background）
 
-`execute` 工具 SHALL 保留单工具形态并增加 `run_in_background` 参数（默认 false，前台执行路径与参数引入前一致）。`run_in_background=true` 时命令 SHALL 作为 shell job 进入现有注册表、状态机、完成通知与前端任务面板管线——不经 worker 编译，直接经 agent backend 执行（local_shell 宿主机 / docker 容器内）。shell job 非对话、无追加消息；任务事实（状态机、命令、结果尾部摘要、时间戳）SHALL 落库 `t_bg_shell_job`，内存 miss 的查询 SHALL 回退该表回答；进程重启时非终态 shell 行 SHALL 由启动对账收口为 cancelled 并注明进程重启、产出未知。工具替换 SHALL 保留 `execute` 工具名（`interrupt_on` 审批按名匹配，危险命令审批仍发生在启动前）。文件系统工具与 backend 接口 SHALL NOT 受影响。
+`execute` 工具 SHALL 保留单工具形态并增加 `run_in_background` 参数（默认 false，前台执行路径与参数引入前一致）。`run_in_background=true` 时命令 SHALL 作为 shell job 进入现有注册表、状态机、完成通知与前端任务面板管线——不经 worker 编译，直接经 agent backend 执行（local_shell 宿主机 / docker 容器内）。shell job 非对话、无追加消息；任务事实（状态机、命令、结果尾部摘要、时间戳）SHALL 落库 `t_bg_shell_job`，内存 miss 的查询 SHALL 回退该表回答；进程重启时非终态 shell 行 SHALL 由启动对账标记为 cancelled 并注明进程重启、产出未知。工具替换 SHALL 保留 `execute` 工具名（`interrupt_on` 审批按名匹配，危险命令审批仍发生在启动前）。文件系统工具与 backend 接口 SHALL NOT 受影响。
 
 #### Scenario: 长命令后台执行
 
@@ -458,11 +458,11 @@ SuperAgent SHALL 通过进程内后台任务执行器 `BackgroundTaskExecutor` �
 - **THEN** SHALL 返回 exit code 与有界的 stdout/stderr 尾部摘要
 - **AND** shell 任务 SHALL 为非对话任务：可查看、可 `cancel_task`，SHALL NOT 支持 `send_message` 续话
 
-#### Scenario: shell 任务落库与重启收口
+#### Scenario: shell 任务落库与重启核查
 
 - **WHEN** shell 任务启动、到达终态或所在进程重启
 - **THEN** 状态迁移与结果尾部摘要 SHALL 落库 `t_bg_shell_job`
-- **AND** 重启前 running 的 shell 行 SHALL 被启动对账收口为 cancelled（注明进程重启、产出未知），重启后查询 SHALL 返回该终态而非「任务不存在」
+- **AND** 重启前 running 的 shell 行 SHALL 被启动对账标记为 cancelled（注明进程重启、产出未知），重启后查询 SHALL 返回该终态而非「任务不存在」
 
 #### Scenario: 超时与生命周期
 
@@ -477,7 +477,7 @@ SuperAgent SHALL 通过进程内后台任务执行器 `BackgroundTaskExecutor` �
 
 ### Requirement: 协作式停止与部分成果回收
 
-停止一个后台子 Agent SHALL 是「乐观终态 + 协作退出 + 成果回收」（对齐主 Agent 停止语义，决策记录 `2026-09-07-子代理停止乐观终态化`）：`cancel`（用户 stop API、主 Agent `cancel_task` 工具）SHALL 同步把任务落为 `cancelled` 终态并立即返回该快照（并发槽随之释放），执行协程取消 fire-and-forget；对已终态任务再次调用 SHALL 幂等返回。执行循环经停止信号在**静止边界**（最新消息为工具结果、或无工具调用的 AI 消息）协作退出——带未应答 tool_calls 的快照点 SHALL 先让工具节点执行完毕再退出，保证线程不残留悬空工具调用。部分成果回收与终态通知 SHALL 由执行协程自身的收口路径完成（静止边界到达时携带完整产出；宽限超时走硬杀收尾，成果从落库投影回收）；终态事件与通知以归属权保证恰好一次。停止受理期间当前步骤触发 HITL interrupt 时停止 SHALL 优先：任务按取消收尾，SHALL NOT 进入 awaiting_approval。超时 watchdog 同为乐观终态（受理即 `timed_out`）；排队与 awaiting_approval 任务的停止 SHALL 即时终态（无执行面）。
+停止一个后台子 Agent SHALL 是「乐观终态 + 协作退出 + 成果回收」（对齐主 Agent 停止语义，决策记录 `2026-09-07-子代理停止乐观终态化`）：`cancel`（用户 stop API、主 Agent `cancel_task` 工具）SHALL 同步把任务落为 `cancelled` 终态并立即返回该快照（并发槽随之释放），执行协程取消 fire-and-forget；对已终态任务再次调用 SHALL 幂等返回。执行循环经停止信号在**静止边界**（最新消息为工具结果、或无工具调用的 AI 消息）协作退出——带未应答 tool_calls 的快照点 SHALL 先让工具节点执行完毕再退出，保证线程不残留悬空工具调用。部分成果回收与终态通知 SHALL 由执行协程自身的终态处理路径完成（静止边界到达时携带完整产出；宽限超时走硬杀收尾，成果从落库投影回收）；终态事件与通知以归属权保证恰好一次。停止受理期间当前步骤触发 HITL interrupt 时停止 SHALL 优先：任务按取消收尾，SHALL NOT 进入 awaiting_approval。超时 watchdog 同为乐观终态（受理即 `timed_out`）；排队与 awaiting_approval 任务的停止 SHALL 即时终态（无执行面）。
 
 停止与续聊 SHALL 执行/意图分离：`cancelled` 与 `completed` 同为可冷恢复终态——停止后 `send_message` SHALL 经冷恢复同 thread 开新 turn（排队中的追加消息意图一并保留消费），受理时 SHALL 清除停止信号并中和旧执行协程与在飞对账任务；`failed` / `timed_out` SHALL 拒绝续聊。任务终态因 cancelled / timed_out 到达时，系统 SHALL 从子会话已落库投影中提取全部文本产出作为部分成果，以「中止前部分产出」标注写入 `task.result`，并使 `check_task` 返回与父 Agent 通知注入一致携带（终态通知 preview 从提取内容开头截取，标注前缀不占预览字符预算）。
 
@@ -485,7 +485,7 @@ SuperAgent SHALL 通过进程内后台任务执行器 `BackgroundTaskExecutor` �
 
 - **WHEN** 用户对 running 子任务调用 `POST /api/chat/runs/{run_id}/stop`
 - **THEN** 响应 SHALL 为 DB run 快照形状且 status 覆写为 interrupted（乐观终态，不等待收尾）
-- **AND** 前端任务卡 SHALL 同步显示「已取消」（部分产出稍后由后台收口写入，check_task 可查收）
+- **AND** 前端任务卡 SHALL 同步显示「已取消」（部分产出稍后由后台终态处理写入，check_task 可查收）
 
 #### Scenario: 重复停止幂等
 
@@ -518,8 +518,8 @@ SuperAgent SHALL 通过进程内后台任务执行器 `BackgroundTaskExecutor` �
 #### Scenario: 停止宽限兜底
 
 - **WHEN** 停止受理后超过 `stop_grace_seconds` 执行协程仍未到静止边界（如极长的单步骤工具执行）
-- **THEN** 系统 SHALL 硬杀执行协程完成收口，终态与部分成果回收语义与协作路径一致（回收终止前最后一个完整步骤的落库投影产出）
-- **AND** 硬杀路径 SHALL 走完整终态收尾（事件发布、通知、落库、排队唤醒），SHALL NOT 漏发终态通知；对账 watchdog SHALL 在协程未按约收口时强制终态
+- **THEN** 系统 SHALL 硬杀执行协程完成终态处理，终态与部分成果回收语义与协作路径一致（回收终止前最后一个完整步骤的落库投影产出）
+- **AND** 硬杀路径 SHALL 走完整终态收尾（事件发布、通知、落库、排队唤醒），SHALL NOT 漏发终态通知；对账 watchdog SHALL 在协程未按约完成终态处理时强制终态
 
 #### Scenario: 无执行面的停止即时完成
 
@@ -569,7 +569,7 @@ SuperAgent SHALL 通过进程内后台任务执行器 `BackgroundTaskExecutor` �
 
 ### Requirement: 任务终态回收与查询 DB 兜底
 
-终态任务条目在内存热集中保留 `terminal_retention_seconds`（默认 3600，`subagents` 配置组）后 SHALL 被回收；热集中终态条目数超过 `terminal_reclaim_max`（默认 200）时 SHALL 按终态时间从最旧起回收。回收资格 SHALL 为收口完成的条目（终态事件已发布、终态落库成功或落库重试耗尽、通知已落库），retention 自收口完成时刻起算；收尾在途的条目 SHALL 留在热集等待，SHALL NOT 进入回收候选。终态落库失败 SHALL 有界重试，耗尽后条目允许回收，DB 投影按落库事实回答并携带「终态落库失败」可诊断标注，SHALL NOT 伪造终态。pending 投递标记为瞬态（launch 采纳 / 对账翻转 dropped），消息行随会话消息 retention 管理。
+终态任务条目在内存热集中保留 `terminal_retention_seconds`（默认 3600，`subagents` 配置组）后 SHALL 被回收；热集中终态条目数超过 `terminal_reclaim_max`（默认 200）时 SHALL 按终态时间从最旧起回收。回收资格 SHALL 为终态处理完成的条目（终态事件已发布、终态落库成功或落库重试耗尽、通知已落库），retention 自终态处理完成时刻起算；收尾在途的条目 SHALL 留在热集等待，SHALL NOT 进入回收候选。终态落库失败 SHALL 有界重试，耗尽后条目允许回收，DB 投影按落库事实回答并携带「终态落库失败」可诊断标注，SHALL NOT 伪造终态。pending 投递标记为瞬态（launch 采纳 / 对账翻转 dropped），消息行随会话消息 retention 管理。
 
 回收后的任务查询（check_task / list_tasks / 任务目录 / 任务详情）与取消 SHALL 从 DB 投影回答：subagent 任务从 child session 与 run 行按状态映射派生（结果与来源清单从子会话落库内容重建），shell 任务从 `t_bg_shell_job` 行读取；DB 投影与内存快照 SHALL 复用同一状态映射函数，多 run 的 child session 取活跃 run 优先、无活跃取最新 run 行。对 DB 已终态任务的取消 SHALL 幂等返回该终态快照。DB 投影对翻转 dropped 的追加消息 SHALL 携带 `undelivered_messages` 计数（无论因重启对账还是投递失败翻转）。
 

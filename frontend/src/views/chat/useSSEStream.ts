@@ -387,7 +387,7 @@ export function useSSEStream(options: SSEStreamOptions = {}) {
       isActive: () => isCurrentStream(generation) && !streamSettled && !userAborted,
       maxAttempts: 6,
       backoffMs: (attempt) => Math.min(8000, 500 * (2 ** attempt)) + Math.floor(Math.random() * 250),
-      // 断流后先经权威快照收口（run-snapshot 终态即就地 settle），再退避重连
+      // 断流后先经权威快照终态处理（run-snapshot 终态即就地 settle），再退避重连
       resync: async () => {
         const snapshot = await getAgentRun(runId)
         dispatchFrame(

@@ -316,7 +316,7 @@ def test_cancel_running_task() -> None:
     # 重复停止幂等返回同一快照
     again = executor.cancel(task_id)
     assert again["status"] == BgTaskStatus.CANCELLED.value
-    # 部分成果由后台收口异步回收（静止边界后）
+    # 部分成果由后台终态处理异步回收（静止边界后）
     deadline = time.time() + 10
     while time.time() < deadline:
         task = executor.get(task_id)
@@ -339,7 +339,7 @@ def test_cancel_without_text_output_no_placeholder() -> None:
     task_id = executor.start(worker_factory=lambda: worker, description="x", session_id="s2", user_id="u1")
     time.sleep(0.2)
     assert executor.cancel(task_id)["status"] == BgTaskStatus.CANCELLED.value
-    # 后台收口落定后：无文本产出的任务不产生空占位（result 保持 None）
+    # 后台终态处理完成后：无文本产出的任务不产生空占位（result 保持 None）
     deadline = time.time() + 10
     while time.time() < deadline:
         task = executor.get(task_id)
@@ -1448,7 +1448,7 @@ def test_partial_output_consistent_across_channels() -> None:
     task_id = executor.start(worker_factory=lambda: worker, description="部分成果", session_id="s-partial", user_id="u1")
     time.sleep(0.2)
     executor.cancel(task_id)
-    # 乐观终态：受理即 CANCELLED；部分成果由后台收口异步回收——等 result 落定
+    # 乐观终态：受理即 CANCELLED；部分成果由后台终态处理异步回收——等 result 落定
     deadline = time.time() + 10
     while time.time() < deadline:
         task = executor.get(task_id)
@@ -1540,12 +1540,12 @@ def test_stop_during_turn_finish_window_not_overwritten() -> None:
         entry = ex_mod._TASKS.get(task_id)
     assert entry is not None
     task = entry.task
-    # 机制验证：终态（停止受理落下）后，非终态写入被拒——任务不得复活
+    # 机制验证：终态（停止受理落下）后，非终态写入被拒——任务不得重新执行
     task.status = ex_mod.BgTaskStatus.CANCELLED
     task.stop_reason = "cancelled"
     assert settle_mod._try_transition(task, ex_mod.BgTaskStatus.RUNNING) is False
     assert task.status == ex_mod.BgTaskStatus.CANCELLED.value
-    # 非终态时写入正常（追加消息 复活路径：RUNNING 写回自身）
+    # 非终态时写入正常（追加消息 重新执行路径：RUNNING 写回自身）
     task.status = ex_mod.BgTaskStatus.RUNNING
     assert settle_mod._try_transition(task, ex_mod.BgTaskStatus.RUNNING) is True
     executor.cancel(task_id)
@@ -1591,7 +1591,7 @@ def test_cancel_notification_carries_partial_preview() -> None:
     task_id = executor.start(worker_factory=lambda: worker, description="通知部分产出", session_id="s-notify", user_id="u1")
     time.sleep(0.2)
     executor.cancel(task_id)
-    # 通知在后台收口（投影回收）完成后发送——等通知到达而非等状态（受理即达）
+    # 通知在后台终态处理（投影回收）完成后发送——等通知到达而非等状态（受理即达）
     deadline = time.time() + 10
     pending: list = []
     while time.time() < deadline:
@@ -1641,9 +1641,9 @@ def test_stop_reconcile_finalizes_when_cancel_absorbed() -> None:
     """硬杀后 CancelledError 被深层链路吸收时，对账定时器强制落终态。
 
     回归：曾出现停止宽限超时硬取消后，_arun 的 except CancelledError
-    收口未执行——run 永久 RUNNING、UI 卡「停止中」、并发槽泄漏。终态
+    终态处理未执行——run 永久 RUNNING、UI 卡「停止中」、并发槽泄漏。终态
     不能依赖被取消协程的配合：用吞掉 CancelledError 并永久挂起的工具
-    复现该场景，断言 reconcile 兜底把任务收口为 CANCELLED。
+    复现该场景，断言 reconcile 兜底把任务标记为 CANCELLED。
     """
     from noesis.agents.background.jobs import registry as registry_mod, settle as settle_mod
 
@@ -1694,7 +1694,7 @@ def test_stop_reconcile_finalizes_when_cancel_absorbed() -> None:
         time.sleep(0.05)
     task = executor.get(task_id)
     assert task["status"] == BgTaskStatus.CANCELLED.value, (
-        "硬取消被吸收时 reconcile 必须强制收口（协程仍挂起也不能卡收口）"
+        "硬取消被吸收时 reconcile 必须强制标记终态（协程仍挂起也不能卡住终态处理）"
     )
     assert task["stop_reason"] == "cancelled"
 
@@ -1703,7 +1703,7 @@ def test_late_settle_stop_does_not_republish_after_forced_settle() -> None:
     """对账兜底已发布终态后，晚到的 settle_stop 重入只补落库、不重发事件。
 
     归属权（terminal_published）在事件实际发布时置位：硬取消被吸收、
-    settle_orphaned_task 已收口的任务，被卡死协程事后苏醒再走 settle_stop，
+    settle_orphaned_task 已完成终态处理的任务，被卡死协程事后苏醒再走 settle_stop，
     run.finished / terminal 事件 / 通知 / drain 不得二次触发。
     """
     from noesis.agents.background.jobs import loop as loop_mod, registry as registry_mod, settle as settle_mod
@@ -2169,7 +2169,7 @@ def test_new_kind_registers_without_runtime_change() -> None:
         task_id = executor.start(worker_factory=lambda: None, description="f",
                                   session_id="s-fake", user_id="u1", kind="fake")
         task = _wait_terminal(executor, task_id)
-        # 行为对象全链路生效：run 被调度、终态经 outcome 收口、追加消息 被能力门拒绝
+        # 行为对象全链路生效：run 被调度、终态经 outcome 标记、追加消息 被能力门拒绝
         assert calls == ["run"]
         assert task["status"] == BgTaskStatus.COMPLETED.value
         assert task["result"] == "fake done"
@@ -2265,7 +2265,7 @@ def test_try_transition_refuses_terminal_overwrite() -> None:
 
 
 def test_revivable_end_states_whitelist() -> None:
-    """复活白名单：只有干完/被取消可续；失败、超时拒绝。"""
+    """重新执行白名单：只有干完/被取消可续；失败、超时拒绝。"""
     from noesis.agents.background.jobs.settle import REVIVABLE_END_STATES
 
     assert REVIVABLE_END_STATES == frozenset({BgTaskStatus.COMPLETED, BgTaskStatus.CANCELLED})

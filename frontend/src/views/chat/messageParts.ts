@@ -940,7 +940,7 @@ export function appendStreamFailureNotice(parts: UiPart[], detail?: string): UiP
   }
   const completed = finalizePartsOnStreamError(parts)
 
-  // 模型 fallback 可能已经把用户可见错误写入正文；此时只收口，不再重复追加同一详情。
+  // 模型 fallback 可能已经把用户可见错误写入正文；此时只做终态处理，不再重复追加同一详情。
   if (partsContainFailureDetail(completed, detail)) {
     return completed
   }

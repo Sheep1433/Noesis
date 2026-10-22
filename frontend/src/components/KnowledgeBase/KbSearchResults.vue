@@ -7,6 +7,7 @@ import { computed, ref } from 'vue'
 const props = defineProps<{
   results: SearchResult[]
   timing?: SearchTiming | null
+  searched?: boolean
   loading?: boolean
 }>()
 
@@ -137,6 +138,28 @@ const timingStages = computed(() => {
     <div v-if="loading" class="results-loading">
       检索中…
     </div>
+    <template v-else-if="results.length === 0 && searched && timing">
+      <div v-if="timingStages.length" class="timing-bar">
+        <span
+          v-for="(stage, idx) in timingStages"
+          :key="stage.label"
+          class="timing-stage"
+        >
+          <span class="stage-label">{{ stage.label }}</span>
+          <span class="stage-value">{{ stage.value }}</span>
+          <span v-if="idx < timingStages.length - 1" class="timing-arrow">→</span>
+        </span>
+      </div>
+      <n-empty size="small">
+        <template #description>
+          <div>未命中：召回 {{ timing.recall_hits }} 条，重排 {{ timing.rerank_docs ?? '—' }} 条</div>
+          <div v-if="(timing.threshold_filtered ?? 0) > 0" class="empty-diagnosis">
+            {{ timing.threshold_filtered }} 条因相关性分低于阈值被过滤——可尝试更贴近语料的查询词，或在策略配置中调低 score_threshold
+          </div>
+          <div v-else class="empty-diagnosis">召回内容与查询相关性过低，可尝试更换查询词</div>
+        </template>
+      </n-empty>
+    </template>
     <n-empty v-else-if="results.length === 0" description="输入问题后点击检索，验证召回与精排效果" size="small" />
     <template v-else>
       <div v-if="timingStages.length" class="timing-bar">
@@ -376,5 +399,11 @@ const timingStages = computed(() => {
   display: block;
   -webkit-line-clamp: unset;
   overflow: visible;
+}
+
+.empty-diagnosis {
+  margin-top: 4px;
+  font-size: 12px;
+  color: var(--n-text-color-3, #999);
 }
 </style>

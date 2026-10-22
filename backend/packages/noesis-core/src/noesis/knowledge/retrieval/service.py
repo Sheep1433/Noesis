@@ -64,6 +64,8 @@ class KbSearchTiming:
     recall_hits: int
     final_hits: int
     search_mode: str
+    rerank_docs: int = 0
+    threshold_filtered: int = 0
 
 
 @dataclass
@@ -325,6 +327,8 @@ class KbRetrievalService:
             recall_hits=recall_hit_count,
             final_hits=len(final_hits),
             search_mode=mode,
+            rerank_docs=rerank_input_count,
+            threshold_filtered=filtered_out,
         )
 
         logger.info(

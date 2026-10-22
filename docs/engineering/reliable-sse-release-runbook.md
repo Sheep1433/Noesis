@@ -25,7 +25,7 @@
 
 ```bash
 # 等待 active Run 自然完成（最长 max_run_duration_seconds=900s）
-# 超时未完成的 Run 由 recovery 收口为 interrupted
+# 超时未完成的 Run 由 recovery 标记为 interrupted
 curl -s http://127.0.0.1:8089/health  # 确认实例健康
 ```
 

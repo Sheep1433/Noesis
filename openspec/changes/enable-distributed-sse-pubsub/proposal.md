@@ -13,7 +13,7 @@
 - PostgreSQL 继续保存 Run、assistant snapshot、sequence 和终态；Redis 不保存权威状态，也不承担断线重放。
 - stop 与 HITL resume 先写入 PostgreSQL durable command，再用 Redis 唤醒 execution leader；丢失通知时由 leader 补扫。
 - 远端订阅采用“先订阅并缓冲，再读取 snapshot，再按 sequence 合并”的握手；active Run 增加有界周期 checkpoint，确保 Pub/Sub 丢消息后能最终恢复。
-- leader 丢失后，新 leader 先将旧 leader 的 running/retrying/HITL Run 收口为 `interrupted/server_restart`；不自动重放模型或工具。未被 claim 的 queued Run 可以继续启动。
+- leader 丢失后，新 leader 先将旧 leader 的 running/retrying/HITL Run 标记为 `interrupted/server_restart`；不自动重放模型或工具。未被 claim 的 queued Run 可以继续启动。
 - scheduler、memory dream 与 Telegram/Feishu runtime 只在 execution leader 启动，避免多 worker 重复执行。
 - 增加可替换的 Run bus port、`memory` / `redis` 两个 adapter、健康状态、Docker Compose 服务、多 worker 集成测试和故障验收。
 - 通过必填 `NOESIS_RUN_BUS_BACKEND=memory|redis` 显式选择运行模式；不允许连接失败后自动fallback。两种模式共用 queued dispatch、durable command、checkpoint、sequence 与订阅状态机，只替换实时通知 transport。

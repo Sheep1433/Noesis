@@ -290,7 +290,7 @@ class RunHandle:
     producer_generation: int = 0
     cancel_requested: bool = False
     # worker 心跳协程（worker-role-split）：引用挂在 handle 上防 GC
-    #（asyncio 对无引用 task 不保证存活），随 run 终态/出册自然结束
+    #（asyncio 对无引用 task 不保证存活），随 run 终态/内存回收自然结束
     heartbeat_task: Optional[asyncio.Task[None]] = None
     # 投递内核（被动数据结构）：sequence 分配、有界重放缓存、连续性重放。
     # 由 RunManager 在创建 handle 时按配置注入；全部访问须持 handle.lock。
@@ -761,7 +761,7 @@ class RunManager:
             await asyncio.gather(task, return_exceptions=True)
 
     def _enter_hitl_pending_locked(self, handle: RunHandle) -> None:
-        """HITL 挂起的配套收口：挂 HITL 专属超时、停 run 时长看门狗。
+        """HITL 挂起的配套处理：挂 HITL 专属超时、停 run 时长看门狗。
 
         审批等待不计入 run 时长——看门狗若在挂起期继续计时，等待超
         max_run_duration 会被 RUN_TIMEOUT 误杀。生产路径（apply_event 的
@@ -1016,7 +1016,7 @@ class RunManager:
                     handle.status = projection.status
                     handle.attempt_id = projection.attempt_id
                     # 生产路径的状态迁移不经 transition()（其调用方只剩测试
-                    # 续跑的 _persist_projection）——HITL 挂起的配套收口
+                    # 续跑的 _persist_projection）——HITL 挂起的配套处理
                     # （停看门狗/挂专属超时）在此与 transition() 共用同一入口
                     if (
                         prev_status != RunStatus.HITL_PENDING

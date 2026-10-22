@@ -927,7 +927,7 @@ async def test_create_rolls_back_integrity_error_from_run_flush(monkeypatch) -> 
 
 @pytest.mark.asyncio
 async def test_start_failure_cleanup_finalizes_queued_run(monkeypatch) -> None:
-    """启动失败清理必须同时收口 run 与 assistant，而不是只移除内存 handle。"""
+    """启动失败清理必须同时对 run 与 assistant 完成终态处理，而不是只移除内存 handle。"""
     from types import SimpleNamespace
     from unittest.mock import AsyncMock, MagicMock
 

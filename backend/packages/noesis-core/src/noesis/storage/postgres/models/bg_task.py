@@ -32,7 +32,7 @@ class TBgShellJob(Base):
 
     shell 任务无 child session / run 行可挂靠（非对话），本表是其唯一的
     DB 事实承载：状态机、命令、结果尾部摘要与时间戳。内存热集回收或
-    跨进程查询时由本表回答；进程重启对账把非终态行收口为 cancelled。
+    跨进程查询时由本表回答；进程重启对账把非终态行标记为 cancelled。
     status 使用 BgTaskStatus 值域（queued/running/completed/failed/
     cancelled/timed_out）。
     """

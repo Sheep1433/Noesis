@@ -1,6 +1,6 @@
 """任务登记表：内存注册表、会话排队、并发槽（访问须持 _TASKS_LOCK）。
 
-内存为易失层，进程重启即丢（接受的设计限制，启动对账收口遗留 run）。
+内存为易失层，进程重启即丢（接受的设计限制，启动对账核查遗留 run）。
 """
 from __future__ import annotations
 
@@ -92,7 +92,7 @@ class _TaskEntry:
     cooperative_stop_signalled: bool = False
     # 协作停止宽限 watchdog（超时回退硬杀）
     stop_grace_handle: Optional[asyncio.TimerHandle] = None
-    # 硬杀后强制终态对账 watchdog（协程未按约收口时兜底）
+    # 硬杀后强制终态对账 watchdog（协程未按约完成终态处理时兜底）
     stop_reconcile_handle: Optional[asyncio.TimerHandle] = None
     # 对账兜底协程的强引用（防 GC 回收未完成的 task）
     stop_reconcile_task: Optional[asyncio.Task] = None
@@ -104,7 +104,7 @@ class _TaskEntry:
     terminal_persist_ok: bool = False
     terminal_persist_exhausted: bool = False
     terminal_notified: bool = False
-    # 冷恢复/复活前的终态快照：投递失败回退时恢复（result/error/completed_at/
+    # 冷恢复/重新执行前的终态快照：投递失败回退时恢复（result/error/completed_at/
     # stop_reason/status），避免悬空的回收资格判定
     prev_terminal_snapshot: Optional[dict] = None
     # 已完成 turn 的 usage 累计（数值字段相加）：实时统计发布时与当前

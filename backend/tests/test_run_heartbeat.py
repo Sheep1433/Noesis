@@ -1,7 +1,7 @@
 """worker 心跳协程契约（worker-role-split task 3.4）。
 
 三条退出路径：失去持有（heartbeat 落空 → 停本地 run）、run 终态、
-run 出册；DB 抖动不误判（下轮重试）。
+run 从内存运行时回收；DB 抖动不误判（下轮重试）。
 """
 
 from __future__ import annotations

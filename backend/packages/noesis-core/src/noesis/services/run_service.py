@@ -524,7 +524,7 @@ class RunService:
         await cls.mark_run_started(run.id)
         if owner_instance_id is not None and claim_epoch is not None:
             # task 引用挂到 handle：asyncio 对无引用的 task 不保证存活
-            #（fire-and-forget 反模式），handle 随 run 出册时一并释放
+            #（fire-and-forget 反模式），handle 随 run 从内存运行时回收时一并释放
             handle = run_manager.get(run.id)
             handle.heartbeat_task = cls._spawn_heartbeat(
                 run.id, owner_instance_id, claim_epoch
@@ -543,7 +543,7 @@ class RunService:
 
         - 心跳落空（epoch/owner 不符，run 已被重置/再认领/终态）→ 停掉本地
           run（失去持有自停，防僵尸双写），退出；
-        - run 终态 / 出册（KeyError）→ 退出；
+        - run 终态 / 从内存运行时回收（KeyError）→ 退出；
         - 周期 = lease_ttl/3，容忍事件循环卡顿与常规 GC 停顿（60s 租约的
           依据：远大于繁忙进程的秒级卡顿、远小于用户可感知的故障切换窗口）。
         """
@@ -554,7 +554,7 @@ class RunService:
                 try:
                     handle = run_manager.get(run_id)
                 except KeyError:
-                    return  # 已出册：事实权威在 DB，无需再跳
+                    return  # 已被内存回收：事实权威在 DB，无需再跳
                 if handle.status in TERMINAL_RUN_STATUSES:
                     return
                 try:
@@ -921,9 +921,9 @@ class RunService:
             await run_manager.stop(run_id)
         except KeyError:
             pass
-        # 兜底：内存 stop 后 DB 行仍非终态时强制收口。两种来源——
+        # 兜底：内存 stop 后 DB 行仍非终态时强制标记终态。两种来源——
         # 进程重启后 run 不在注册表（stop 全程 no-op），或 producer 取消
-        # 收尾失败（二次 cancel 打断 DB 写入）。不收口则 UI 永远显示
+        # 收尾失败（二次 cancel 打断 DB 写入）。不标记终态则 UI 永远显示
         # 生成中，且行状态与内存注册表永久不一致。
         await db.refresh(row)
         if row.status in ACTIVE_RUN_STATUSES:
@@ -953,7 +953,7 @@ class RunService:
         if finalized:
             await db.commit()
             logger.warning(
-                "run 停止兜底收口（内存 stop 未达终态）run_id={} session_id={}",
+                "run 停止兜底终态处理（内存 stop 未达终态）run_id={} session_id={}",
                 row.id, row.session_id,
             )
 

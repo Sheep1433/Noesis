@@ -1,7 +1,7 @@
-"""终态收口：终态规格、认领裁决、结案链与终态定时器族。
+"""终态处理：任务终态结果、认领裁决、结案链与终态定时器族。
 
 五条并发契约的家：先到终态获胜 / 终态不可覆写 / 落库失败不发终态 /
-收口不依赖协程配合（对账兜底）/ 失败也释放槽位。watchdog、停止宽限、
+终态处理不依赖协程配合（对账兜底）/ 失败也释放槽位。watchdog、停止宽限、
 对账三族定时器都在本模块，经 jobs.loop 挂载到隔离循环。
 """
 from __future__ import annotations
@@ -84,9 +84,9 @@ def _schedule_continuation(task: BackgroundTask) -> None:
     )
 
 def _try_transition(task: BackgroundTask, next_status: BgTaskStatus) -> bool:
-    """非终态状态写入收口（RUNNING 恢复）：
+    """非终态状态写入处理（RUNNING 恢复）：
     终态不得被覆写（乐观停止受理即落 CANCELLED，执行侧的恢复/
-    追加消息 写入不得复活已停任务）。
+    追加消息 写入不得重新执行已停任务）。
 
     执行侧恢复/审批写入经此在同一把锁下复查——互斥关闭「检查后写入」
     窗口（否则停止被覆写丢失，追加消息 甚至反向新开 run）。
@@ -113,7 +113,7 @@ REVIVABLE_END_STATES: frozenset[BgTaskStatus] = frozenset(
 
 @dataclass(frozen=True)
 class TaskTerminal:
-    """终态规格：一条收口路径一份规格，落库/事件/通知语义集中在 settle_task。
+    """任务终态结果：一条终态处理路径一份结果，落库/事件/通知语义集中在 settle_task。
 
     task_status / run_status / finish_reason 三元组决定终态语义；
     content=None 表示沿用 run 已积累快照（硬杀 / 无投影场景）。
@@ -129,7 +129,7 @@ class TaskTerminal:
     stop_reason: Optional[str] = None
 
 def _stop_terminal(entry: _TaskEntry) -> TaskTerminal:
-    """停止族终态规格（cancelled / timed_out → run PARTIAL）。"""
+    """停止族任务终态结果（cancelled / timed_out → run PARTIAL）。"""
     task = entry.task
     reason = task.stop_reason or "cancelled"
     if reason == "timed_out":
@@ -159,7 +159,7 @@ def _accept_terminal(entry: _TaskEntry, terminal: TaskTerminal) -> Optional[Task
 
     停止为乐观终态（cancel 受理即落 CANCELLED）：执行侧静止边界到达的
     停止族规格不再分流拒绝，与既有终态一致走「晚到规格降级保留载荷」。
-    归一化与写入必须同锁完成：sync 收口（主线程）与 async 收口（隔离
+    归一化与写入必须同锁完成：sync 终态处理（主线程）与 async 终态处理（隔离
     loop）跨线程并发时，锁外的「先归一化后写入」会以过期状态决策，
     破坏先到终态语义获胜的约束。
     """
@@ -243,7 +243,7 @@ async def _persist_terminal_with_retry(
                     terminal.finish_reason,
                 )
                 # 诊断位落 run 行（不改状态不伪造终态）：DB 投影据此携带
-                # 「终态落库失败」标注；进程重启对账随后把遗留 run 正常收口
+                # 「终态落库失败」标注；进程重启对账随后把遗留 run 正常标记终态
                 if task.run_id:
                     from noesis.agents.background.ports import SubagentSessionPort
                     from noesis.runtime.main_loop import run_on_main_loop
@@ -262,7 +262,7 @@ async def _persist_terminal_with_retry(
 def _claim_terminal_publish(entry: _TaskEntry) -> bool:
     """终态事件归属权：持锁 check-and-set，唯一持有者发布事件。
 
-    必须拿锁：sync 收口（API 线程的 cancel / 沙箱销毁）与 async 收口
+    必须拿锁：sync 终态处理（API 线程的 cancel / 沙箱销毁）与 async 终态处理
     （隔离 loop）跨线程并发，无锁的检查后写入可双发终态事件。
     认领保持在落库之后（发布前）：先行认领再落库的协程若中途被卡死，
     会以已认领状态阻止对账兜底。
@@ -295,7 +295,7 @@ def _publish_terminal_events(entry: "_TaskEntry", task: BackgroundTask, terminal
             name=f"bg-shell-terminal:{task.task_id}",
         )
     # 不可续终态（failed / timed_out）的未消费追加消息永无消费者：
-    # 收口即翻转 dropped（可续终态 completed / cancelled 保留，供冷恢复重载）
+    # 标记终态即翻转 dropped（可续终态 completed / cancelled 保留，供冷恢复重载）
     if terminal.task_status in (BgTaskStatus.FAILED, BgTaskStatus.TIMED_OUT) and task.child_session_id:
         from noesis.agents.background.ports import SubagentSessionPort
         from noesis.runtime.main_loop import run_on_main_loop
@@ -311,9 +311,9 @@ async def settle_task(
     *,
     persist_timeout: Optional[float] = None,
 ) -> bool:
-    """唯一终态收口（异步）：状态转移 + run 落库 + 终态事件恰好一次。
+    """唯一终态处理入口（异步）：状态转移 + run 落库 + 终态事件恰好一次。
 
-    - 已终态重入（先前收口中途崩溃后补跑 / 乐观停止后执行侧到达）不覆盖
+    - 已终态重入（先前终态处理中途崩溃后补跑 / 乐观停止后执行侧到达）不覆盖
       状态，按既有终态语义补落库；事件以 terminal_published 归属权保证不重发
     - persist_timeout：对账路径的有界落库（超时记错误，事件照发）
     """
@@ -326,7 +326,7 @@ async def settle_task(
     return True
 
 def settle_task_sync(entry: _TaskEntry, terminal: TaskTerminal) -> bool:
-    """同步终态收口（cancel 即时分支 / shell 超时 / 沙箱销毁）。
+    """同步终态处理（cancel 即时分支 / shell 超时 / 沙箱销毁）。
 
     与 settle_task 同语义，但落库 fire-and-forget——调用线程不可等待，
     主 loop 异步落库失败只在主 loop 侧日志可见。
@@ -350,16 +350,16 @@ async def settle_stop(
     task: BackgroundTask,
     outcome: Optional[_TurnOutcome],
 ) -> None:
-    """协作停止 / 硬杀的停止收口编排：部分成果回收 + 唯一终态收口。
+    """协作停止 / 硬杀的停止终态处理编排：部分成果回收 + 唯一终态处理。
 
     - 部分成果以落库投影为权威来源（覆盖全部轮次与硬杀边界前产出），
       无标准 run（测试）退回当前 turn 投影；写入 task.result 供通知预览
     - 硬杀（outcome=None）沿用 run 已积累快照（content=None 语义）
-    - 若本协程在收口途中被卡死，settle_orphaned_task 已接管发布，晚到重入
+    - 若本协程在终态处理途中被卡死，settle_orphaned_task 已接管发布，晚到重入
       只补落库不重发事件（归属权在 settle_task 内部认领）
     """
     # 入口先拆定时器：宽限/看门狗不得在部分成果回收（跨 loop DB 往返，
-    # 大投影可达秒级）期间硬杀收口协程本身——否则收口被打断后只能等
+    # 大投影可达秒级）期间硬杀终态处理协程本身——否则终态处理被打断后只能等
     # 对账兜底，且回收的 content/usage 载荷全部丢失
     from noesis.agents.background.subagent.kernel import (  # 延迟导入避免 settle↔agent 环
         _collect_persisted_text,
@@ -389,7 +389,7 @@ async def settle_stop(
     )
 
 async def settle_orphaned_task(entry: _TaskEntry) -> None:
-    """硬杀对账的强制终态：协程未按约收口时不依赖其配合直接落终态。
+    """硬杀对账的强制终态：协程未按约完成终态处理时不依赖其配合直接落终态。
 
     与 settle_stop 的硬杀分支同语义（content=None 沿用已积累快照），
     但不做部分成果回收——被卡死的协程可能正持有投影 builder。落库有界
@@ -399,7 +399,7 @@ async def settle_orphaned_task(entry: _TaskEntry) -> None:
     if entry.terminal_published:
         return
     logger.error(
-        "bg task stop reconcile: hard cancel 后协程未收口，强制终态 task_id={}",
+        "bg task stop reconcile: hard cancel 后协程未完成终态处理，强制终态 task_id={}",
         task.task_id,
     )
     await settle_task(
@@ -419,11 +419,11 @@ async def settle_delivery_failure(
     exc: BaseException,
     user_message_id: Optional[str] = None,
 ) -> None:
-    """追加消息投递失败收口：不终态化任务。
+    """追加消息投递失败处理：不终态化任务。
 
     - 消息行翻转 dropped（幂等：仅仍处 pending 标记的行受影响；已被
       launch 采纳的行不受影响）
-    - 冷恢复/复活路径回退先前终态并恢复完整收口态（result/completed_at/
+    - 冷恢复/重新执行路径回退先前终态并恢复完整终态处理状态（result/completed_at/
       published/notified/落库旗标）——不重发终态事件
     - 冷恢复窗口内受理的停止终态获胜：不回退、不触碰已受理终态
       （乐观终态契约优先于回退）
@@ -484,7 +484,7 @@ def cancel_reconcile_timer(entry: _TaskEntry) -> None:
 
 
 def start_reconcile_timer(entry: _TaskEntry) -> None:
-    """硬杀后对账 watchdog：协程未按约收口时强制落终态。
+    """硬杀后对账 watchdog：协程未按约完成终态处理时强制落终态。
 
     先摘旧句柄——宽限超时重复触发时不得泄漏定时器。
     """
@@ -513,13 +513,13 @@ def _on_stop_grace_timeout(entry: _TaskEntry) -> None:
 
 
 def _on_stop_reconcile_timeout(entry: _TaskEntry) -> None:
-    """硬杀后对账：协程未按约收口时强制落终态。"""
+    """硬杀后对账：协程未按约完成终态处理时强制落终态。"""
     entry.stop_reconcile_handle = None
     if entry.terminal_published:
         return
     task = entry.task
     logger.error(
-        "bg task stop reconcile due task_id={} status={}（CancelledError 未按约传播至收口）",
+        "bg task stop reconcile due task_id={} status={}（CancelledError 未按约传播至终态处理）",
         task.task_id,
         task.status.value,
     )

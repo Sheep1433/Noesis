@@ -1,11 +1,11 @@
 # Tasks: 会话停止语义重整
 
-## 1. 后端停止收口（文案与压制）
+## 1. 后端停止终态处理（文案与压制）
 
-- [ ] 1.1 `chat/runs/projection.py`：`RunAborted` 收口对未完成工具的 reconcile 文案由「本次工具执行已停止」改为「用户已停止生成」（`RunCompleted` / `HitlRequired` 的 reconcile 语境不同，不改）；`_force_finalize_stopped` 兜底路径弃用 `run_recovery_service.mark_running_tools_unknown`，改用 builder 的 `reconcile_nonterminal_tools(CANCELLED, "用户已停止生成")`（与正常路径同款），server_restart 恢复路径维持原函数
+- [ ] 1.1 `chat/runs/projection.py`：`RunAborted` 终态处理对未完成工具的 reconcile 文案由「本次工具执行已停止」改为「用户已停止生成」（`RunCompleted` / `HitlRequired` 的 reconcile 语境不同，不改）；`_force_finalize_stopped` 兜底路径弃用 `run_recovery_service.mark_running_tools_unknown`，改用 builder 的 `reconcile_nonterminal_tools(CANCELLED, "用户已停止生成")`（与正常路径同款），server_restart 恢复路径维持原函数
 - [ ] 1.2 `chat/event_mapping/failure_notice.py`：删除无生产调用方的 `append_user_stop_notice_to_content` 与 `append_disconnect_partial_content`（已复核仅测试引用）及其测试用例；`append_stream_failure_notice_to_content` 有生产调用方（`services/qa/helpers.py`），保留
 - [ ] 1.3 `services/bg_continuation_service.py`：新增会话级停止标记（置位点 `RunService.stop`——用户停止 API 唯一入口，不得下沉 `run_manager.stop`；置位同时取消 pending wake；检查点在 `maybe_continue` 入口覆盖 debounce=0 直调路径；`note_user_activity` 清除；`reset_for_tests` 一并重置）
-- [ ] 1.4 单测：停止后任务终态不创建 continuation run；用户消息解除压制；无标记时行为不变；`_finalize_start_failure` 路径不置标记；兜底收口文案与正常路径一致
+- [ ] 1.4 单测：停止后任务终态不创建 continuation run；用户消息解除压制；无标记时行为不变；`_finalize_start_failure` 路径不置标记；兜底终态处理文案与正常路径一致
 
 ## 2. 前台子任务级联取消
 

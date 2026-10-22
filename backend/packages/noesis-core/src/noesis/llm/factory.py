@@ -47,7 +47,7 @@ class StreamIdleTimeoutError(TimeoutError):
 
     与 httpx 读超时（任意字节重置，SSE ping 即可续命）不同，本超时只在
     **真实生成 chunk** 到达时重置——网关因风控/故障挂住流（只发 keep-alive
-    不出内容）时，这是唯一能收口的超时层。LLMErrorHandlingMiddleware 将其
+    不出内容）时，这是唯一能兜住的超时层。LLMErrorHandlingMiddleware 将其
     分类为可重试瞬时错误（退避重试，耗尽后降级）。
     """
 
@@ -187,7 +187,7 @@ class ChatOpenAICompatible(ChatOpenAI):
         网关挂住流（风控拦截后只发 keep-alive）时没有任何层能超时，run
         会永远停在生成阶段。这里按「真实生成 chunk」计时：只有 chunk
         到达才重置计时器，ping 不算。超时抛 StreamIdleTimeoutError，
-        由 LLMErrorHandlingMiddleware 走重试/降级收口。
+        由 LLMErrorHandlingMiddleware 走重试/降级处理。
         """
         idle_seconds = float(ModelConfig.stream_idle_timeout or 0)
         if idle_seconds <= 0:

@@ -112,15 +112,15 @@ class SubagentSessionService:
 
     @classmethod
     async def reconcile_orphaned_runs(cls, db: AsyncSession) -> int:
-        """进程重启后将无法恢复的 child runs 收口为 error。
+        """进程重启后将无法恢复的 child runs 标记为 error。
 
         子 Agent run 的唯一启动对账（通用 RunRecoveryService 显式排除
-        origin=subagent）：executor 状态在进程内，重启即不可恢复，统一收口
+        origin=subagent）：executor 状态在进程内，重启即不可恢复，统一标记为
         ERROR/SUBAGENT_PROCESS_RESTARTED；assistant 消息带最后投影内容并
         将运行中工具标为结果未知（与通用对账同规则，避免工具卡永久 running）。
 
-        QUEUED 行不在收口集合：排队任务重启后应继续执行，由排队重建
-        （list_queued_subagent_runs → executor.restore_queued）接手。被收口
+        QUEUED 行不在标记终态范围：排队任务重启后应继续执行，由排队重建
+        （list_queued_subagent_runs → executor.restore_queued）接手。被标记终态
         会话的 pending 追加消息行同事务翻转 dropped（任务已不可续，永无
         消费者；重启前已可续终态的任务不受影响）。
         """
@@ -164,7 +164,7 @@ class SubagentSessionService:
                 .where(TChatMessage.id == message.id)
                 .values(status="error", content=content)
             )
-        # 被收口会话的 pending 行翻转 dropped（任务已不可续）：仅仍处
+        # 被标记终态会话的 pending 行翻转 dropped（任务已不可续）：仅仍处
         # pending 标记的行受影响，已采纳/已 dropped 的行幂等跳过
         orphaned_sessions = list({row.session_id for row in orphaned})
         pending_rows = (

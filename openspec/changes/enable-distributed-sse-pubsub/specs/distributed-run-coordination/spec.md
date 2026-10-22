@@ -47,7 +47,7 @@
 #### Scenario: claim后本地启动失败
 
 - **WHEN** leader已将queued Run claim为running，但RunManager或Agent同步启动失败
-- **THEN** leader SHALL 将Run与assistant骨架收口为明确error
+- **THEN** leader SHALL 将Run与assistant骨架标记为明确error
 - **AND** SHALL NOT 留下没有producer的running Run
 
 #### Scenario: queued期间用户修改默认模型
@@ -59,7 +59,7 @@
 #### Scenario: 创建用户在dispatch前失效
 
 - **WHEN** leader无法从数据库加载launch payload对应的有效用户
-- **THEN** Run与assistant骨架 SHALL 收口为明确start error
+- **THEN** Run与assistant骨架 SHALL 标记为明确start error
 - **AND** launch payload SHALL NOT 通过保存Cookie或session对象绕过用户状态检查
 
 ### Requirement: Redis Pub/Sub SHALL 提供跨进程实时 RunEvent fan-out
@@ -179,17 +179,17 @@ stop、cancel与HITL resume SHALL 在PostgreSQL durable command表中完成鉴�
 #### Scenario: queued Run在claim前停止
 
 - **WHEN** stop command先于leader claim提交到queued Run
-- **THEN** command consumer SHALL 直接收口该Run且dispatcher SHALL 无法再claim
+- **THEN** command consumer SHALL 直接终态化该Run且dispatcher SHALL 无法再claim
 - **AND** API确认stop后 SHALL NOT 随后出现producer启动
 
 ### Requirement: leader与Redis故障 SHALL 受控恢复
 
-Redis不可用而PostgreSQL和Web依赖正常时，实例 SHALL 保持可路由并报告degraded，`POST /api/chat/runs` SHALL 单独拒绝新Run；已有leader Run SHALL 继续写PostgreSQL，远端subscriber SHALL 使用有界snapshot恢复。新leader获锁后 SHALL 先将旧leader已claim的非终态Run收口为 `interrupted/server_restart`，不得重放模型或工具；未被claim的queued Run SHALL 可继续dispatch。
+Redis不可用而PostgreSQL和Web依赖正常时，实例 SHALL 保持可路由并报告degraded，`POST /api/chat/runs` SHALL 单独拒绝新Run；已有leader Run SHALL 继续写PostgreSQL，远端subscriber SHALL 使用有界snapshot恢复。新leader获锁后 SHALL 先将旧leader已claim的非终态Run标记为 `interrupted/server_restart`，不得重放模型或工具；未被claim的queued Run SHALL 可继续dispatch。
 
 #### Scenario: leader进程崩溃
 
 - **WHEN** leader释放advisory lock且其它worker成为新leader
-- **THEN** 新leader SHALL 至多一次收口旧leader的running/retrying/HITL Run
+- **THEN** 新leader SHALL 至多一次终态化旧leader的running/retrying/HITL Run
 - **AND** 旧producer迟到checkpoint或终态 SHALL 无法覆盖数据库权威终态
 
 #### Scenario: Redis运行中断开
@@ -312,12 +312,12 @@ Redis不可用而PostgreSQL和Web依赖正常时，实例 SHALL 保持可路由�
 
 ### Requirement: 新 leader 晋升 SHALL 先执行完整 recovery 序列
 
-每次 execution leader 晋升（含进程启动这一首例）SHALL 在开始 dispatch 新工作前依次完成：收口旧 term 非终态主 Run（interrupted/server_restart）、收口遗留子代理 Run、收口遗留定时任务运行记录（interrupted）、装载 PostgreSQL 中未送达的后台任务通知。recovery SHALL 由晋升回调触发而不仅限进程启动；装载的通知在 leader 任期内经既有注入链消费。未被 claim 的 queued Run SHALL 在 recovery 完成后继续 dispatch。
+每次 execution leader 晋升（含进程启动这一首例）SHALL 在开始 dispatch 新工作前依次完成：处理旧 term 非终态主 Run 终态（interrupted/server_restart）、处理遗留子代理 Run 终态、处理遗留定时任务运行记录终态（interrupted）、装载 PostgreSQL 中未送达的后台任务通知。recovery SHALL 由晋升回调触发而不仅限进程启动；装载的通知在 leader 任期内经既有注入链消费。未被 claim 的 queued Run SHALL 在 recovery 完成后继续 dispatch。
 
 #### Scenario: 运行中 leader 切换
 
 - **WHEN** leader 失锁且另一 worker 晋升为新 leader
-- **THEN** 新 leader SHALL 先完成全部 recovery 收口与通知装载再 dispatch
+- **THEN** 新 leader SHALL 先完成全部 recovery 终态处理与通知装载再 dispatch
 - **AND** 旧 leader 的迟到写入 SHALL 无法覆盖 recovery 终态
 
 #### Scenario: 晋升后未送达通知可注入

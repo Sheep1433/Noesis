@@ -1,4 +1,4 @@
-"""Run dispatcher 契约：批量认领（SKIP LOCKED + 容量回调）、启动失败收口、唤醒兜底。
+"""Run dispatcher 契约：批量认领（SKIP LOCKED + 容量回调）、启动失败终态处理、唤醒兜底。
 
 对应 openspec worker-role-split task 3.1/3.3（前身为
 enable-distributed-sse-pubsub task 3.1–3.4，leader token 语义已移除）。
@@ -164,7 +164,7 @@ async def test_claim_loser_batch_empty_skips_start(wiring) -> None:
 
 @pytest.mark.asyncio
 async def test_start_failure_after_claim_is_finalized(wiring) -> None:
-    """claim 成功但 producer 启动失败：必须收口，不留无 producer 的行。"""
+    """claim 成功但 producer 启动失败：必须标记终态，不留无 producer 的行。"""
     run = _queued_run()
     wiring.repository.claim_next_batch.return_value = [("run-1", 1)]
     wiring.repository.get.return_value = run
@@ -184,7 +184,7 @@ async def test_start_failure_after_claim_is_finalized(wiring) -> None:
 
 @pytest.mark.asyncio
 async def test_context_rebuild_failure_finalizes(wiring) -> None:
-    """payload 损坏 / 用户已删除：claim 已提交，收口 RUN_START_FAILED。"""
+    """payload 损坏 / 用户已删除：claim 已提交，标记为 RUN_START_FAILED。"""
     run = _queued_run()
     run.launch_payload = {"schema_version": 99}
     wiring.repository.claim_next_batch.return_value = [("run-1", 1)]

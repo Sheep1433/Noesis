@@ -106,6 +106,7 @@ const searchScoreThresholdOverride = ref<number | null>(null)
 const searchRrfKOverride = ref<number | null>(null)
 const searchFilterFileName = ref('')
 const searchResults = ref<SearchResult[]>([])
+const hasSearched = ref(false)
 const searchTiming = ref<SearchTiming | null>(null)
 
 const collectionConfig = ref<CollectionConfig | null>(null)
@@ -423,8 +424,9 @@ async function handleSearch() {
     const { results, timing } = await searchCollection(collectionName.value, body)
     searchResults.value = results
     searchTiming.value = timing
+    hasSearched.value = true
     if (results.length === 0) {
-      message.warning('未找到相关结果')
+      message.warning('未找到相关结果，详见检索诊断')
     }
   } catch (e: any) {
     message.error(e.message || '检索失败')
@@ -645,6 +647,7 @@ async function saveCollectionConfig() {
               :results="searchResults"
               :timing="searchTiming"
               :loading="searching"
+              :searched="hasSearched"
               @view-shard="openShardDetail"
             />
           </div>
