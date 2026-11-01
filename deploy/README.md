@@ -1,6 +1,6 @@
 # Noesis Docker 部署
 
-生产与开发环境均使用 **Docker Compose**（`deploy/docker-compose.yml`）：nginx + backend + PostgreSQL + qdrant + sandbox-runner。PostgreSQL 由 Compose 管理并使用持久化卷。
+生产与开发环境均使用 **Docker Compose**（`deploy/docker-compose.yml`）：nginx + web/control/worker 三个后端服务 + PostgreSQL + qdrant + redis + sandbox-runner。PostgreSQL 由 Compose 管理并使用持久化卷；后端三服务分别对应三入口形态（redis 总线）。
 
 ## CI 自动部署
 
