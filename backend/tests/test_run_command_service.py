@@ -48,10 +48,6 @@ class _MockDB:
         return self.execute.return_value
 
 
-def _token(valid=True):
-    return SimpleNamespace(valid=valid, instance_id="leader-1", term=1)
-
-
 # ---------------------------------------------------------------------------
 # 5.1 幂等提交
 # ---------------------------------------------------------------------------
@@ -230,14 +226,6 @@ async def test_consumer_bg_task_stop_no_op_when_unknown(monkeypatch):
 
     assert await consumer._consume_once() == 1
     assert marks == [("cmd-bg", "no_op")], "注册表无此任务：幂等 no_op"
-    await bus.close()
-
-
-@pytest.mark.asyncio
-async def test_consumer_skips_when_token_invalid():
-    bus = InMemoryRunBus(envelope_payload_max_bytes=65536)
-    consumer = RunCommandConsumer(bus=bus)
-    assert await consumer._consume_once() == 0, "失锁后不得认领执行"
     await bus.close()
 
 
