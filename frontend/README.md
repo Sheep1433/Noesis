@@ -14,7 +14,7 @@ Noesis（智枢）是一个基于 Vue 3 + Vite 5 + TypeScript + Naive UI 的全�
 
 - 流式输出响应（SSE，经 `/api` 与后端通信）
 - Markdown 渲染（代码高亮）
-- 问答类型：智能问答、故障运维、测试用例生成、深度研究
+- 问答类型：智能问答、故障运维、智能体（深度研究）
 - 工具调用折叠展示
 - 推理过程展示
 - 聊天历史管理
@@ -51,7 +51,6 @@ pnpm build:gh-pages
 |------|------|
 | `VITE_BASE_API` | REST 前缀，默认 `/api` |
 | `VITE_LANGFUSE_UI_ORIGIN` | Langfuse 控制台地址，设置后显示「观测」入口 |
-| `VITE_TEST_CASE_UPLOAD_COLLECTION` | 测试助手需求文档上传集合名 |
 | `VITE_ROUTER_MODE` | 设为 `hash` 用于 GitHub Pages 部署 |
 
 运行时配置见 `src/config/env.ts`、`src/config/knowledge.ts`。
@@ -83,10 +82,12 @@ frontend/src/
 
 本前端需要配合后端服务运行，后端基于 FastAPI + LangGraph 实现。
 
-启动后端：
+启动后端（单进程 all-in-one）：
 ```bash
 cd backend
 uv run app.py
 ```
+
+生产形态为三入口 `web.py` / `control.py` / `worker.py`（需 redis 总线），见根目录 README。
 
 本地开发时 Vite 将 `/api` 代理到 `http://127.0.0.1:8089`。

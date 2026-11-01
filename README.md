@@ -1,6 +1,6 @@
 # Noesis（智枢）
 
-Noesis 是一个基于 **Vue 3 + FastAPI + LangGraph** 的全栈 AI 对话平台，面向多场景智能体协作：通用问答、故障运维、深度研究与测试用例生成。前端通过 SSE 流式展示推理与工具调用过程；后端统一 Agent 运行时、知识库 RAG 检索、AIO 沙箱与消息持久化。
+Noesis 是一个基于 **Vue 3 + FastAPI + LangGraph** 的全栈 AI 对话平台，面向多场景智能体协作：通用问答、故障运维与深度研究。前端通过 SSE 流式展示推理与工具调用过程；后端统一 Agent 运行时、知识库 RAG 检索、AIO 沙箱与消息持久化。
 
 ## 核心能力
 
@@ -9,7 +9,6 @@ Noesis 是一个基于 **Vue 3 + FastAPI + LangGraph** 的全栈 AI 对话平台
 | 智能问答 | GeneralQAAgent | RAG hybrid 检索 + 联网搜索 | 知识库增强的多轮对话，支持附件上传与引用溯源 |
 | 智能体 | SuperAgent | 文件系统 + Skills + 联网检索 | 自主调研、多步任务编排与报告产出（原深度研究） |
 | 故障运维 | FaultOperationAgent | MCP（读文件、执行命令、查日志等） | 通过 MCP 连接运维工具，多步推理定位根因 |
-| 测试用例生成 | CaseCoordinator | LangGraph 自定义工作流 | 分阶段生成测试场景与测试点，脑图可视化与人工确认 |
 
 ## 功能演示
 
@@ -24,12 +23,6 @@ Noesis 是一个基于 **Vue 3 + FastAPI + LangGraph** 的全栈 AI 对话平台
 Agent 自主加载 Skills、在沙箱工作区创建研究目录、联网检索，并通过 SSE 流式展示推理与工具调用过程。
 
 ![深度研究示例](assets/deep-research-example.png)
-
-### 测试用例生成
-
-基于需求文档分阶段生成测试场景与测试点，支持脑图可视化与人工勾选确认后批量产出用例。
-
-![测试用例生成示例](assets/test-case-example.png)
 
 ## 平台能力
 
@@ -52,7 +45,7 @@ Agent 自主加载 Skills、在沙箱工作区创建研究目录、联网检索�
 |------|------|
 | 前端 | Vue 3、Vite、TypeScript、Naive UI、Pinia、UnoCSS |
 | 后端 | FastAPI、LangChain、LangGraph、SQLAlchemy（异步） |
-| 存储 | PostgreSQL（业务数据与 LangGraph checkpoint）、Qdrant（向量检索） |
+| 存储 | PostgreSQL（业务数据与 LangGraph checkpoint）、Qdrant（向量检索）、Redis（多进程事件总线，可选） |
 | 模型 | DashScope（Qwen）/ OpenAI 兼容接口；Embedding + Rerank + VLM |
 | 沙箱 | Docker Exec（`sandbox-slim` + `sandbox-runner`）；开发可用 `local_shell` |
 | 扩展 | `extensions/skills`（Skills 包）、`extensions/mcp`（MCP 服务） |
@@ -61,7 +54,7 @@ Agent 自主加载 Skills、在沙箱工作区创建研究目录、联网检索�
 
 ```
 ┌──────────── 前端（Vue 3）────────────────────────────────────┐
-│  对话 · 知识库 · Skills · MCP 客户端 · 测试用例生成          │
+│  对话 · 知识库 · Skills · MCP 客户端                        │
 └────────────────────────┬─────────────────────────────────────┘
                          │ SSE / REST
 ┌────────────────────────▼─────────────────────────────────────┐
@@ -93,8 +86,9 @@ Agent 自主加载 Skills、在沙箱工作区创建研究目录、联网检索�
 | Node.js | 18+ |
 | pnpm | 9.x |
 | Python | 3.11+，包管理使用 [uv](https://github.com/astral-sh/uv) |
-| Docker | 本地开发用于 Qdrant 与 AIO 沙箱；生产推荐 Compose 部署 |
-| PostgreSQL | 17+，需创建业务数据库与 LangGraph checkpoint 数据库（见下方初始化） |
+| Docker | 本地开发仅用于 Qdrant 容器（可省略，需自行提供 localhost:6333）；生产推荐 Compose 部署 |
+| PostgreSQL | 17+，硬依赖（业务数据库 + LangGraph checkpoint，见下方初始化） |
+| Redis | 6+，仅三入口形态必需（`NOESIS_RUN_BUS_BACKEND=redis`）；memory 总线的单进程形态不需要 |
 
 ### 一键启动
 
@@ -140,7 +134,7 @@ Agent 自主加载 Skills、在沙箱工作区创建研究目录、联网检索�
 - 用户级 Provider、通道密钥与 MCP Header 要求配置 `SETTINGS_ENCRYPTION_KEY`，缺失时敏感配置写入会被拒绝。
 - 通讯通道支持 Telegram 与飞书企业自建应用。部署方配置一个飞书应用后，不同 Noesis 用户可分别绑定自己的飞书 Open ID；群聊仅响应 @机器人。
 
-运维与产品契约见 [设置控制面说明](docs/architecture/platform/settings-control-plane.md)。
+运维与产品契约见 [设置控制面说明](docs/engineering/platform/settings-control-plane.md)。
 
 ### 访问地址（dev 模式）
 
@@ -164,7 +158,8 @@ START_LANGFUSE=1 ./scripts/run.sh dev   # 同时启动 Langfuse 观测栈
 
 ```bash
 cd frontend && pnpm i && pnpm dev    # http://localhost:2048
-cd backend && uv run web.py          # 验证后端能否拉起（完整栈需另起 control/worker）
+cd backend && uv run app.py          # 单进程 all-in-one（memory 总线，本地自用默认）
+cd backend && uv run web.py          # 三入口形态的接入面（完整栈需另起 control.py / worker.py，且必须 redis 总线）
 ```
 
 ## 仓库结构

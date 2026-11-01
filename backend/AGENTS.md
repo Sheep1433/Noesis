@@ -40,7 +40,10 @@ backend/
 ├── evals/
 ├── sql/
 ├── tests/
-└── app.py
+├── app.py        # all-in-one 单进程入口（memory/redis 总线均可）
+├── web.py        # 三入口：接入面（redis 强制）
+├── control.py    # 三入口：调度/通道/记忆/周期核查
+└── worker.py     # 三入口：run 认领执行 + 命令消费 + 子代理
 ```
 
 ### 依赖边界（强制）
@@ -149,7 +152,8 @@ keepalive 只存在于 SSE delivery，不进入内部 event bus。API 层不得�
 
 ```bash
 cd backend
-uv run app.py
+uv run app.py                          # 单进程 all-in-one（本地默认）
+uv run web.py & uv run control.py & uv run worker.py   # 三入口（NOESIS_RUN_BUS_BACKEND=redis）
 uv run pytest tests/ -q
 ```
 

@@ -83,7 +83,7 @@ pnpm test:e2e       # Playwright E2E（e2e/，需 E2E_BASE_URL 等环境变量�
 ## 技术要点
 
 - 流式：`MarkdownPreview` 通过 `reader`（`ReadableStreamDefaultReader`）+ `model` 解析 SSE
-- `qa_type`：`COMMON_QA`、`FAULT_OPERATION_QA`、`TEST_CASE_QA`、`SUPER_AGENT_QA`（历史库内 `DEEP_RESEARCH_QA` 仅展示映射）
+- `qa_type`：`COMMON_QA`、`FAULT_OPERATION_QA`、`SUPER_AGENT_QA`（历史库内 `TEST_CASE_QA`、`DEEP_RESEARCH_QA` 仅展示映射）
 - 认证：Token 在 `sessionStorage`；`meta.requiresAuth`；401 跳登录
 
 ## 验证
