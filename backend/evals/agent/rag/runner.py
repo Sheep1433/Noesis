@@ -118,15 +118,17 @@ async def run_agentic_rag_sample(
     http = await _get_http()
 
     # ① 建会话（title 取题面前 80 字，前端列表直接可读）
-    resp = await http.post(
-        "/api/chat/sessions",
+    # ① 建会话：PUT /sessions/{id} 幂等 upsert（客户端供 id；旧 POST /sessions
+    # 已随会话 API 演进移除）
+    session_id = uuid.uuid4().hex
+    resp = await http.put(
+        f"/api/chat/sessions/{session_id}",
         json={"title": query[:80], "extra": {"qa_type": "common", "eval_line": "agent-rag"}},
         headers=_csrf_headers(),
     )
     body = resp.json()
     if resp.status_code != 200 or body.get("code") not in (200, 0):
         raise RuntimeError(f"创建会话失败: {str(body)[:200]}")
-    session_id = str(body["data"]["id"])
 
     # ② 创建 run（生产 dispatcher 启动；kb/web 参数与进程内版同语义）
     record: dict[str, Any] = {

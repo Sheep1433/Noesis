@@ -11,6 +11,12 @@ from noesis.knowledge.parser.deepdoc_config import DEEPDOC_UPSTREAM_COMMIT
 from noesis.knowledge.parser.deepdoc_result import DeepDocBlock, DeepDocParseResult, DeepDocTable
 from noesis.runtime.logging import logger
 
+# Noesis 侧解析行为版本（区别于 deepdoc 上游 commit：deepdoc_version 只钉上游
+# 移植代码，我们自己解析行为的变更不在其内）。解析行为变更时 +1，旧缓存
+# 自动失效——否则重导入会静默回放旧切块（10k 重导实测：段落对齐 0/434）。
+# 2 = 纯文本整篇单块（2026-11-01）；此前 1 = RAGFlow txt 128 token 预切。
+PARSE_BEHAVIOR_VERSION = 2
+
 
 def _cache_root() -> Path:
     return data_path("kb_parse")
@@ -67,6 +73,10 @@ def load_parse_cache(
         return None
     try:
         data = json.loads(path.read_text(encoding="utf-8"))
+        behavior = str(data.get("parse_behavior_version") or "1")
+        if behavior != str(PARSE_BEHAVIOR_VERSION):
+            logger.info(f"[parse_cache] 解析行为版本不匹配（{behavior}），忽略缓存: {path.name}")
+            return None
         version = str(data.get("deepdoc_version") or "")
         pin = (expected_deepdoc_version or DEEPDOC_UPSTREAM_COMMIT[:12]).strip()
         if pin and version and not version.startswith(pin[:12]):
@@ -88,6 +98,7 @@ def save_parse_cache(
     payload = asdict(result)
     payload["file_hash"] = file_hash
     payload["collection_name"] = collection_name
+    payload["parse_behavior_version"] = PARSE_BEHAVIOR_VERSION
     path.write_text(json.dumps(payload, ensure_ascii=False, indent=2), encoding="utf-8")
     logger.info(f"[parse_cache] 已写入 {path}")
     return path

@@ -86,13 +86,18 @@ class _FakeHttp:
         self._messages = messages
 
     async def post(self, url, json=None, data=None, headers=None):
-        if url == "/api/chat/sessions":
-            self.created_session = json
-            return _resp(200, {"code": 200, "data": {"id": "eval-agentic-rag-x"}})
         if url == "/api/chat/runs":
             self.created_run = json
             return _resp(200, {"code": 200, "data": {"run_id": "run-1"}})
         raise AssertionError(f"unexpected post {url}")
+
+    async def put(self, url, json=None, headers=None):
+        # 会话创建为 PUT /sessions/{id} 幂等 upsert（客户端供 id）
+        if url.startswith("/api/chat/sessions/"):
+            self.created_session = json
+            self.created_session_id = url.rsplit("/", 1)[-1]
+            return _resp(200, {"code": 200, "data": {"id": self.created_session_id}})
+        raise AssertionError(f"unexpected put {url}")
 
     async def get(self, url):
         if url.endswith("/messages"):
