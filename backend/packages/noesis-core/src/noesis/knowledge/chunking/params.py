@@ -185,7 +185,10 @@ def _normalize_chunk_params(effective_params: Mapping[str, Any]) -> tuple[int, i
 
 
 def _fixed_window_chunks(text: str, *, chunk_size: int, overlap: int) -> list[str]:
-    """内部容错：滑窗切片。"""
+    """固定字符窗口滑切；窗口尾部 25% 区间内优先在段落边界（\\n\\n）断开，
+    找不到退换行，再退硬切——边界可声明（``fixed window, paragraph-aligned``）、
+    不依赖任何分词器。无段落分隔的文本（表格等）行为与纯硬切一致。
+    """
     if not text:
         return []
 
@@ -194,11 +197,26 @@ def _fixed_window_chunks(text: str, *, chunk_size: int, overlap: int) -> list[st
     text_length = len(text)
     while start < text_length:
         end = min(start + chunk_size, text_length)
+        if end < text_length:
+            end = _align_window_boundary(text, start, end)
         chunks.append(text[start:end])
         if end >= text_length:
             break
         start = max(end - overlap, start + 1)
     return chunks
+
+
+def _align_window_boundary(text: str, start: int, end: int) -> int:
+    """在窗口尾部 25% 内找最后的段落/换行边界；命中则把 end 前移到边界处。"""
+    search_lo = start + max(1, (end - start) * 3 // 4)
+    window = text[search_lo:end]
+    for sep in ("\n\n", "\n"):
+        idx = window.rfind(sep)
+        if idx != -1:
+            candidate = search_lo + idx + len(sep)
+            if candidate > start:
+                return candidate
+    return end
 
 
 def normalize_collection_processing_params(raw: Optional[Mapping[str, Any]]) -> Dict[str, Any]:

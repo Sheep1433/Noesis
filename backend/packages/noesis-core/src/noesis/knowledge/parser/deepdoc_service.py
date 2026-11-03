@@ -273,24 +273,19 @@ def _parse_markdown(
 
 
 def _parse_txt(file_path: str) -> List[DeepDocBlock]:
-    # txt_parser 内部 `from deepdoc.parser.utils import get_text` 会走正常包导入，
-    # 触发 deepdoc/parser/__init__ 顶层 import pdf_parser → vision → xgboost/shapely
-    # （txt 路径完全不需要它们，且缺依赖时直接崩）。预加载 utils 按文件方式塞进
-    # sys.modules，让 txt_parser 的 import 命中缓存、不触发包 __init__。
-    # utils 自身依赖干净：pypdf + noesis 自有 rag.nlp compat，无 vision。
-    _load_deepdoc_parser_module("utils")
-    mod = _load_deepdoc_parser_module("txt_parser")
-    chunks = mod.RAGFlowTxtParser()(file_path, chunk_token_num=128)
-    blocks: List[DeepDocBlock] = []
-    for item in chunks or []:
-        if isinstance(item, (list, tuple)) and item:
-            text = str(item[0])
-        else:
-            text = str(item)
-        text = text.strip()
-        if text:
-            blocks.append(DeepDocBlock(content=text, layout_type="text"))
-    return blocks
+    """纯文本整篇单块：短文走单 chunk，超长由适配器的固定窗口路径切分。
+
+    设计依据（为何不走 deepdoc 块架构）见决策记录
+    docs/decisions/implemented/2026-11-01-纯文本入库去RAGFlow预切固定窗口段落对齐.md。
+    """
+    try:
+        text = Path(file_path).read_text(encoding="utf-8")
+    except UnicodeDecodeError:
+        text = Path(file_path).read_text(encoding="gbk", errors="replace")
+    text = text.strip()
+    if not text:
+        return []
+    return [DeepDocBlock(content=text, layout_type="text")]
 
 
 def parse_file_with_deepdoc(

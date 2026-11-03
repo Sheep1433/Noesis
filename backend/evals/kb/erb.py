@@ -53,10 +53,11 @@ def data_dir() -> Path:
     return Path(os.environ.get("ERB_DATA_DIR") or default)
 
 
-def load_data() -> tuple[list[dict], dict[str, str]]:
+def load_data(plan_path: Path | None = None) -> tuple[list[dict], dict[str, str]]:
     base = data_dir()
     questions = [json.loads(l) for l in (base / "questions.jsonl").open(encoding="utf-8")]
-    plan = json.load((base / "ingest_plan.json").open(encoding="utf-8"))
+    path = plan_path or (base / "ingest_plan.json")
+    plan = json.load(path.open(encoding="utf-8"))
     return questions, plan["dsid_map"]  # 文件名 -> dsid
 
 
@@ -64,13 +65,14 @@ def _hits_to_rows(hits: list) -> list[dict]:
     return [{"file": h.file_name, "score": round(h.rerank_score or h.score, 4)} for h in hits]
 
 
-def _search_kwargs() -> dict:
-    return {"collection_name": COLLECTION, "score_threshold": 0.0, "final_top_k": 10}
+def _search_kwargs(collection: str) -> dict:
+    return {"collection_name": collection, "score_threshold": 0.0, "final_top_k": 10}
 
 
-def load_eval_set(mode: str, sample_n: int) -> tuple[list[dict], list[dict], dict[str, str]]:
+def load_eval_set(mode: str, sample_n: int,
+                  plan_path: Path | None = None) -> tuple[list[dict], list[dict], dict[str, str]]:
     """返回 (正样本, 负样本, dsid_map)。"""
-    questions, name_to_dsid = load_data()
+    questions, name_to_dsid = load_data(plan_path)
     corpus_dsids = set(name_to_dsid.values())
     positives = [q for q in questions
                  if q["question_type"] != "info_not_found"
@@ -214,7 +216,7 @@ async def run_ablation(pos_runs: list[dict]) -> list[dict]:
 
     results = []
     for label, overrides in ABLATIONS.items():
-        kwargs = dict(_search_kwargs())
+        kwargs = dict(_search_kwargs(collection))
         if overrides:
             kwargs.update(overrides)
         ranks = []
@@ -231,7 +233,8 @@ async def run_ablation(pos_runs: list[dict]) -> list[dict]:
     return results
 
 
-async def run(mode: str, sample_n: int, ablation: bool, tag: str, threshold_window: int) -> None:
+async def run(mode: str, sample_n: int, ablation: bool, tag: str, threshold_window: int,
+               collection: str = COLLECTION, plan_path: Path | None = None) -> None:
     import time
 
     from evals.kb.metrics import gt_rank
@@ -241,7 +244,7 @@ async def run(mode: str, sample_n: int, ablation: bool, tag: str, threshold_wind
     from noesis.knowledge.runtime import knowledge_base
 
     out_dir = init_results_dir(RESULTS_ROOT, tag)
-    pos, neg, name_to_dsid = load_eval_set(mode, sample_n)
+    pos, neg, name_to_dsid = load_eval_set(mode, sample_n, plan_path)
     print(f"评测集: 正样本 {len(pos)} 负样本 {len(neg)}；tag={tag} → {out_dir}")
 
     await knowledge_base.initialize()
@@ -251,7 +254,7 @@ async def run(mode: str, sample_n: int, ablation: bool, tag: str, threshold_wind
     with eval_langfuse_run(line="kb", tag=tag, session_id=f"erb-{tag}"):
         for q in pos:
             started = time.perf_counter()
-            res = KbRetrievalService.search(query=q["question"], **_search_kwargs())
+            res = KbRetrievalService.search(query=q["question"], **_search_kwargs(collection))
             latency = (time.perf_counter() - started) * 1000
             rows = _hits_to_rows(res.hits)
             r = gt_rank(rows, name_to_dsid, q["expected_doc_ids"])
@@ -269,7 +272,7 @@ async def run(mode: str, sample_n: int, ablation: bool, tag: str, threshold_wind
             })
 
         for q in neg:
-            res = KbRetrievalService.search(query=q["question"], **_search_kwargs())
+            res = KbRetrievalService.search(query=q["question"], **_search_kwargs(collection))
             rows = _hits_to_rows(res.hits)
             neg_runs.append({"question_id": q["question_id"], "question": q["question"], "rows": rows})
             print(f"\n=== {q['question_id']} [info_not_found]"
@@ -296,7 +299,8 @@ async def run(mode: str, sample_n: int, ablation: bool, tag: str, threshold_wind
         rerank_model=ModelConfig.rerank_model_name,
         dataset={"path": str(data_dir()), "positives": len(pos), "negatives": len(neg),
                  "sample_seed": SAMPLE_SEED},
-        config={"collection": COLLECTION, "thresholds": THRESHOLDS, "ks": KS,
+        config={"collection": collection, "plan": str(plan_path or "default"),
+                "thresholds": THRESHOLDS, "ks": KS,
                 "threshold_window": threshold_window,
                 "search_calls": len(pos_runs) + len(neg_runs),
                 "bootstrap_seed": BOOTSTRAP_SEED},
@@ -320,7 +324,14 @@ if __name__ == "__main__":
     ap.add_argument("--tag", default=_auto_tag(), help="结果标签（results/<tag>/，复用被拒绝）")
     ap.add_argument("--threshold-window", type=int, default=10,
                     help="阈值模拟的 GT 存活窗口（默认 10，与 Recall 口径一致）")
+    ap.add_argument("--collection", default=COLLECTION,
+                    help="目标集合（默认 erb-eval；10k 语料用 erb-eval-10k）")
+    ap.add_argument("--plan", default="",
+                    help="ingest plan JSON（须与集合匹配，如 erb-eval-10k 对应 "
+                         "evals/kb/erb_data/ingest_plan_10k.json；缺省经典 566 篇）")
     args = ap.parse_args()
     _ensure_path()
+    plan_path = Path(args.plan) if args.plan else None
     asyncio.run(run("sample" if args.sample else "all", args.sample or 0,
-                    args.ablation, args.tag, args.threshold_window))
+                    args.ablation, args.tag, args.threshold_window,
+                    collection=args.collection, plan_path=plan_path))

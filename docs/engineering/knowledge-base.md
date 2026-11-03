@@ -51,6 +51,8 @@ upload
 
 解析失败必须返回明确错误，禁止写空向量。相同内容可通过 hash 去重；处理参数变化后应重新解析和入库。对 `deepdoc/**` 的手工修改必须登记到 `docs/NOTES.md`。
 
+纯文本（`.txt`/`.csv`）不经 deepdoc 解析：整篇单块进入分块层，超长部分由固定字符窗口（窗口尾部 25% 内优先段落边界对齐，无边界退硬切）切分——边界可声明、不依赖分词器；deepdoc 的版式解析只用于 PDF/Word/Excel/PPT/Markdown。
+
 ## 5. 检索
 
 `KbRetrievalService` 提供 vector、BM25 和 hybrid 检索，并可执行 rerank。集合配置和请求覆盖共同生成执行参数；结果需经过全局排序、limit 和权限范围限制。

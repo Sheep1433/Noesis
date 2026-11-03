@@ -192,7 +192,8 @@ async def _run(args: argparse.Namespace) -> int:
     all_records = list(load_raw_records(raw_path).values())
     summary = _summarize(all_records)
     erb_path = out_dir / "erb_answers.jsonl"
-    erb_records, unmapped = records_to_erb(all_records, load_name_to_dsid())
+    plan_path = Path(args.plan) if args.plan else None
+    erb_records, unmapped = records_to_erb(all_records, load_name_to_dsid(plan_path))
     write_erb_answers(erb_records, unmapped, erb_path)
 
     (out_dir / "summary.json").write_text(
@@ -205,6 +206,7 @@ async def _run(args: argparse.Namespace) -> int:
         dataset={"path": str(dataset_path), "count": len(rows), "sample_seed": SAMPLE_SEED},
         config={"time_budget_s": args.time_budget,
                 "erb_answers": str(erb_path),
+                "ingest_plan": str(plan_path or "evals/kb/erb_data/ingest_plan.json"),
                 "retry_failed": bool(args.retry_failed)},
         usage=aggregate_usage(all_records),
     ))
@@ -215,6 +217,9 @@ async def _run(args: argparse.Namespace) -> int:
 def main() -> None:
     parser = argparse.ArgumentParser(description="Agent E2E 评测（被测链路 + ERB 导出）")
     parser.add_argument("--dataset", default=str(DEFAULT_DATASET))
+    parser.add_argument("--plan", default="",
+                        help="ingest plan JSON（多集合评测指向对应 plan，如 "
+                             "evals/kb/erb_data/ingest_plan_10k.json；缺省 566 篇经典 plan）")
     parser.add_argument("--model-id", required=True, help="被测模型（如 glm-5.3-flash）")
     parser.add_argument("--model-user", default="",
                         help="自定义模型归属用户（用户名或 id）；提供时经用户模型解析，未命中即报错")

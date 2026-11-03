@@ -163,3 +163,38 @@ async def test_agentic_rag_runner_drives_production_http(monkeypatch):
     assert result["input_tokens"] == 99
     assert result["tool_outputs"][0]["name"] == "search_knowledge_base"
     assert "guide.md" in result["tool_outputs"][0]["output"]
+
+
+def test_to_erb_normalizes_upload_hash_names(tmp_path, monkeypatch):
+    """kb 引用名带上传去重后缀（name~hash.txt，hash 在扩展名之前）时，
+    经 ingest_plan 的 docs 映射仍能回 dsid——归一化顺序：先去扩展名再去 ~hash。"""
+    from pathlib import Path as P
+
+    import evals.agent.rag.to_erb as to_erb_mod
+
+    plan_path = tmp_path / "plan.json"
+    plan_path.write_text(json.dumps({"docs": [
+        {"path": "/x/dsid_11111111111111111111111111111111__monthly-report.txt",
+         "name": "monthly-report~11111111.txt"},
+        {"path": "/x/dsid_22222222222222222222222222222222__legacy-a.md",
+         "name": "legacy-a.md"},
+    ]}), encoding="utf-8")
+    monkeypatch.setattr(to_erb_mod, "INGEST_PLAN", plan_path)
+
+    name_to_dsid = to_erb_mod.load_name_to_dsid()
+    records = [{
+        "question_id": "qst_0009",
+        "completed": True,
+        "final_text": "回答",
+        "kb_refs": [
+            "kb:erb-eval-10k/monthly-report~11111111.txt",
+            "kb:erb-eval-10k/legacy-a.md",
+        ],
+        "tool_outputs": [],
+    }]
+    erb_records, unmapped = to_erb_mod.records_to_erb(records, name_to_dsid)
+    assert erb_records[0]["document_ids"] == [
+        "dsid_11111111111111111111111111111111",
+        "dsid_22222222222222222222222222222222",
+    ]
+    assert unmapped == set()

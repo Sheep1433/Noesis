@@ -26,9 +26,14 @@ INGEST_PLAN = Path("evals/kb/erb_data/ingest_plan.json")
 _DSID_RE = re.compile(r"^(dsid_[0-9a-f]{32})__")
 
 
-def load_name_to_dsid() -> dict[str, str]:
-    """ingest_plan 的 docs 列表：路径含 dsid_XXX__ 前缀，文件名即语料短名。"""
-    plan = json.loads(INGEST_PLAN.read_text(encoding="utf-8"))
+def load_name_to_dsid(plan_path: Path | None = None) -> dict[str, str]:
+    """ingest_plan 的 docs 列表：路径含 dsid_XXX__ 前缀，name 即入库文件名。
+
+    多集合评测（erb-eval / erb-eval-10k）各有独立 plan 文件，
+    ``plan_path`` 指定本轮流评对应的 plan；缺省为经典 566 篇 plan。
+    """
+    path = plan_path or INGEST_PLAN
+    plan = json.loads(path.read_text(encoding="utf-8"))
     docs = plan["docs"] if isinstance(plan, dict) else plan
     mapping: dict[str, str] = {}
     for doc in docs:
@@ -36,7 +41,7 @@ def load_name_to_dsid() -> dict[str, str]:
         if dsid:
             mapping[doc["name"]] = dsid.group(1)
     if not mapping:
-        raise ValueError(f"{INGEST_PLAN} 中没有解析出任何 dsid 映射")
+        raise ValueError(f"{path} 中没有解析出任何 dsid 映射")
     return mapping
 
 
@@ -113,6 +118,8 @@ def main() -> None:
     parser = argparse.ArgumentParser(description="raw.jsonl → ERB 官方 answers.jsonl")
     parser.add_argument("--raw-file", required=True)
     parser.add_argument("--output", required=True)
+    parser.add_argument("--plan", default="",
+                        help="ingest plan JSON（多集合评测指向对应 plan；缺省经典 566 篇）")
     args = parser.parse_args()
 
     # 同 sample_id 后写覆盖先写（断点续跑的增量日志语义，与 __main__ 一致）
@@ -121,8 +128,9 @@ def main() -> None:
         if line.strip():
             record = json.loads(line)
             latest[str(record.get("sample_id"))] = record
+    plan_path = Path(args.plan) if args.plan else None
     erb_records, unmapped = records_to_erb(
-        list(latest.values()), load_name_to_dsid())
+        list(latest.values()), load_name_to_dsid(plan_path))
     write_erb_answers(erb_records, unmapped, Path(args.output))
 
 
