@@ -8,6 +8,7 @@ from pathlib import Path
 from typing import Any, Dict, List, Optional
 
 from noesis.config.paths import DATA_DIR
+from noesis.fsutil import atomic_write_text
 from noesis.config.user_data_paths import ensure_user_channels_path, get_user_channels_path
 from noesis.chat.delivery.channels import ChannelBinding, channel_bindings
 from noesis.chat.delivery.channel_health import channel_health
@@ -79,7 +80,7 @@ def _load_raw(user_id: str | int) -> Dict[str, Any]:
 
 def _save_raw(user_id: str | int, data: Dict[str, Any]) -> None:
     path = ensure_user_channels_path(user_id)
-    path.write_text(json.dumps(data, ensure_ascii=False, indent=2), encoding="utf-8")
+    atomic_write_text(path, json.dumps(data, ensure_ascii=False, indent=2))
     _sync_bindings(user_id, data.get("channels") or [])
 
 

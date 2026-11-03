@@ -24,6 +24,7 @@ from noesis.config.mcp_config import (
     validate_user_server_config,
 )
 from noesis.config.user_data_paths import ensure_user_mcp_path, get_user_mcp_path
+from noesis.fsutil import atomic_write_text
 from noesis.schemas.mcp_vo import (
     McpConfigFileResponse,
     McpProbeResponse,
@@ -152,7 +153,7 @@ class McpService:
                 # 损坏或空文件 → 覆盖为模板
                 pass
         ensure_user_mcp_path(user_id)
-        path.write_text(_DEFAULT_USER_MCP, encoding="utf-8")
+        atomic_write_text(path, _DEFAULT_USER_MCP)
         _clear_mcp_caches()
         logger.info("已 seed 用户 MCP 配置 user_id={} path={}", user_id, path)
 

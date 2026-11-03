@@ -20,13 +20,11 @@ def _log_file_stem() -> str:
 
     三角色 / 多副本 bind 同一数据目录时（compose --scale），按「角色 + 实例」
     切分日志文件：多进程写同一文件时，进程内 50MB 轮转与压缩会互相覆盖
-    （曾实际发生：同一天出现两个进程各自轮转出的 zip）。角色优先取
-    NOESIS_ROLE（工厂式启动场景），缺省取入口脚本名（python web.py -> web）；
-    实例段用主机名——compose 副本主机名即容器 ID，天然唯一。
+    （曾实际发生：同一天出现两个进程各自轮转出的 zip）。角色取入口脚本名
+    （python web.py -> web，各形态启动方式均如此）；实例段用主机名——
+    compose 副本主机名即容器 ID，天然唯一，本地为主机名。
     """
-    role = os.environ.get("NOESIS_ROLE", "").strip()
-    if not role:
-        role = Path(sys.argv[0]).stem if sys.argv and sys.argv[0] else ""
+    role = Path(sys.argv[0]).stem if sys.argv and sys.argv[0] else ""
     role_seg = _sanitize_segment(role) or "main"
     instance_seg = _sanitize_segment(os.uname().nodename) or "i"
     return f"{role_seg}_{instance_seg}"

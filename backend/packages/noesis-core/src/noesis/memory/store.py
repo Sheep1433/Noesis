@@ -13,7 +13,6 @@
 from __future__ import annotations
 
 import hashlib
-import os
 import re
 from dataclasses import dataclass, field
 from datetime import date, datetime
@@ -22,6 +21,7 @@ from pathlib import Path
 import yaml
 
 from noesis.config.user_data_paths import get_user_root
+from noesis.fsutil import atomic_write_text
 from noesis.memory.types import MEMORY_TYPES, TYPE_LABELS, validate_memory_type
 
 _INDEX_HEADER = "<!-- Noesis 记忆索引：引擎维护，可手动编辑；一行一条 -->\n\n"
@@ -72,13 +72,6 @@ class IndexState:
 
 def _now_date() -> str:
     return datetime.now().astimezone().strftime("%Y-%m-%d")
-
-
-def _atomic_write(path: Path, content: str) -> None:
-    path.parent.mkdir(parents=True, exist_ok=True)
-    tmp = path.with_name(f".{path.name}.tmp")
-    tmp.write_text(content, encoding="utf-8")
-    os.replace(tmp, path)
 
 
 def _yaml_scalar(value: object) -> str:
@@ -208,7 +201,7 @@ class MemoryStore:
         (root / JOURNAL_DIR).mkdir(exist_ok=True)
         index = root / "MEMORY.md"
         if not index.is_file():
-            _atomic_write(index, _INDEX_HEADER + cls._render_index([]))
+            atomic_write_text(index, _INDEX_HEADER + cls._render_index([]))
         return root
 
     # ----- 索引 -----
@@ -274,7 +267,7 @@ class MemoryStore:
         ordered = sorted(
             entries, key=lambda e: (MEMORY_TYPES.index(e.memory_type), e.slug)
         )
-        _atomic_write(cls.index_path(user_id), _INDEX_HEADER + cls._render_index(ordered))
+        atomic_write_text(cls.index_path(user_id), _INDEX_HEADER + cls._render_index(ordered))
 
     @classmethod
     def rebuild_index(cls, user_id: str | int) -> IndexState:
@@ -486,7 +479,7 @@ class MemoryStore:
             updated=today,
             sources=merged_sources,
         )
-        _atomic_write(cls.entry_path(user_id, memory_type, target_slug), content)
+        atomic_write_text(cls.entry_path(user_id, memory_type, target_slug), content)
 
         entry = IndexEntry(
             memory_type=memory_type,
@@ -537,7 +530,7 @@ class MemoryStore:
         if not current or current == memory_type:
             return None
         meta["type"] = memory_type
-        _atomic_write(path, _dump_frontmatter(meta) + prose)
+        atomic_write_text(path, _dump_frontmatter(meta) + prose)
         return current
 
     @classmethod

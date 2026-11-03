@@ -7,6 +7,7 @@ import re
 from pathlib import Path
 
 from noesis.config.paths import data_path
+from noesis.fsutil import atomic_write_bytes
 
 _UNSAFE_NAME_RE = re.compile(r'[\\/:*?"<>|]')
 
@@ -37,6 +38,5 @@ def write_staging(
     """写入暂存文件，返回 (路径, sha256 hex)。"""
     file_hash = hashlib.sha256(content).hexdigest()
     path = staging_path(collection_name, file_hash, original_filename)
-    path.parent.mkdir(parents=True, exist_ok=True)
-    path.write_bytes(content)
+    atomic_write_bytes(path, content)
     return path, file_hash
