@@ -295,9 +295,8 @@ class KbRetrievalService:
             candidates = hits[:rerank_k]
             rerank_input_count = len(candidates)
             t_rerank = time.perf_counter()
-            hits = cls._apply_rerank(query, candidates)
+            hits, rerank_applied = cls._apply_rerank(query, candidates)
             rerank_ms = (time.perf_counter() - t_rerank) * 1000
-            rerank_applied = True
         elif use_rerank and hits and not is_rerank_available():
             logger.warning("[KbRetrievalService] use_reranker=true 但 rerank 未配置，降级 recall 排序")
 
@@ -347,13 +346,20 @@ class KbRetrievalService:
         return KbSearchResult(hits=final_hits, timing=timing)
 
     @classmethod
-    def _apply_rerank(cls, query: str, hits: List[KbSearchHit]) -> List[KbSearchHit]:
+    def _apply_rerank(cls, query: str,
+                      hits: List[KbSearchHit]) -> Tuple[List[KbSearchHit], bool]:
+        """rerank 并返回 (排序后 hits, 是否真正应用了 rerank 分数)。
+
+        失败时返回 (原始 hits, False)——调用方据此跳过 threshold 过滤
+        （RRF 融合分 ~0.0x 与 rerank 0~1 分量纲不同，阈值错用会滤空结果，
+        10k 评测实测：rerank 降级期间 35 题检索被静默滤空）。
+        """
         documents = [h.content for h in hits]
         try:
             ranked = rerank_documents(query, documents, top_n=len(documents))
         except Exception as exc:
             logger.warning(f"[KbRetrievalService] rerank 失败，降级 recall 排序: {exc}")
-            return hits
+            return hits, False
 
         by_index = {i: h for i, h in enumerate(hits)}
         reranked: List[KbSearchHit] = []
@@ -380,7 +386,7 @@ class KbRetrievalService:
                     identity_status=hit.identity_status,
                 )
             )
-        return reranked or hits
+        return reranked or hits, True
 
     @staticmethod
     def _matches_qdrant_filter(

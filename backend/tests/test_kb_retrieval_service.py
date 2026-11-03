@@ -231,7 +231,7 @@ def test_rerank_preserves_evidence_identity(mock_rerank) -> None:
         collection_name="kb1",
     )
 
-    reranked = KbRetrievalService._apply_rerank("q", [original])
+    reranked, _applied = KbRetrievalService._apply_rerank("q", [original])
 
     assert reranked[0].document_id == "doc-1"
     assert reranked[0].document_version_id == "docv-1"
@@ -290,3 +290,31 @@ def test_threshold_not_applied_without_rerank(mock_get_retrieval, _unavail, mock
         vector_dimension=1024,
     )
     assert len(result.hits) == 1
+
+
+def test_rerank_degradation_does_not_apply_threshold():
+    """rerank 降级时 threshold 必须不应用——RRF 分数量纲 ~0.03，
+    0.1 阈值会把结果全杀（10k 评测实测：35 题检索被静默滤空）。
+
+    修复：_apply_rerank 返回 (hits, applied)；失败时 applied=False，
+    调用方据此跳过 threshold 过滤。
+    """
+    from noesis.knowledge.retrieval.service import KbRetrievalService, KbSearchHit
+
+    hits = [KbSearchHit(id=f"p{i}", score=0.03, content=f"doc {i}", file_name=f"f{i}.txt",
+                        search_mode="hybrid", recall_score=0.03, rerank_score=None)
+            for i in range(3)]
+
+    # rerank 失败路径：返回 (原始 hits, False)
+    with patch("noesis.knowledge.retrieval.service.rerank_documents",
+               side_effect=RuntimeError("api down")):
+        result, applied = KbRetrievalService._apply_rerank("q", hits)
+    assert applied is False, "rerank 失败时 applied 应为 False"
+    assert len(result) == 3, "降级应返回原始 hits"
+
+    # rerank 成功路径：返回 (排序后 hits, True)
+    with patch("noesis.knowledge.retrieval.service.rerank_documents",
+               return_value=[(2, 0.9), (0, 0.5), (1, 0.3)]):
+        result2, applied2 = KbRetrievalService._apply_rerank("q", hits)
+    assert applied2 is True
+    assert result2[0].file_name == "f2.txt"
