@@ -7,6 +7,7 @@ from pathlib import Path
 from typing import Any, Optional
 
 from noesis.config.paths import data_path
+from noesis.fsutil import atomic_write_text
 from noesis.knowledge.parser.deepdoc_config import DEEPDOC_UPSTREAM_COMMIT
 from noesis.knowledge.parser.deepdoc_result import DeepDocBlock, DeepDocParseResult, DeepDocTable
 from noesis.runtime.logging import logger
@@ -99,6 +100,7 @@ def save_parse_cache(
     payload["file_hash"] = file_hash
     payload["collection_name"] = collection_name
     payload["parse_behavior_version"] = PARSE_BEHAVIOR_VERSION
-    path.write_text(json.dumps(payload, ensure_ascii=False, indent=2), encoding="utf-8")
+    # 共享目录上并发写/读同一缓存：原子替换，读方不取半截 JSON
+    atomic_write_text(path, json.dumps(payload, ensure_ascii=False, indent=2))
     logger.info(f"[parse_cache] 已写入 {path}")
     return path

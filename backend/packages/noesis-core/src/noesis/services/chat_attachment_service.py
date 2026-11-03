@@ -6,7 +6,6 @@ import asyncio
 import mimetypes
 import os
 import re
-import time
 import uuid
 from pathlib import Path
 from typing import List, Optional, Tuple
@@ -14,6 +13,7 @@ from typing import List, Optional, Tuple
 from sqlalchemy import and_, delete, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from noesis.fsutil import atomic_write_bytes, atomic_write_text
 from noesis.ids import now_ms
 from noesis.config.env import ChatAttachmentConfig
 from noesis.config.user_data_paths import (
@@ -305,7 +305,8 @@ class ChatAttachmentService:
 
         attachment_id = str(uuid.uuid4())
         upload_path = _uploads_dir(user_id, session_id) / safe_name
-        upload_path.write_bytes(content)
+        # 共享目录上原子落盘：读方（worker 沙箱）不取半截上传文件
+        atomic_write_bytes(upload_path, content)
         original_rel = _rel_path(upload_path, user_id, session_id)
 
         resolved_mime = mime_type or mimetypes.guess_type(safe_name)[0]
@@ -333,7 +334,7 @@ class ChatAttachmentService:
                     )
                     raise ServiceException(message="文档解析后正文为空，请检查文件是否为扫描件或格式损坏")
                 md_path = _attachments_dir(user_id, session_id) / f"{stem}.md"
-                md_path.write_text(md_text, encoding="utf-8")
+                atomic_write_text(md_path, md_text)
                 markdown_rel = _rel_path(md_path, user_id, session_id)
                 char_count = len(md_text)
                 status = "parsed"
