@@ -29,6 +29,7 @@ from noesis.agents.middlewares import (
     SnipMiddleware,
     ToolFailureMiddleware,
     ToolResultBudgetMiddleware,
+    UnsupportedContentMiddleware,
 )
 from noesis.agents.middlewares.compaction_middleware import PRIVATE_STATE_KEYS as _COMPACTION_KEYS
 from noesis.agents.middlewares.durable_context_middleware import PRIVATE_STATE_KEYS as _DURABLE_KEYS
@@ -179,6 +180,9 @@ def build_noesis_stack(deps: NoesisStackDeps) -> list[AgentMiddleware]:
         count_turns=deps.profile != "SUBAGENT",
     ))
     stack.extend(deps.middleware)
+    # 图片内容过滤挂 HITL 之前：请求侧按当前模型过滤图片块，模型名取自
+    # request.model（运行中切模型 VL ↔ 非 VL 时历史图片块的能力适配）
+    stack.append(UnsupportedContentMiddleware())
     if deps.interrupt_on:
         stack.append(HumanInTheLoopMiddleware(interrupt_on=deps.interrupt_on))
     return stack

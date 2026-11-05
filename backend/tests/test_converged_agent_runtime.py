@@ -40,6 +40,7 @@ def test_inventory_has_single_kernel_in_spec_order() -> None:
         "PatchToolCallsMiddleware",
         "LLMErrorHandlingMiddleware",
         "SessionStatsMiddleware",
+        "UnsupportedContentMiddleware",
     ]
 
 

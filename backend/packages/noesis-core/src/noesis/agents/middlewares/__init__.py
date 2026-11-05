@@ -52,6 +52,7 @@ from noesis.agents.middlewares.tool_result_budget_middleware import (
     ToolResultBudgetMiddleware,
     ToolResultBudgetState,
 )
+from noesis.agents.middlewares.unsupported_content_middleware import UnsupportedContentMiddleware
 
 __all__ = [
     "CompactionMiddleware",
@@ -83,6 +84,7 @@ __all__ = [
     "ToolFailureMiddleware",
     "ToolResultBudgetMiddleware",
     "ToolResultBudgetState",
+    "UnsupportedContentMiddleware",
     "WriteRejectedError",
     "apply_snip_projection",
     "derive_durable_context",

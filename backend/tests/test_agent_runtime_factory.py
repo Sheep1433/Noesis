@@ -23,4 +23,5 @@ def test_inventory_is_generated_from_actual_instances() -> None:
         "PatchToolCallsMiddleware",
         "LLMErrorHandlingMiddleware",
         "SessionStatsMiddleware",
+        "UnsupportedContentMiddleware",
     ]

@@ -43,6 +43,7 @@ def test_common_stack_exact_order() -> None:
         "CompactionMiddleware",
         "LLMErrorHandlingMiddleware",
         "SessionStatsMiddleware",
+        "UnsupportedContentMiddleware",
     ]
 
 
@@ -92,6 +93,7 @@ def test_full_super_stack_exact_order() -> None:
         "ToolCallLimitMiddleware",
         "LLMErrorHandlingMiddleware",
         "SessionStatsMiddleware",
+        "UnsupportedContentMiddleware",
         "HumanInTheLoopMiddleware",
     ]
     filesystem = next(item for item in stack if type(item).__name__ == "FilesystemMiddleware")
