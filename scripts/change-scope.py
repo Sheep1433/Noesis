@@ -32,6 +32,38 @@ LAYERS: list[tuple[str, tuple[str, ...]]] = [
     ("root", ("AGENTS.md", "CLAUDE.md", "README.md", ".gitignore")),
 ]
 
+# 跨层耦合提示：diff 触及部署面的对端文件时提醒核对。来源是真实事故：
+# worker-role-split 只改了后端代码，compose/nginx/部署脚本里的 backend
+# 服务名三处遗留未同步，线上 502 中断 35 分钟。
+CROSS_LAYER_HINTS: list[tuple[tuple[str, ...], str]] = [
+    (
+        (
+            "backend/web.py",
+            "backend/control.py",
+            "backend/worker.py",
+            "backend/app.py",
+            "backend/server/bootstrap/",
+        ),
+        "后端启动形态/角色变动：核对 deploy/docker-compose.yml 的服务名与 command、"
+        "deploy/frontend/nginx.conf 的 upstream 主机名、scripts/deploy-remote.sh 的服务引用",
+    ),
+    (
+        ("deploy/docker-compose.yml",),
+        "compose 服务变动：核对 deploy/frontend/nginx.conf upstream 是否指向现存服务名；"
+        "新增/改名服务须同步 scripts/deploy-remote.sh 停服名单与迁移服务；"
+        "新增环境变量须同步 deploy/.env.docker.example 与服务器 deploy/.env.docker",
+    ),
+    (
+        (
+            "deploy/.env.docker.example",
+            "deploy/config.docker.example.yaml",
+            "backend/config.example.yaml",
+        ),
+        "配置样例变动：生产服务器对应实文件（deploy/.env.docker / config.docker.yaml）"
+        "需同步核对，新必填项缺省会 fail-fast 拒绝启动",
+    ),
+]
+
 OWNING_CHECKS: dict[str, list[str]] = {
     "backend": [
         "cd backend && uv run pytest tests/ -q   # 默认套件（api_contract 级契约在 tests/api_contract/）",
@@ -105,11 +137,17 @@ def main() -> int:
     for p in dirty:
         layers.setdefault(classify(p), {}).setdefault("worktree", []).append(p)
 
+    all_paths = committed + dirty
+    hints = [hint for prefixes, hint in CROSS_LAYER_HINTS if any(
+        p == pref or p.startswith(pref) for p in all_paths for pref in prefixes
+    )]
+
     if args.as_json:
         print(json.dumps({
             "base": base, "head": head, "merge_base": merge_base,
             "layers": layers,
             "owning_checks": {k: v for k, v in OWNING_CHECKS.items() if k in layers},
+            "cross_layer_hints": hints,
         }, ensure_ascii=False, indent=2))
         return 0
 
@@ -130,6 +168,11 @@ def main() -> int:
         print("  owning checks:")
         for c in OWNING_CHECKS.get(layer, ["（无预设，按改动内容判断）"]):
             print(f"    {c}")
+        print()
+    if hints:
+        print("## 跨层耦合提示（部署面对端，须人工核对）")
+        for h in hints:
+            print(f"  - {h}")
         print()
     return 0
 

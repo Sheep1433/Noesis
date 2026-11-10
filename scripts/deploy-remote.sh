@@ -74,6 +74,14 @@ while IFS= read -r logfile; do
   truncate -s 0 "${logfile}"
 done < <(find /var/lib/docker/containers -name '*-json.log' -size +200M 2>/dev/null || true)
 
+# 清理后硬校验：低于 10G 拒绝部署（build 中途耗尽磁盘会把栈留在半部署态，
+# 且 Postgres 在满盘上会进入崩溃循环——曾实际发生）。释放手段见上方
+# prune/截断；仍不足说明有 prune 覆盖不到的大头，交人工排查。
+avail_kb="$(df --output=avail / | tail -1 | tr -d ' ')"
+if [ "${avail_kb}" -lt $((10 * 1024 * 1024)) ]; then
+  die "清理后根分区仅剩 $((avail_kb / 1024 / 1024))G（需 ≥10G）：磁盘满会导致构建中断与 Postgres 崩溃循环，先排查大文件再部署"
+fi
+
 echo "==> 构建镜像"
 # --progress=plain 持续输出构建日志，避免 CI SSH 长时间无输出被断开（Broken pipe）
 compose build --progress=plain

@@ -21,10 +21,12 @@
   `user_scheduled_task_runs` 重启后无任何收口路径，永久停在 running（无人知道它不自愈）。方案：按 durable
   facts（DB 终态 + outbox）重写启动对账，三类任务（子 Agent / 后台命令 / 定时任务）的恢复语义写进
   openspec 规格——能恢复什么、不能恢复什么、不能恢复的显式终态。
-- [ ] **基础设施守护**：磁盘水位告警；advisory lock 断连的外发告警（现在只写容器日志，静默降级了五天）；
-  `deploy/` 目录（部署脚本、nginx 配置）纳入 `scripts/change-scope.py` 影响面。事故证据：磁盘满 → Postgres
-  崩溃循环（登录 502）；worker-role-split 只改代码漏改部署面 → nginx upstream 指向已删服务名，502 中断
-  35 分钟。
+- [x] **基础设施守护**（2026-11-10 完成，见决策记录「生产基础设施守护」）：服务器看门狗
+  （磁盘水位 + `/health` 探测，Telegram 告警，状态跃迁触发 + 恢复通知，crontab 5 分钟）；`deploy-remote.sh`
+  清理后剩余 <10G 拒绝部署；`change-scope.py` 跨层耦合提示（后端启动形态/compose/配置样例 → 部署面对端核对）。
+  上线首日即捕获真实水位事件（构建缓存涨至 90% 告警 → 清理回 80% → 恢复通知，双向链路实测）。事故证据：
+  磁盘满 → Postgres 崩溃循环（登录 502）；worker-role-split 只改代码漏改部署面 → nginx upstream 指向已删
+  服务名，502 中断 35 分钟。
 
 ## P1 可靠性
 
