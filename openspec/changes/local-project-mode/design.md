@@ -25,8 +25,8 @@ TODO 起草时把「存储瘦身」（P0.3）当成一条均质任务，代码�
 
 TODO P1.4 写的挂载点 `agents/runtime/tool_registry.py` 不存在。真实挂载点两层：
 
-1. **路径边界（写操作）**：`AgentPathBackend` 外再包一层 `ProjectBoundaryBackend`（同 `SandboxBackendProtocol`）：写/删目标解析后落在项目根外 → 拒绝并返回可解释错误（「项目外路径：{path}，本次会话工作目录为 {root}」）。读放行。这个位置对中间件栈透明、对 `FilesystemMiddleware` 全部文件工具一次覆盖，且不依赖任何新机制。
-2. **操作分级（执行/网络/写确认）**：复用 HITL——`HumanInTheLoopMiddleware(interrupt_on=...)` 按工具名中断的机制现成；扩展 `InterruptOnConfig` 支持参数级谓词（`execute` 的命令、网络工具的 URL、写工具的路径模式）判定是否需要确认。CLI 侧的确认 UI 是终端 y/n 提示（`noesis-cli` 交互已有先例）。
+1. **路径边界（写操作）**：`AgentPathBackend` 外再包一层 `ProjectBoundaryBackend`（同 `SandboxBackendProtocol`）：写/删目标解析后落在项目根外 → 拒绝并返回可解释错误（「项目外路径：{path}，本次会话工作目录为 {root}」）。读放行。这个位置对中间件栈透明、对 `FilesystemMiddleware` 全部文件工具一次覆盖，且不依赖任何新机制。拦截器保持框架无关（只看工具名 + 参数 dict，返回值或错误文本）——参照 deepagents-code 的 `RepositoryBounds`：一条实现被多个消费方共享，符号链接逃逸在解析后判定。
+2. **操作分级（执行/网络/写确认）**：复用 HITL——`HumanInTheLoopMiddleware(interrupt_on=...)` 按工具名中断的机制现成；扩展 `InterruptOnConfig` 支持参数级谓词（`execute` 的命令、网络工具的 URL、写工具的路径模式）判定是否需要确认。CLI 侧的确认 UI 是终端 y/n 提示（`noesis-cli` 交互已有先例）。全局模式取 deepagents-code 的三档词汇：`manual`（逐次确认）/ `auto`（项目内自动、高危仍确认）/ `yolo`（全自动，进入前需显式确认且界面常驻指示）——比 TODO 的「可配置放行」更完整，且已被官方产品验证。
 
 **授权记忆**（P1.2「本次允许 / 永久允许」）：按「工具 + 参数模式」记录进 `.noesis/local.db` 的授权表；「永久允许」命中即免确认，「本次允许」进会话内缓存。CLI 的 `--yes-all` / 配置文件可预置放行集（等价 Claude Code 的 permission modes）。
 
@@ -34,7 +34,8 @@ TODO P1.4 写的挂载点 `agents/runtime/tool_registry.py` 不存在。真实�
 
 ## 4. 本地持久化
 
-- **checkpointer**：新增可选依赖 `langgraph-checkpoint-sqlite`，CLI 组合根换 `AsyncSqliteSaver`（`temporary_checkpointer` 的 ContextVar 覆盖机制沿用）；路径 `.noesis/checkpoint.db`。换实现已有先例（noesis-cli 的 `MemorySaver` 即经此机制跑通）。
+- **checkpointer**：新增可选依赖 `langgraph-checkpoint-sqlite`，CLI 组合根换 `AsyncSqliteSaver`（`temporary_checkpointer` 的 ContextVar 覆盖机制沿用）；路径 `.noesis/checkpoint.db`。换实现已有先例（noesis-cli 的 `MemorySaver` 即经此机制跑通）。选型与 deepagents-code（官方终端 Agent）一致，其生产细节需一并处理：aiosqlite 锁库的 busy_timeout 等待、状态目录权限硬化；会话格式带版本号（参照其 `state_migration`），未来格式变更可迁移。
+- **会话锁**：同项目并发开两个 CLI 进程会争抢同一 `.noesis/` 状态（SQLite 写锁 + checkpoint 互踩）——加会话级文件锁（deepagents-code `_session_lock` 同款问题），第二个进程给出可解释错误而非静默互踩。
 - **会话/消息/授权/待办**：`.noesis/local.db` 一个 SQLite 文件，直接 SQLAlchemy（aiosqlite）建四张轻表（session / message / permission_grant / todo_item）——**不经 ChatService / RunService / pg_manager**，CLI 自己的 repository。终态一致性保持「先比较再写入」（compare-and-set 单行 UPDATE 的 WHERE 带旧值），SQLite 单写者下足够，不引入平台的三段式复杂度。
 - **记忆**：memory 包（文件式 store）本就落 `.noesis/users/`，与项目内 `.noesis/` 的关系按 TODO P0.1「按项目隔离」——项目根 `.noesis/` 即该项目的全部状态（DATA_DIR 机制已有 `NOESIS_DATA_DIR` 环境变量切点，CLI 设为项目内）。
 
@@ -45,8 +46,12 @@ TODO P1.4 写的挂载点 `agents/runtime/tool_registry.py` 不存在。真实�
 3. **M3 用得久**：SQLite checkpointer + local.db 会话/待办 + 记忆按项目隔离。验收：重启后会话可续；多项目互不串扰。
 4. **M2 完成才进 P2 每日自用**（TODO 的顺序约束：权限先于真实项目）。
 
-## 6. 被否方案
+## 6. 与 deepagents-code 的关系及被否方案
 
+deepagents-code（`dcode`，langchain-ai 官方终端编码 Agent，同 SDK 底座）已实现 TODO 的目标形态（真实目录 + approval 三档 + SQLite 持久化 + skills/subagents/memory），其已验证设计（三档模式、`AsyncSqliteSaver` + busy_timeout、会话锁、框架无关拦截器）本提案直接吸收，见 §3/§4。**不做的事与它划清**：本提案不造通用编码 Agent，是让 Noesis 的工作模型（QA 编排、记忆 consolidation、后台子 Agent、平台形态）能在本地目录运行——dcode 恰好没有的这层。
+
+- **直接改用 dcode 放弃自研**：被否——dcode 的工作模型是通用编码 Agent（简单持久记忆、无 QA 编排/知识库/后台任务交付契约），TODO 的核心诉求是自己的工作模型落地本地，不是再要一个 Claude Code 替代品。
+- **fork dcode 塞入 Noesis 装配**：被否——dcode 的 hooks/extensions/plugins 体系与 Noesis 的 middleware 栈是两套组合机制，fork 后双轨维护成本高于自建三步（M1-M3），且丢失与上游 SDK 的升级同步。
 - **先做网页形态本地化（app.py SQLite 化）**：被否——156 处 pg_manager 直引无 repository 边界，工程量差 CLI 路线一个数量级；形态不是重点（TODO 原文），先用最短路径验证工作模型。
 - **AgentPathBackend 里内嵌权限判断**：被否——该层职责是路径映射，塞分级逻辑会让「读放行/写询问」的策略与映射耦合；独立包装层可单独测试与替换。
 - **新造中断机制做确认**：被否——HITL 栈内机制现成（`interrupt_on` + resume 链路），TODO P1.3 原文即要求复用。
