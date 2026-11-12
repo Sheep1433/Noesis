@@ -3,8 +3,9 @@
 ## M0 形态收窄（平台减面，先行）
 
 - [ ] 0.1 删除 FaultOperationAgent 及编排分支：qa_service 路由、意图分类三值、`FAULT_OPERATION_QA` 构建入口；存量会话只读映射（同 TEST_CASE_QA 处置），契约测试同步
-- [ ] 0.2 qa_type 收窄两值：`COMMON_QA` 语义映射轻档、`SUPER_AGENT_QA` 重档；平台前端形态选择 UI 简化为档位 + 兜底规则（带附件/提及工作目录 → 重档）
+- [ ] 0.2 qa_type 收窄两值：`COMMON_QA` 语义映射轻档、`SUPER_AGENT_QA` 重档；平台前端形态选择 UI 简化为档位 + 兜底规则（带附件/提及工作目录 → 重档）；通道配置面 `_ALLOWED_QA`（channel_run_service）同步剔除废弃值
 - [ ] 0.3 平台回归：`uv run pytest tests/ -q` + `api_contract` 全绿；通道与定时任务行为不变（本就只跑 SUPER_AGENT_QA）
+- [ ] 0.4 常驻文档同步：`AGENTS.md` qa_type 表与 Agent 表（删 FaultOperationAgent 行）、`README.md` 故障运维场景描述；`docs/engineering/` 中涉及三形态的表述
 
 ## M1 核心能跑（HeadSession + 双档 + --project）
 
@@ -33,7 +34,7 @@
 
 - [ ] 4.1 头协议冻结：事件词汇（SSE 词汇表）× 传输编码（进程内 / HTTP-SSE）× 版本协商；契约测试钉住（与 SSE 契约同一套钉法）
 - [ ] 4.2 ACP 评估结论：Noesis 事件词汇 ↔ ACP 方法集映射可行性；可行则加 ACP 适配层（桌面/编辑器生态位），不可行则记录差异并保留自有协议
-- [ ] 4.3 `--web` 头：本地起服务（无 auth）+ 复用 SSE 投影管道与 Vue 前端本地档；前端平台 API 的本地适配层（M4 最大实工量）
+- [ ] 4.3 `--web` 头：本地起服务（无 auth）+ 复用 SSE 投影管道与 Vue 前端本地档；前端本地适配层须点名处理：authHttp 的 CSRF/401 跳转、`@/api/mcp` 与 `@/api/skills` 依赖、chat.vue 的平台端点面（M4 最大实工量）
 - [ ] 4.4 M4 验收：终端与浏览器打开同一条会话，事件流一致
 
 ## M5 多智能体派生
@@ -44,4 +45,4 @@
 ## 收尾
 
 - [ ] 6.1 平台零影响回归（M0 后每里程碑）；openspec 归档时把 design 判断依据提炼为决策记录（含本提案全部被否方案）
-- [ ] 6.2 自用素材（TODO P2）：M2 后每日自用、bug 记 `docs/bug/`；每周回顾「哪个瞬间想退回 dcode / Claude Code」→ 下一个修复点
+- [ ] 6.2 自用素材：M2 后开始每日自用（权限就位是碰真实项目的前提），bug 记 `docs/bug/`；每周回顾一次「哪个瞬间想退回 dcode / Claude Code」，那个瞬间即下一个修复点

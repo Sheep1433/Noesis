@@ -4,7 +4,7 @@
 
 ### Requirement: 核心/头分离契约
 
-Agent 运行时 SHALL 以单一核心进程承载（SuperAgent 装配、双档 profile、能力开关、权限、状态），CLI / headless / web / 桌面端 SHALL 作为头（head）挂接。核心与头之间 SHALL 只经 `HeadSession` 会话接口交互（发消息、订阅事件流、确认应答、停止控制）；头 SHALL NOT 直接引用 agent 内部装配（factory / 中间件栈 / builder）。CLI 交互层 SHALL 只消费该接口——这是 web 头与桌面头复用同一交互层的前提。
+Agent 运行时 SHALL 以单一核心进程承载（SuperAgent 装配、双档 profile、能力开关、权限、状态），CLI / headless / web / 桌面端 SHALL 作为头（head）挂接。核心侧对头的唯一出口 SHALL 为 `HeadSession` 会话接口（发消息、订阅事件流、确认应答、停止控制）：本地头（CLI / headless）经进程内直连消费该接口，远程头（web / 桌面）消费该接口的头协议投影。头 SHALL NOT 直接引用 agent 内部装配（factory / 中间件栈 / builder）。CLI 交互层 SHALL 只消费该接口——这是 web 头与桌面头复用同一交互层的前提。
 
 #### Scenario: 头替换不改核心
 
@@ -40,10 +40,11 @@ Agent 运行时 SHALL 以单一核心进程承载（SuperAgent 装配、双档 p
 - **WHEN** 同一会话分别经 CLI（进程内）与 web 头（HTTP/SSE）消费
 - **THEN** 两头收到的事件序列与语义 SHALL 一致
 
-#### Scenario: 版本协商
+#### Scenario: 远程头版本协商
 
-- **WHEN** 头与核心协议版本不匹配
+- **WHEN** 远程头（web / 桌面，经协议传输连接核心）与核心协议版本不匹配
 - **THEN** 连接 SHALL 给出可解释错误，不产生未定义行为
+- **AND** 进程内本地头与核心同进程，版本恒一致，不触发协商路径
 
 ### Requirement: 桌面衍生纪律
 
